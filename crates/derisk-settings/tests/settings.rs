@@ -466,3 +466,43 @@ fn power_modes_are_read_from_powerprofilesctl() {
         ["powerprofilesctl", "set", "performance"]
     );
 }
+
+#[test]
+fn the_system_page_reads_the_report_and_the_reset() {
+    use derisk_settings::system::{self, Check, Reset};
+
+    let reply = r#"{"type":"aa{sv}","data":[[{"AppstreamId":{"type":"s","data":"io.losos.disk-encryption"},"Summary":{"type":"s","data":"Disk encryption"},"Description":{"type":"s","data":"Home is encrypted.\n\n/sys/block/dm-1/dm/uuid: CRYPT-LUKS2"},"HsiResult":{"type":"u","data":7},"HsiLevel":{"type":"u","data":1},"Flags":{"type":"t","data":8193}},{"Summary":{"type":"s","data":"Kernel lockdown"},"Description":{"type":"s","data":"none"},"Flags":{"type":"t","data":8192}}]]}"#;
+    assert_eq!(
+        system::parse_report(reply),
+        Some(vec![
+            Check {
+                summary: "Disk encryption".into(),
+                description: "Home is encrypted.\n\n/sys/block/dm-1/dm/uuid: CRYPT-LUKS2".into(),
+                passed: true,
+            },
+            Check {
+                summary: "Kernel lockdown".into(),
+                description: "none".into(),
+                passed: false,
+            },
+        ])
+    );
+    assert_eq!(system::parse_report(""), None);
+    assert_eq!(
+        system::parse_report(r#"{"type":"aa{sv}","data":[[]]}"#),
+        Some(Vec::new())
+    );
+
+    assert_eq!(
+        system::parse_reset(r#"{"supported":true}"#, r#"{"mode":"unspecified"}"#),
+        Reset {
+            supported: true,
+            mode: "unspecified".into(),
+        }
+    );
+    assert_eq!(system::parse_reset("", ""), Reset::default());
+    assert_eq!(
+        system::RESET_ARGV,
+        ["systemctl", "start", "factory-reset.target"]
+    );
+}

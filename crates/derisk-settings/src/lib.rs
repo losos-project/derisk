@@ -33,6 +33,7 @@ mod privacy;
 pub mod profiles;
 mod shortcuts;
 mod signin;
+pub mod system;
 mod thumbs;
 mod totp;
 
@@ -83,13 +84,15 @@ pub enum Page {
     /// The browser and search engine choice screens; listed only while the
     /// policy turns one on ([`choice`]).
     DefaultApps,
+    /// The security report and the factory reset.
+    System,
     /// Version and file location.
     About,
 }
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
@@ -103,6 +106,7 @@ impl Page {
         Self::Notifications,
         Self::Power,
         Self::DefaultApps,
+        Self::System,
         Self::About,
     ];
 
@@ -122,6 +126,7 @@ impl Page {
             Self::Notifications => "Notifications",
             Self::Power => "Power",
             Self::DefaultApps => "Default apps",
+            Self::System => "System",
             Self::About => "About",
         }
     }
@@ -145,6 +150,7 @@ pub struct SettingsApp {
     network: network::NetworkUi,
     bluetooth: bluetooth::BluetoothUi,
     profiles: profiles::ProfilesUi,
+    system: system::SystemUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
     /// Which choice screens are on, read once when opened.
@@ -223,6 +229,7 @@ impl SettingsApp {
             network: network::NetworkUi::default(),
             bluetooth: bluetooth::BluetoothUi::default(),
             profiles: profiles::ProfilesUi::default(),
+            system: system::SystemUi::default(),
             saved,
             page: Page::default(),
             status: error.as_ref().map(ToString::to_string),
@@ -341,6 +348,9 @@ impl SettingsApp {
         if self.page == Page::Bluetooth {
             return bluetooth::page(ui, &mut self.bluetooth, theme);
         }
+        if self.page == Page::System {
+            return system::page(ui, &mut self.system, theme);
+        }
         if self.page == Page::DefaultApps {
             let state = self.choice.get_or_insert_with(choice::ChoiceUi::default);
             if self.policy.browser {
@@ -447,7 +457,8 @@ impl SettingsApp {
                 | Page::SignIn
                 | Page::Network
                 | Page::Bluetooth
-                | Page::DefaultApps => {}
+                | Page::DefaultApps
+                | Page::System => {}
                 Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;
