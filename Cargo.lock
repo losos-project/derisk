@@ -1803,6 +1803,7 @@ name = "derisk-settings"
 version = "0.1.0"
 dependencies = [
  "derisk-icons",
+ "derisk-install",
  "derisk-sys",
  "hmac",
  "image",

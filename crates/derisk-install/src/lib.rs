@@ -7,6 +7,8 @@
 //!   localectl and timedatectl.
 //! - [`network`]: whether the machine is online, and Wi-Fi through
 //!   wpa_supplicant.
+//! - [`wifi`]: [`network`] watched from a thread of its own, for a page to
+//!   draw.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -14,3 +16,4 @@
 pub mod install;
 pub mod locale;
 pub mod network;
+pub mod wifi;

@@ -147,6 +147,7 @@ impl Setup {
                 .unwrap_or_default(),
             account: self.account.clone(),
             password_age: derisk::password_age::PasswordAge::system(),
+            groups: setup::device_groups(std::path::Path::new("/etc/group")),
         }
     }
 
