@@ -372,8 +372,8 @@ fn network_page_says_what_it_sees() {
         ssid: b"cafe".to_vec(),
         current: false,
     }];
-    assert!(detail(&home, &status).starts_with("Connected · ▂▄▆█ · "));
-    assert!(detail(&cafe, &status).starts_with("Saved · ▂ · "));
+    assert!(detail(&home, &status).starts_with("Connected · Strong signal · "));
+    assert!(detail(&cafe, &status).starts_with("Saved · Weak signal · "));
     assert_eq!(status.saved(b"cafe").map(|s| s.id), Some(3));
     assert!(status.saved(b"home").is_none());
 }
