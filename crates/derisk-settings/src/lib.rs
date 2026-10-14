@@ -30,6 +30,7 @@ pub mod network;
 mod network;
 mod pages;
 mod privacy;
+pub mod profiles;
 mod shortcuts;
 mod signin;
 mod thumbs;
@@ -77,7 +78,7 @@ pub enum Page {
     SignIn,
     /// Banners and sounds.
     Notifications,
-    /// Dimming, locking, suspend, and low power mode.
+    /// Dimming, locking, suspend, low power mode, and the power mode.
     Power,
     /// The browser and search engine choice screens; listed only while the
     /// policy turns one on ([`choice`]).
@@ -143,6 +144,7 @@ pub struct SettingsApp {
     signin: signin::SigninUi,
     network: network::NetworkUi,
     bluetooth: bluetooth::BluetoothUi,
+    profiles: profiles::ProfilesUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
     /// Which choice screens are on, read once when opened.
@@ -220,6 +222,7 @@ impl SettingsApp {
             signin: signin::SigninUi::default(),
             network: network::NetworkUi::default(),
             bluetooth: bluetooth::BluetoothUi::default(),
+            profiles: profiles::ProfilesUi::default(),
             saved,
             page: Page::default(),
             status: error.as_ref().map(ToString::to_string),
@@ -550,6 +553,7 @@ impl SettingsApp {
                         .color(theme.border),
                     );
                     ui.end_row();
+                    profiles::row(ui, &mut self.profiles, theme);
                 }
                 Page::About => {
                     ui.label("derisk Settings");
