@@ -27,7 +27,7 @@ use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 
 use crate::{
     action::Action,
-    animation::{StartupAnimation, StartupFrame},
+    animation::{LoginFrame, StartupAnimation, StartupFrame},
     apps::{AppLook, Apps},
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
@@ -2841,7 +2841,8 @@ fn login_panel(ui: &mut Ui, screen: Rect, clock: &Clock, theme: &Theme, add: imp
 /// The one text field on the lock screen and the greeter. It is the only
 /// thing that takes keys, so focus is taken back every frame: a single-line
 /// field gives it up on Enter.
-fn login_field(ui: &mut Ui, text: &mut String, enabled: bool, secret: bool, hint: &str) {
+/// Returns where the field was drawn.
+fn login_field(ui: &mut Ui, text: &mut String, enabled: bool, secret: bool, hint: &str) -> Rect {
     let field = ui.add_enabled(
         enabled,
         egui::TextEdit::singleline(text)
@@ -2854,6 +2855,7 @@ fn login_field(ui: &mut Ui, text: &mut String, enabled: bool, secret: bool, hint
     if enabled && !field.has_focus() {
         field.request_focus();
     }
+    field.rect
 }
 
 /// The line under the field, red when it reports a failure.
@@ -3136,8 +3138,9 @@ pub fn show_greeter(
     screen: Rect,
     clock: &Clock,
     theme: &Theme,
-) -> GreeterInput {
+) -> (GreeterInput, Option<Rect>) {
     let mut input = GreeterInput::None;
+    let mut field = None;
     login_panel(ui, screen, clock, theme, |ui| {
         let editable = login.editable();
         match login.phase().clone() {
@@ -3155,20 +3158,20 @@ pub fn show_greeter(
                     ui.add_space(8.0);
                 }
                 let hint = login.hint().to_owned();
-                login_field(ui, &mut login.username, editable, false, &hint);
+                field = Some(login_field(ui, &mut login.username, editable, false, &hint));
             }
             Phase::Prompt { secret, .. } => {
                 ui.label(RichText::new(&login.username).size(20.0).strong());
                 ui.add_space(8.0);
                 let hint = login.hint().to_owned();
-                login_field(ui, &mut login.answer, editable, secret, &hint);
+                field = Some(login_field(ui, &mut login.answer, editable, secret, &hint));
             }
             _ => {
                 ui.label(RichText::new(&login.username).size(20.0).strong());
                 ui.add_space(8.0);
                 // Keeps the column from jumping while greetd answers.
                 let mut nothing = String::new();
-                login_field(ui, &mut nothing, false, true, login.hint());
+                field = Some(login_field(ui, &mut nothing, false, true, login.hint()));
                 ui.ctx().request_repaint();
             }
         }
@@ -3187,7 +3190,37 @@ pub fn show_greeter(
             None => login_status(ui, login.status(), false, theme),
         }
     });
-    input
+    (input, field)
+}
+
+/// Paints one frame of the login screen's arrival over `screen`: Plymouth's
+/// line closing into the dot, then the startup animation, its dot landing
+/// on `field`.
+pub fn paint_login(
+    painter: &Painter,
+    screen: Rect,
+    frame: LoginFrame,
+    theme: &Theme,
+    field: Option<Rect>,
+) {
+    match frame {
+        LoginFrame::Collapse(c) => {
+            use crate::animation::{DOT, plymouth_line};
+            painter.rect_filled(screen, 0, theme.background);
+            let [x, y, w, h] = plymouth_line(screen.width(), screen.height());
+            let line = Rect::from_min_size(screen.min + vec2(x, y), vec2(w, h));
+            let at = line.center() + (screen.center() - line.center()) * c;
+            // It closes on its length a little behind its height, so it is
+            // round before it is small.
+            let size = vec2(w + (DOT - w) * c, h + (DOT - h) * (c * 1.15).min(1.0));
+            painter.rect_filled(
+                Rect::from_center_size(at, size),
+                size.min_elem() / 2.0,
+                theme.accent,
+            );
+        }
+        LoginFrame::Startup(frame) => paint_startup(painter, screen, frame, theme, field),
+    }
 }
 
 /// Paints one frame of the startup animation over `screen`: the cover with

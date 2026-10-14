@@ -296,6 +296,96 @@ impl StartupAnimation {
     }
 }
 
+/// Where Plymouth's line lies on a `w`×`h` screen when it lets go of it
+/// (`[x, y, width, height]`), as losos-desktop's splash.script lays it out:
+/// type sized from the screen's height, the salmon a fifth of it, the
+/// caption under the salmon and the line under the caption. The caption's
+/// height is DejaVu Sans Bold's line height at the size the script asks for.
+pub fn plymouth_line(w: f32, h: f32) -> [f32; 4] {
+    let size = (h / 54.0).floor().max(11.0);
+    let logo_h = (h * 0.2).floor();
+    // The swimming salmon's frames are 1.6 times as wide as tall.
+    let logo_w = (logo_h * 1.6).floor();
+    let logo_y = ((h - logo_h - 4.0 * size) / 2.0).floor();
+    let caption_y = logo_y + logo_h + 2.0 * size;
+    // Pango's points at 96 dpi, and DejaVu's line height of 1.164 em.
+    let caption_h = ((size * 1.2).floor() * 4.0 / 3.0 * 1.164).round();
+    let width = (logo_w * 1.2).min(w - 2.0 * size).floor();
+    let height = (size / 5.0).floor().max(3.0);
+    [
+        ((w - width) / 2.0).floor(),
+        caption_y + caption_h + size,
+        width,
+        height,
+    ]
+}
+
+/// The login screen's arrival, and its exit into the session.
+///
+/// Plymouth leaves its line on the ground; the line closes into the dot in
+/// the middle of the screen (the film's collapse, into its drop), and from
+/// there the login screen arrives as the desktop does: the ring, the bloom,
+/// and the dot flying into the field. Once signed in, the field's outline
+/// folds back into the dot, the screen closes round it as the dot flies
+/// back to the middle, and the session starts from that dot.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LoginAnimation;
+
+/// What to draw at one instant of the login screen's animation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LoginFrame {
+    /// The line closing into the dot: 0 is Plymouth's line, 1 the dot.
+    Collapse(f32),
+    /// Everything after, drawn as the startup animation is.
+    Startup(StartupFrame),
+}
+
+impl LoginAnimation {
+    /// How long the line takes to close into the dot.
+    pub const COLLAPSE_MS: f32 = f(30);
+    /// How long the exit takes: the fold, then the close.
+    pub const LEAVE_MS: f32 = f(46);
+
+    /// The arrival, `elapsed_ms` after the login screen's first frame.
+    pub fn frame(&self, elapsed_ms: u32) -> LoginFrame {
+        let now = elapsed_ms as f32;
+        if now < Self::COLLAPSE_MS {
+            return LoginFrame::Collapse(progress(now, 0.0, Self::COLLAPSE_MS, ease::IN));
+        }
+        let startup = StartupAnimation {
+            reduced_motion: false,
+            // No top bar on the login screen.
+            bar_height: 0.0,
+        };
+        LoginFrame::Startup(startup.frame((now - Self::COLLAPSE_MS) as u32))
+    }
+
+    /// Whether the arrival is over.
+    pub fn arrived(&self, elapsed_ms: u32) -> bool {
+        matches!(self.frame(elapsed_ms), LoginFrame::Startup(f) if f.done)
+    }
+
+    /// The exit, `ms` after the session was started: the field's outline
+    /// folds into the dot (16 frames), then the screen closes round it as it
+    /// flies back to the middle (30).
+    pub fn leaving(&self, ms: f32) -> StartupFrame {
+        let fold = progress(ms, 0.0, f(16), ease::OUT);
+        let close = progress(ms, f(16), Self::LEAVE_MS, ease::IN);
+        let back = progress(ms, f(16), Self::LEAVE_MS, ease::REST);
+        StartupFrame {
+            reveal: if close >= 1.0 {
+                Reveal::Hidden
+            } else {
+                Reveal::Iris(1.0 - close)
+            },
+            open: 1.0 - fold,
+            flight: 1.0 - back,
+            done: ms >= Self::LEAVE_MS,
+            ..StartupFrame::DONE
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +417,28 @@ mod tests {
         assert_eq!(arc((0.0, 0.0), (100.0, 50.0), 0.0, 0.2), (0.0, 0.0));
         let end = arc((0.0, 0.0), (100.0, 50.0), 1.0, 0.2);
         assert!((end.0 - 100.0).abs() < 1e-4 && (end.1 - 50.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn plymouths_line_sits_under_the_caption() {
+        let [x, y, w, h] = plymouth_line(1920.0, 1080.0);
+        // 20 px type, a 216 px salmon 345 px wide, the line 1.2 times that.
+        assert_eq!((w, h), (414.0, 4.0));
+        assert_eq!(x, 753.0);
+        assert!((690.0..720.0).contains(&y));
+    }
+
+    #[test]
+    fn the_login_screen_arrives_from_the_line_and_leaves_into_the_dot() {
+        let login = LoginAnimation;
+        assert_eq!(login.frame(0), LoginFrame::Collapse(0.0));
+        assert!(!login.arrived(1000));
+        assert!(login.arrived(3000));
+        let start = login.leaving(0.0);
+        assert_eq!((start.open, start.flight), (1.0, 1.0));
+        let end = login.leaving(LoginAnimation::LEAVE_MS);
+        assert!(end.done);
+        assert_eq!(end.reveal, Reveal::Hidden);
+        assert_eq!((end.open, end.flight), (0.0, 0.0));
     }
 }
