@@ -1335,3 +1335,59 @@ fn the_overview_rises_in_and_a_picked_card_grows_into_its_window() {
     assert_eq!(picked, editor);
     assert!(from.contains(card));
 }
+
+#[test]
+fn the_keyboard_rises_and_a_typed_key_glows() {
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "Untitled");
+    shell
+        .apply(Action::Keyboard {
+            visible: Some(true),
+        })
+        .unwrap();
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    let key_q = |shapes: &[egui::Shape]| {
+        shapes.iter().find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text().eq_ignore_ascii_case("q") => Some(t.pos),
+            _ => None,
+        })
+    };
+    timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 1.1);
+    let rising = key_q(&shapes).expect("the q key");
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    let risen = key_q(&shapes).expect("the q key");
+    assert!(rising.y > risen.y, "{rising:?} {risen:?}");
+
+    // Typed, its label turns to the background colour on the accent.
+    let at = risen + egui::vec2(4.0, 8.0);
+    let tap = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let background = ui.theme.background;
+    let label_color = |shapes: &[egui::Shape]| {
+        shapes.iter().find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text().eq_ignore_ascii_case("q") => {
+                Some(t.fallback_color)
+            }
+            _ => None,
+        })
+    };
+    timed(
+        &ctx,
+        &mut ui,
+        &shell,
+        vec![egui::Event::PointerMoved(at)],
+        2.1,
+    );
+    timed(&ctx, &mut ui, &shell, vec![tap(true)], 2.11);
+    timed(&ctx, &mut ui, &shell, vec![tap(false)], 2.12);
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.13);
+    assert_eq!(label_color(&shapes), Some(background));
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.5);
+    assert_ne!(label_color(&shapes), Some(background));
+}

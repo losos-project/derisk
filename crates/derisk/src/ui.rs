@@ -1431,6 +1431,17 @@ impl ShellUi {
             self.backspace_repeat = None;
             return;
         };
+        // It rises from the bottom edge as the film's does (24 frames,
+        // expo-out); the windows above make room on the same curve.
+        let risen = motion::appear(ui.ctx(), Id::new("derisk-osk-rise"), 0.0, f(24), ease::OUT);
+        let area = Geometry::new(
+            (
+                area.loc.x,
+                area.loc.y + (area.size.h as f32 * (1.0 - risen)).round() as i32,
+            )
+                .into(),
+            area.size,
+        );
         let r = to_rect(area);
         // A layer of its own in the tooltip order puts the keyboard above
         // everything else the chrome draws, the palette and dialogs
@@ -3283,6 +3294,23 @@ pub fn keyboard_keys(
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, key.name()));
         let down = response.is_pointer_button_down_on();
+        // A typed key glows in the accent and cools over 9 frames, as the
+        // film's do.
+        let hot_id = Id::new(("derisk-osk-hot", key));
+        if response.clicked() {
+            let now = motion::now(ui.ctx());
+            ui.ctx().data_mut(|d| d.insert_temp(hot_id, now));
+        }
+        let heat = ui
+            .ctx()
+            .data(|d| d.get_temp::<f64>(hot_id))
+            .filter(|_| motion::enabled(ui.ctx()))
+            .map_or(0.0, |at| {
+                (1.0 - (motion::now(ui.ctx()) - at) as f32 / f(9)).max(0.0)
+            });
+        if heat > 0.0 {
+            ui.ctx().request_repaint();
+        }
         let modifier = !matches!(key, OskKey::Char(_) | OskKey::Space);
         let lit = matches!(key, OskKey::Shift) && keyboard.shift() != Shift::Off;
         let fill = if down {
@@ -3301,13 +3329,20 @@ pub fn keyboard_keys(
         } else {
             theme.background
         };
+        let fill = fill.lerp_to_gamma(theme.accent, heat);
         ui.painter().rect_filled(cell, 6, fill);
         let size = if matches!(key, OskKey::Char(_)) {
             20.0
         } else {
             15.0
         };
-        let color = if lit { theme.accent } else { theme.foreground };
+        let color = if heat > 0.5 {
+            theme.background
+        } else if lit {
+            theme.accent
+        } else {
+            theme.foreground
+        };
         match key.icon() {
             Some(icon) => icons::paint(
                 ui.painter(),

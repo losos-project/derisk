@@ -311,6 +311,7 @@ impl Session {
 
     /// Works out where each window is drawn this frame.
     fn move_windows(&mut self) {
+        self.window_motion.keyboard(self.shell.keyboard_visible());
         self.shown = self.window_motion.update(
             self.motion_now(),
             &self.shell.placements(),

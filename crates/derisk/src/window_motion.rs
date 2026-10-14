@@ -112,9 +112,21 @@ pub struct WindowMotion {
     tracks: HashMap<WindowId, Track>,
     /// A window to grow out of a rectangle, and since when.
     grow: Option<(WindowId, Geometry, f64)>,
+    /// Whether the on-screen keyboard showed last frame, and whether it
+    /// just came up or went away.
+    keyboard: bool,
+    keyboard_moved: bool,
 }
 
 impl WindowMotion {
+    /// Tells it whether the on-screen keyboard shows, before
+    /// [`WindowMotion::update`]: windows making room for it, or taking the
+    /// room back, move on the keyboard's own curve (24 frames, expo-out).
+    pub fn keyboard(&mut self, visible: bool) {
+        self.keyboard_moved = visible != self.keyboard;
+        self.keyboard = visible;
+    }
+
     /// Grows `window` out of `from`, where it was picked in the overview,
     /// into its frame, starting at `now` (ms): 54 frames on the film's
     /// camera curve.
@@ -179,7 +191,12 @@ impl WindowMotion {
                 track.moving = None;
                 track.pulse = None;
             } else if track.frame != p.frame {
-                track.moving = Some((track.drawn, now, f(24), ease::GLIDE));
+                let curve = if self.keyboard_moved {
+                    ease::OUT
+                } else {
+                    ease::GLIDE
+                };
+                track.moving = Some((track.drawn, now, f(24), curve));
             } else if track.mode != p.mode
                 && matches!(p.mode, Mode::Snapped { zone } if zone != SnapZone::Maximize)
             {
@@ -234,6 +251,7 @@ impl WindowMotion {
             }
         }
         self.tracks = tracks;
+        self.keyboard_moved = false;
         out
     }
 }
@@ -413,6 +431,28 @@ mod tests {
             m.update(10.0 + f64::from(f(54)), &p, [id(1)], None, area(), true)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn windows_make_room_for_the_keyboard_on_its_curve() {
+        let mut m = WindowMotion::default();
+        m.update(
+            0.0,
+            &[placed(1, area(), Mode::Tiled)],
+            [id(1)],
+            None,
+            area(),
+            true,
+        );
+        let short = [placed(1, g(0, 0, 1000, 300), Mode::Tiled)];
+        m.keyboard(true);
+        m.update(10.0, &short, [id(1)], None, area(), true);
+        // A quarter of the way in, expo-out is most of the way there.
+        let h = m.update(10.0 + f64::from(f(6)), &short, [id(1)], None, area(), true)[&id(1)]
+            .frame
+            .size
+            .h;
+        assert!(h < 360, "{h}");
     }
 
     #[test]
