@@ -290,12 +290,13 @@ impl WallpaperImpl for Wallpaper {
         uri: Uri,
         options: WallpaperOptions,
     ) -> Result<()> {
-        // The lock screen draws derisk's own gradient, never a picture.
-        if options.set_on() == Some(SetOn::Lockscreen) {
-            return Err(PortalError::NotAllowed(
-                "derisk's lock screen does not show a picture".into(),
-            ));
-        }
+        let set_on = options.set_on().unwrap_or(SetOn::Background);
+        let (desktop, lock) = (set_on != SetOn::Lockscreen, set_on != SetOn::Background);
+        let target = match set_on {
+            SetOn::Background => "the desktop background",
+            SetOn::Lockscreen => "the lock screen's picture",
+            SetOn::Both => "the desktop background and the lock screen's picture",
+        };
         let picture = files::path_from_uri(uri.as_str())
             .ok_or_else(|| PortalError::InvalidArgument(format!("not a local file: {uri}")))?;
         // Without a preview the frontend has already asked; with one, the
@@ -316,7 +317,7 @@ impl WallpaperImpl for Wallpaper {
                     app: &app,
                     parent_window: &parent,
                     title: "Change the background?",
-                    subtitle: &format!("{app} wants to set {name} as the desktop background."),
+                    subtitle: &format!("{app} wants to set {name} as {target}."),
                     body: "You can change it back in Settings, under Wallpaper.",
                     grant_label: "Set Background",
                 },
@@ -328,12 +329,21 @@ impl WallpaperImpl for Wallpaper {
             }
         }
         let data = files::data_home().ok_or_else(|| failed("HOME is not set"))?;
-        let installed = files::install_wallpaper(&picture, &data.join("derisk").join("wallpapers"))
-            .map_err(|e| PortalError::InvalidArgument(e.to_string()))?;
+        // Each gets its own folder: installing one removes the previous
+        // copy in its folder, which must not be the other's picture.
+        let install = |folder: &str| {
+            files::install_wallpaper(&picture, &data.join("derisk").join(folder))
+                .map_err(|e| PortalError::InvalidArgument(e.to_string()))
+        };
         let path = derisk_settings::default_path().ok_or_else(|| failed("HOME is not set"))?;
         let (mut settings, _warnings) = derisk_settings::Settings::load(&path).map_err(failed)?;
-        settings.wallpaper.kind = derisk_settings::WallpaperKind::Image;
-        settings.wallpaper.path = installed;
+        if desktop {
+            settings.wallpaper.kind = derisk_settings::WallpaperKind::Image;
+            settings.wallpaper.path = install("wallpapers")?;
+        }
+        if lock {
+            settings.wallpaper.lock_screen = install("lock-screen")?;
+        }
         // The session polls the file and repaints within a second.
         settings.save(&path).map_err(failed)
     }
