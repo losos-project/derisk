@@ -27,7 +27,7 @@ use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 
 use crate::{
     action::Action,
-    animation::{LoginFrame, StartupAnimation, StartupFrame},
+    animation::{DOT, LoginFrame, StartupAnimation, StartupFrame, arc, ease, f},
     apps::{AppLook, Apps},
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
@@ -39,6 +39,7 @@ use crate::{
     lock::LockScreen,
     menu::{Menu, MenuEntry},
     mobile::{self, NavState},
+    motion,
     overview::{Battery, OverviewLayout, fit, grid, miniature, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
@@ -246,6 +247,13 @@ pub struct ShellUi {
     /// Decoded app icons by theme name or path, `None` when the theme has
     /// none. Behind a `RefCell` because title bars paint through `&self`.
     icons: AppIcons,
+    /// The dot a finished request folded the palette into, on its way to
+    /// the focused window: when the fold began (ms on [`motion::now`]'s
+    /// clock), and where the dot is.
+    relay: Option<(f64, Pos2)>,
+    /// The window the focus ring is around and when its ring started
+    /// tracing in; a newly focused window's ring traces itself in.
+    ring: (Option<WindowId>, f64),
 }
 
 /// Pixels app icons are decoded at: crisp up to 32 points at 2x, the largest
@@ -278,6 +286,23 @@ pub struct PaletteUi {
     armed: Option<String>,
     message: Option<String>,
     open: bool,
+    /// When it opened (ms on [`motion::now`]'s clock), and where from: it
+    /// grows out of the top bar's search field.
+    opened: Option<(f64, Option<Rect>)>,
+    /// Where the card was drawn last frame.
+    rect: Option<Rect>,
+    /// When each character of the query was typed; the newest flash in
+    /// the accent.
+    typed: Vec<f64>,
+    /// The newest turn when a request was sent from here: the next one is
+    /// that request's, which folds the palette away once it is done.
+    asked_after: Option<u64>,
+    /// When that request was done.
+    done_at: Option<f64>,
+    /// The newest turn when it opened: newer ones animate in.
+    opened_turn: u64,
+    /// When it began folding into the dot, and the card it folds from.
+    fold: Option<(f64, Rect)>,
 }
 
 impl PaletteUi {
@@ -420,6 +445,16 @@ impl ShellUi {
             focus_bar: false,
             search_rect: None,
             icons: RefCell::default(),
+            relay: None,
+            // What is focused already is ringed from the start.
+            ring: (
+                shell
+                    .placements()
+                    .into_iter()
+                    .find(|p| p.focused)
+                    .map(|p| p.window),
+                f64::NEG_INFINITY,
+            ),
         }
     }
 
@@ -685,21 +720,36 @@ impl ShellUi {
     /// covers all of it but the title bar, so the ring is chrome: drawn
     /// above every surface, under the bars and the palette. Phones and a
     /// window filling the work area have no frame to ring.
-    fn focus_ring(&self, ui: &Ui, shell: &Shell) {
-        if shell.profile().title_bar.height == 0 {
-            return;
-        }
-        let Some(p) = shell.placements().into_iter().find(|p| p.focused) else {
+    ///
+    /// When focus moves to another window its ring traces itself in, as
+    /// the film's does: clockwise from the top-left corner, 40 frames,
+    /// expo-out.
+    fn focus_ring(&mut self, ui: &Ui, shell: &Shell) {
+        let Some(p) = ringed(shell) else {
             return;
         };
-        if p.frame == shell.work_area() {
+        let ctx = ui.ctx();
+        if self.ring.0 != Some(p.window) {
+            self.ring = (Some(p.window), motion::now(ctx));
+        }
+        let traced = motion::since(ctx, self.ring.1, f(40), ease::OUT);
+        if traced <= 0.0 {
             return;
         }
         let r = shell.effects.windows.corner_radius.min(20);
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        let painter = ctx.layer_painter(egui::LayerId::new(
             Order::Background,
             Id::new("derisk-focus-ring"),
         ));
+        let stroke = Stroke::new(FOCUS_RING, self.theme.accent);
+        if traced < 1.0 {
+            // The stroke's middle line, so it lands where the finished
+            // ring is drawn.
+            let half = FOCUS_RING / 2.0;
+            let line = motion::outline(to_rect(p.frame).expand(half), f32::from(r) + half, traced);
+            painter.add(egui::Shape::line(line, stroke));
+            return;
+        }
         painter.rect_stroke(
             to_rect(p.frame),
             CornerRadius {
@@ -708,9 +758,40 @@ impl ShellUi {
                 sw: 0,
                 se: 0,
             },
-            Stroke::new(FOCUS_RING, self.theme.accent),
+            stroke,
             StrokeKind::Outside,
         );
+    }
+
+    /// The dot a finished request folded the palette into carries the
+    /// result to the focused window, as the film's does: it waits where the
+    /// palette was, flies along an arc to the window's top-left corner
+    /// (24 to 90 frames after the fold began, settling at rest), and the
+    /// window's ring traces in from there (see [`ShellUi::focus_ring`]).
+    fn relay(&mut self, ui: &Ui, shell: &Shell) {
+        let Some((at, from)) = self.relay else {
+            return;
+        };
+        let Some(p) = ringed(shell) else {
+            self.relay = None;
+            return;
+        };
+        let ctx = ui.ctx();
+        let arrives = at + f64::from(f(90));
+        // The ring waits for the dot.
+        self.ring = (Some(p.window), arrives);
+        let flown = motion::since(ctx, at + f64::from(f(24)), f(66), ease::REST);
+        if !motion::enabled(ctx) || motion::now(ctx) >= arrives {
+            self.relay = None;
+            return;
+        }
+        let corner = to_rect(p.frame).min + vec2(2.0, 2.0);
+        let (x, y) = arc((from.x, from.y), (corner.x, corner.y), flown, 0.16);
+        ctx.layer_painter(egui::LayerId::new(
+            Order::Foreground,
+            Id::new("derisk-relay"),
+        ))
+        .circle_filled(pos2(x, y), DOT / 2.0, self.theme.accent);
     }
 
     /// Shows the chrome above client surfaces and returns requested actions.
@@ -722,6 +803,7 @@ impl ShellUi {
         self.look = shell.look();
         self.blurs.clear();
         self.startup.reduced_motion = self.reduced_motion || !self.look.animate;
+        motion::set_enabled(ui.ctx(), !self.startup.reduced_motion);
         let frame = self.startup_frame(elapsed_ms);
         let phone = shell.is_phone();
         if phone != self.touch_style {
@@ -740,6 +822,7 @@ impl ShellUi {
             self.keyboard_shown = shell.keyboard_visible();
             self.keyboard.reset();
         }
+        self.relay(ui, shell);
         if !shell.overview_visible() {
             self.focus_ring(ui, shell);
         }
@@ -2061,6 +2144,12 @@ impl ShellUi {
             state.selected = 0;
             state.armed = None;
             state.message = None;
+            state.opened = Some((motion::now(ui.ctx()), self.search_rect));
+            state.typed = vec![0.0; state.query.chars().count()];
+            state.asked_after = None;
+            state.done_at = None;
+            state.fold = None;
+            state.opened_turn = shell.conversation.last_id().unwrap_or(0);
         }
         // `?` switches to the conversation; the rest is the request.
         if !state.chat
@@ -2138,14 +2227,72 @@ impl ShellUi {
         let nav = shell.profile().nav_bar as f32 + keyboard;
         let screen = to_rect(shell.output());
         let dimmed = Rect::from_min_max(screen.min, screen.max - vec2(0.0, nav));
+        // It grows out of the search field as the film's does: the card
+        // morphs from the field to its own place (52 frames, expo-out) and
+        // its contents fade in over the last 16.
+        let (opened, from) = state.opened.unwrap_or_default();
+        let ctx = ui.ctx().clone();
+        let morph = motion::since(&ctx, opened, f(52), ease::OUT);
+        let shown = motion::since(&ctx, opened + f64::from(f(36)), f(16), ease::SMOOTH);
+        // A request sent from here that went through folds the palette into
+        // the dot 30 frames after its "Done.", as the film's does (16
+        // frames, expo-out): the contents go over the first 7 and the
+        // accent floods the card from the 4th. One that failed keeps it
+        // open to show why, and so does typing something else.
+        if state.fold.is_none()
+            && let Some(after) = state.asked_after
+            && let Some(turn) = shell.conversation.turns().find(|t| t.id > after)
+            && turn.is_settled()
+        {
+            let went_through = turn.error.is_none()
+                && !turn.steps.is_empty()
+                && turn.steps.iter().all(|s| s.status == StepStatus::Done);
+            if !went_through {
+                state.asked_after = None;
+            } else if let Some(card) = state.rect {
+                let now = motion::now(&ctx);
+                let folds = *state.done_at.get_or_insert(now) + f64::from(f(30));
+                if !state.query.is_empty() {
+                    state.asked_after = None;
+                } else if now >= folds {
+                    state.fold = Some((folds.min(now), card));
+                    // The window's ring waits for the dot to reach it.
+                    if let Some(p) = ringed(shell) {
+                        self.ring = (Some(p.window), f64::INFINITY);
+                    }
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                        (folds - now) / 1000.0,
+                    ));
+                }
+            }
+        }
+        let fold = state.fold.map(|(at, from)| {
+            let t = motion::since(&ctx, at, f(16), ease::OUT);
+            let dot = Rect::from_center_size(from.center(), vec2(DOT, DOT));
+            (at, motion::lerp_rect(from, dot, t), t)
+        });
+        if let Some((at, card, t)) = fold
+            && t >= 1.0
+        {
+            self.relay = Some((at, card.center()));
+            actions.push(Action::Palette {
+                visible: Some(false),
+            });
+            return;
+        }
+        let folded = fold.map_or(0.0, |(_, _, t)| t);
         // Dim the desktop; clicking it closes the palette.
         let backdrop = egui::Area::new(Id::new("derisk-palette-backdrop"))
             .order(Order::Middle)
             .fixed_pos(dimmed.min)
             .show(ui.ctx(), |ui| {
                 let (r, response) = ui.allocate_exact_size(dimmed.size(), Sense::click());
-                ui.painter()
-                    .rect_filled(r, 0, Color32::from_black_alpha(110));
+                ui.painter().rect_filled(
+                    r,
+                    0,
+                    Color32::from_black_alpha(110).gamma_multiply(shown * (1.0 - folded)),
+                );
                 response.clicked()
             })
             .inner;
@@ -2177,21 +2324,23 @@ impl ShellUi {
         };
         let mut chosen = (enter && !state.chat).then_some(state.selected);
         let mut new_conversation = false;
-        egui::Area::new(Id::new("derisk-palette"))
+        let card = egui::Area::new(Id::new("derisk-palette"))
             .order(Order::Foreground)
             .fixed_pos(pos2(screen.center().x - width / 2.0, top))
             .show(ui.ctx(), |ui| {
-                egui::Frame::new()
-                    .fill(theme.surface)
-                    .stroke(Stroke::new(1.0, theme.border))
-                    .corner_radius(14)
+                // The card is painted under the contents once their height
+                // is known, easing to it (16 frames, expo-out) as rows come
+                // and go.
+                let painter = ui.painter().clone();
+                let shadow_slot = painter.add(egui::Shape::Noop);
+                let card_slot = painter.add(egui::Shape::Noop);
+                ui.multiply_opacity(shown);
+                if let Some((at, card, _)) = fold {
+                    ui.multiply_opacity(1.0 - motion::since(ui.ctx(), at, f(7), ease::SMOOTH));
+                    ui.set_clip_rect(card.intersect(ui.clip_rect()));
+                }
+                let inner = egui::Frame::new()
                     .inner_margin(10)
-                    .shadow(egui::epaint::Shadow {
-                        offset: [0, 12],
-                        blur: 40,
-                        spread: 0,
-                        color: Color32::from_black_alpha(140),
-                    })
                     .show(ui, |ui| {
                         ui.set_width(width - 20.0);
                         ui.visuals_mut().override_text_color = Some(theme.foreground);
@@ -2199,8 +2348,40 @@ impl ShellUi {
                             if state.chat {
                                 icons::show(ui, "tool-magic", 18.0, theme.accent);
                             }
+                            // Each character flashes in the accent as it is
+                            // typed (4 frames), as the film's request does.
+                            let now = motion::now(ui.ctx());
+                            let flashes = motion::enabled(ui.ctx());
+                            let typed = &state.typed;
+                            let fresh = |i: usize| {
+                                flashes
+                                    && now - typed.get(i).copied().unwrap_or(now)
+                                        < f64::from(f(4))
+                            };
+                            let mut layouter =
+                                |ui: &Ui, text: &dyn egui::TextBuffer, wrap: f32| {
+                                    let mut job = egui::text::LayoutJob::default();
+                                    for (i, c) in text.as_str().chars().enumerate() {
+                                        let color = if fresh(i) {
+                                            theme.accent
+                                        } else {
+                                            theme.foreground
+                                        };
+                                        job.append(
+                                            c.encode_utf8(&mut [0; 4]),
+                                            0.0,
+                                            egui::TextFormat::simple(
+                                                FontId::proportional(18.0),
+                                                color,
+                                            ),
+                                        );
+                                    }
+                                    job.wrap.max_width = wrap;
+                                    ui.fonts_mut(|fonts| fonts.layout_job(job))
+                                };
                             let input = ui.add(
                                 egui::TextEdit::singleline(&mut state.query)
+                                    .layouter(&mut layouter)
                                     .hint_text(if state.chat {
                                         "Ask derisk to do something…"
                                     } else {
@@ -2212,6 +2393,16 @@ impl ShellUi {
                                     .desired_width(f32::INFINITY),
                             );
                             input.request_focus();
+                            let count = state.query.chars().count();
+                            if count < state.typed.len() {
+                                state.typed.truncate(count);
+                            }
+                            while state.typed.len() < count {
+                                state.typed.push(now);
+                            }
+                            if state.typed.iter().any(|t| now - t < f64::from(f(4))) {
+                                ui.ctx().request_repaint();
+                            }
                             // Preset text (typed on the overview, or a
                             // filter) continues where it ends.
                             if cursor_to_end
@@ -2233,7 +2424,23 @@ impl ShellUi {
                         );
                         ui.add_space(6.0);
                         if state.chat {
-                            new_conversation = conversation(ui, &theme, shell, state.cleared);
+                            // The conversation takes the search's place
+                            // (14 frames).
+                            let o = motion::appear(
+                                ui.ctx(),
+                                Id::new("derisk-conversation"),
+                                0.0,
+                                f(14),
+                                ease::SMOOTH,
+                            );
+                            ui.multiply_opacity(o);
+                            new_conversation = conversation(
+                                ui,
+                                &theme,
+                                shell,
+                                state.cleared,
+                                state.opened_turn,
+                            );
                         } else {
                             if rows.is_empty() {
                                 ui.label(
@@ -2248,23 +2455,71 @@ impl ShellUi {
                                 .show(ui, |ui| {
                                     let mut heading = None;
                                     for (i, entry) in rows.iter().enumerate() {
+                                        // A row fades in when it first shows
+                                        // (10 frames) and glides when rows
+                                        // above it come or go (18, expo-out),
+                                        // as the film's Apps rows make room
+                                        // for the assistant's.
+                                        let key = Id::new(("derisk-palette-row", entry.key()));
                                         if heading != Some(entry.category) {
                                             heading = Some(entry.category);
-                                            ui.label(
-                                                RichText::new(entry.category.heading())
-                                                    .size(11.0)
-                                                    .color(theme.border),
+                                            let hid = key.with("heading");
+                                            let (slot, _) = ui.allocate_exact_size(
+                                                vec2(ui.available_width(), 18.0),
+                                                Sense::hover(),
+                                            );
+                                            // Relative to the list, so
+                                            // scrolling doesn't glide.
+                                            let shift = motion::glide(
+                                                ui.ctx(),
+                                                Id::new((
+                                                    "derisk-palette-heading",
+                                                    entry.category.heading(),
+                                                )),
+                                                (slot.min - ui.max_rect().min).to_pos2(),
+                                                f(18),
+                                                ease::OUT,
+                                            );
+                                            let o = motion::appear(
+                                                ui.ctx(),
+                                                hid,
+                                                0.0,
+                                                f(10),
+                                                ease::SMOOTH,
+                                            );
+                                            ui.painter().text(
+                                                slot.left_center() + shift,
+                                                Align2::LEFT_CENTER,
+                                                entry.category.heading(),
+                                                FontId::proportional(11.0),
+                                                theme.border.gamma_multiply(o),
                                             );
                                         }
-                                        let response = palette_row(
-                                            ui,
-                                            &theme,
-                                            &shell.apps,
-                                            &self.icons,
-                                            entry,
-                                            i == selected,
-                                            row_height,
+                                        let fade = motion::appear(
+                                            ui.ctx(),
+                                            key,
+                                            0.0,
+                                            f(10),
+                                            ease::SMOOTH,
                                         );
+                                        let at = (ui.cursor().min - ui.max_rect().min).to_pos2();
+                                        let shift =
+                                            motion::glide(ui.ctx(), key, at, f(18), ease::OUT);
+                                        let response = ui
+                                            .scope(|ui| {
+                                                ui.multiply_opacity(fade);
+                                                palette_row(
+                                                    ui,
+                                                    &theme,
+                                                    &shell.apps,
+                                                    &self.icons,
+                                                    entry,
+                                                    i == selected,
+                                                    row_height,
+                                                    shift,
+                                                )
+                                            })
+                                            .inner;
                                         if i == selected && (up || down) {
                                             response.scroll_to_me(None);
                                         }
@@ -2293,7 +2548,68 @@ impl ShellUi {
                             .color(theme.border),
                         );
                     });
+                let laid = inner.response.rect;
+                let height = motion::tween(
+                    ui.ctx(),
+                    Id::new("derisk-palette-height"),
+                    laid.height(),
+                    f(16),
+                    ease::OUT,
+                );
+                let rest = Rect::from_min_size(laid.min, vec2(laid.width(), height));
+                // From the field (or a dot in the card's middle) to the card.
+                let start = from.unwrap_or_else(|| {
+                    Rect::from_center_size(rest.center(), vec2(DOT, DOT))
+                });
+                let mut r = motion::lerp_rect(start, rest, morph);
+                let mut radius = 8.0 + (14.0 - 8.0) * morph;
+                if let Some((_, card, _)) = fold {
+                    r = card;
+                    radius += (DOT / 2.0 - radius) * folded;
+                }
+                let shadow = egui::epaint::Shadow {
+                    offset: [0, 12],
+                    blur: 40,
+                    spread: 0,
+                    color: Color32::from_black_alpha(140).gamma_multiply(morph * (1.0 - folded)),
+                };
+                painter.set(shadow_slot, shadow.as_shape(r, radius));
+                painter.set(
+                    card_slot,
+                    egui::epaint::RectShape::new(
+                        r,
+                        radius,
+                        theme.surface,
+                        Stroke::new(1.0 - folded, theme.border),
+                        StrokeKind::Inside,
+                    ),
+                );
+                // Folding, the accent floods it until it is the dot.
+                if let Some((at, _, _)) = fold {
+                    let flood =
+                        motion::since(ui.ctx(), at + f64::from(f(4)), f(12), ease::SMOOTH);
+                    ui.ctx()
+                        .layer_painter(ui.layer_id())
+                        .with_clip_rect(ui.ctx().content_rect())
+                        .rect_filled(r, radius, theme.accent.gamma_multiply(flood));
+                }
+                // While it morphs, the field's focus outline grows with it
+                // into the input.
+                if morph < 1.0 {
+                    let field = Rect::from_min_size(
+                        rest.min + vec2(10.0, 10.0),
+                        vec2(rest.width() - 20.0, 36.0),
+                    );
+                    painter.rect_stroke(
+                        motion::lerp_rect(start.expand(3.0), field, morph),
+                        11.0 - 3.0 * morph,
+                        Stroke::new(2.5, theme.accent.gamma_multiply(1.0 - shown)),
+                        StrokeKind::Inside,
+                    );
+                }
+                r
             });
+        state.rect = Some(card.inner);
 
         if state.chat {
             state.seen = shell.conversation.last_id().unwrap_or(0).max(state.seen);
@@ -2377,6 +2693,9 @@ impl ShellUi {
             });
         }
         state.asks.push(Ask { text, confirmed });
+        // Its turn is the next one; once it is done the palette folds away.
+        state.asked_after = Some(shell.conversation.last_id().unwrap_or(0));
+        state.done_at = None;
         state.query.clear();
         state.shown_query.clear();
         state.armed = None;
@@ -2390,6 +2709,19 @@ impl ShellUi {
     }
 }
 
+/// The focused window, when it has a frame to ring: not on a phone, and
+/// not filling the work area.
+fn ringed(shell: &Shell) -> Option<WindowPlacement> {
+    if shell.profile().title_bar.height == 0 {
+        return None;
+    }
+    shell
+        .placements()
+        .into_iter()
+        .find(|p| p.focused)
+        .filter(|p| p.frame != shell.work_area())
+}
+
 /// A natural-language request typed in the palette.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Ask {
@@ -2401,7 +2733,11 @@ pub struct Ask {
 
 /// The conversation transcript, newest at the bottom. Returns whether
 /// "New conversation" was clicked.
-fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool {
+///
+/// Turns newer than `fresh_after` animate as the film's does: the steps
+/// come in one after another, each check draws itself in when its step is
+/// done, and the reply fades in once every step has finished.
+fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64, fresh_after: u64) -> bool {
     let turns: Vec<&Turn> = shell
         .conversation
         .turns()
@@ -2444,7 +2780,15 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
                     ui.label(RichText::new(who).size(11.0).color(theme.accent));
                     ui.label(RichText::new(&turn.request).strong());
                 });
-                for step in &turn.steps {
+                let fresh = turn.id > fresh_after;
+                let turn_id = Id::new(("derisk-turn", turn.id));
+                for (i, step) in turn.steps.iter().enumerate() {
+                    let step_id = turn_id.with(i);
+                    let shown = if fresh {
+                        motion::appear(ui.ctx(), step_id, f(4) + f(3) * i as f32, f(12), ease::OUT)
+                    } else {
+                        1.0
+                    };
                     let (icon, color) = match &step.status {
                         StepStatus::Done => (Some("object-select"), theme.accent),
                         StepStatus::Waiting => (Some("view-refresh"), theme.border),
@@ -2454,8 +2798,25 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
                         StepStatus::Skipped => (None, theme.border),
                     };
                     ui.horizontal(|ui| {
+                        ui.multiply_opacity(shown);
                         ui.add_space(12.0);
                         match icon {
+                            // The check draws itself in, left to right
+                            // (8 frames).
+                            Some(icon) if step.status == StepStatus::Done && fresh => {
+                                let drawn = motion::appear(
+                                    ui.ctx(),
+                                    step_id.with("done"),
+                                    0.0,
+                                    f(8),
+                                    ease::OUT,
+                                );
+                                let (r, _) =
+                                    ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                                let mut clip = r;
+                                clip.max.x = r.min.x + r.width() * drawn;
+                                icons::paint(&ui.painter().with_clip_rect(clip), r, icon, color);
+                            }
                             Some(icon) => {
                                 icons::show(ui, icon, 14.0, color);
                             }
@@ -2473,6 +2834,15 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
                     });
                 }
                 ui.horizontal_wrapped(|ui| {
+                    if fresh && turn.is_settled() {
+                        ui.multiply_opacity(motion::appear(
+                            ui.ctx(),
+                            turn_id.with("reply"),
+                            0.0,
+                            f(11),
+                            ease::SMOOTH,
+                        ));
+                    }
                     ui.add_space(12.0);
                     let failed = turn.error.is_some()
                         || turn
@@ -2490,7 +2860,9 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64) -> bool
     clear
 }
 
-/// One palette row: icon, title, detail and shortcut hint.
+/// One palette row: icon, title, detail and shortcut hint, drawn `shift`
+/// from where it is laid out while it glides.
+#[allow(clippy::too_many_arguments)]
 fn palette_row(
     ui: &mut Ui,
     theme: &Theme,
@@ -2499,8 +2871,12 @@ fn palette_row(
     entry: &Entry,
     selected: bool,
     height: f32,
+    shift: egui::Vec2,
 ) -> egui::Response {
-    let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    let (slot, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    // Drawn where it is gliding from, while its place moves.
+    let r = slot.translate(shift);
     ui.ctx().accesskit_node_builder(response.id, |node| {
         node.set_role(Role::ListBoxOption);
         node.set_label(entry.title.clone());

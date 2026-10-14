@@ -1153,3 +1153,124 @@ fn overview_cards_show_what_windows_hold() {
     shell.apply(Action::Minimize { window: None }).unwrap();
     assert_eq!(picture_cards(&shell), 1);
 }
+
+/// One frame at `secs` on the context's clock: the actions, and the
+/// shapes drawn.
+fn timed(
+    ctx: &egui::Context,
+    ui: &mut ShellUi,
+    shell: &Shell,
+    events: Vec<egui::Event>,
+    secs: f64,
+) -> (Vec<Action>, Vec<egui::Shape>) {
+    let input = egui::RawInput {
+        screen_rect: Some(to_rect(shell.output())),
+        time: Some(secs),
+        events,
+        ..Default::default()
+    };
+    let mut actions = Vec::new();
+    let mut out = ctx.run_ui(input, |root| {
+        actions = ui.show(root, shell, 60_000);
+    });
+    out.textures_delta.clear();
+    (actions, out.shapes.into_iter().map(|c| c.shape).collect())
+}
+
+/// Whether the focus ring is drawn whole, and whether it is drawn at all.
+fn ring_drawn(ui: &ShellUi, shapes: &[egui::Shape]) -> (bool, bool) {
+    let accent = ui.theme.accent;
+    let whole = shapes.iter().any(|s| {
+        matches!(s, egui::Shape::Rect(r)
+            if r.stroke.color == accent && r.stroke.width == derisk::ui::FOCUS_RING)
+    });
+    let tracing = shapes.iter().any(|s| {
+        matches!(s, egui::Shape::Path(p)
+            if p.stroke.width == derisk::ui::FOCUS_RING && !p.closed)
+    });
+    (whole, whole || tracing)
+}
+
+#[test]
+fn a_newly_focused_windows_ring_traces_itself_in() {
+    let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
+    shell.map_window("files", "Files");
+    shell.map_window("terminal", "Terminal");
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    // What was focused from the start is ringed whole.
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    assert_eq!(ring_drawn(&ui, &shapes), (true, true));
+
+    shell.map_window("editor", "Untitled");
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    assert_eq!(ring_drawn(&ui, &shapes), (false, false));
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.2);
+    assert_eq!(ring_drawn(&ui, &shapes), (false, true));
+    // 40 frames.
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0 + 41.0 / 60.0);
+    assert_eq!(ring_drawn(&ui, &shapes), (true, true));
+}
+
+#[test]
+fn a_finished_request_folds_the_palette_into_the_dot_that_rings_the_window() {
+    use derisk::{animation::DOT, conversation::Source};
+
+    let mut shell = Shell::new(rect(0, 0, 1280, 800), false);
+    shell.map_window("files", "Files");
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    shell.apply(Action::Palette { visible: None }).unwrap();
+    timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    timed(
+        &ctx,
+        &mut ui,
+        &shell,
+        vec![egui::Event::Text("?snap it left".into())],
+        3.0,
+    );
+    timed(&ctx, &mut ui, &shell, vec![key(egui::Key::Enter)], 3.1);
+    let asks = ui.take_asks();
+    assert_eq!(asks.len(), 1);
+    shell
+        .ask(&asks[0].text, Source::User, false)
+        .into_result()
+        .unwrap();
+
+    // "Done." holds for 30 frames, then the palette folds for 16.
+    let (actions, _) = timed(&ctx, &mut ui, &shell, vec![], 4.0);
+    assert!(actions.is_empty(), "{actions:?}");
+    let (actions, _) = timed(&ctx, &mut ui, &shell, vec![], 4.49);
+    assert!(actions.is_empty(), "{actions:?}");
+    let (actions, _) = timed(&ctx, &mut ui, &shell, vec![], 4.5);
+    assert!(actions.is_empty(), "{actions:?}");
+    let (actions, _) = timed(&ctx, &mut ui, &shell, vec![], 4.5 + 17.0 / 60.0);
+    assert_eq!(
+        actions,
+        [Action::Palette {
+            visible: Some(false)
+        }]
+    );
+    for a in actions {
+        shell.apply(a).unwrap();
+    }
+
+    // The dot flies to the window while its ring waits for it.
+    let accent = ui.theme.accent;
+    let dot = |shapes: &[egui::Shape]| {
+        shapes.iter().any(
+            |s| matches!(s, egui::Shape::Circle(c) if c.fill == accent && c.radius == DOT / 2.0),
+        )
+    };
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 5.0);
+    assert!(dot(&shapes));
+    assert_eq!(ring_drawn(&ui, &shapes), (false, false));
+    // It lands 90 frames after the fold began, and the ring traces in.
+    let landed = 4.5 + 1.5;
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], landed + 0.1);
+    assert!(!dot(&shapes));
+    assert_eq!(ring_drawn(&ui, &shapes), (false, true));
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], landed + 0.7);
+    assert_eq!(ring_drawn(&ui, &shapes), (true, true));
+}
