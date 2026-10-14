@@ -6,8 +6,9 @@
 //! - `losos-guest-run --list` prints one line per app the guest can show on
 //!   the desktop: its desktop file ID and its name, separated by a tab.
 //! - `losos-guest-run <desktop file ID>` starts that app as the guest's
-//!   user under `waypipe --vsock -s 2:7350 server`, so its windows come to
-//!   the desktop through [`crate::display`], and returns once it has started.
+//!   user, whose waypipe server (`waypipe --vsock -s 2:7350 server`) is the
+//!   app's display, so its windows come to the desktop through
+//!   [`crate::display`], and returns once it has started.
 
 use std::time::{Duration, Instant};
 

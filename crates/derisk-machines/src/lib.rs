@@ -67,8 +67,8 @@ pub const METADATA_NAMESPACE: &str = "https://losos-project.github.io/xmlns/pm-m
 /// machine a window came from without asking the guest.
 pub const SANDBOX_ENGINE: &str = "org.libvirt";
 
-/// The vsock port the desktop listens on for guests' windows. A guest runs
-/// its apps under `waypipe --vsock -s 2:7350 server`; 2 is the host's
+/// The vsock port the desktop listens on for guests' windows. A guest's
+/// apps draw through `waypipe --vsock -s 2:7350 server`; 2 is the host's
 /// address.
 pub const DISPLAY_PORT: u32 = 7350;
 

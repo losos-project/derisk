@@ -1,8 +1,9 @@
 //! How a machine's windows reach the desktop.
 //!
-//! In the guest, an app runs under `waypipe --vsock -s 2:7350 server`, which
-//! carries its Wayland connection over virtio-vsock to the host (address 2).
-//! On the host, three things meet it:
+//! In the guest, apps connect to a waypipe server (`waypipe --vsock -s 2:7350
+//! server`) as their compositor, and it carries each app's Wayland connection
+//! over virtio-vsock to the host (address 2), one stream per app. On the
+//! host, three things meet it:
 //!
 //! 1. [`gate`] accepts on vsock port [`DISPLAY_PORT`]. The kernel stamps each
 //!    connection with the address libvirt gave the sending machine, and the
