@@ -336,3 +336,44 @@ fn default_apps_is_listed_only_when_the_policy_says() {
     });
     assert!(shown.listed(Page::DefaultApps));
 }
+
+#[test]
+fn network_page_says_what_it_sees() {
+    use derisk_install::{
+        network::{Network, Saved, Security},
+        wifi::Status,
+    };
+    use derisk_settings::network::{detail, headline};
+
+    let home = Network {
+        ssid: b"home".to_vec(),
+        signal: -50,
+        security: Security::Passphrase {
+            psk: true,
+            sae: false,
+        },
+    };
+    let cafe = Network {
+        ssid: b"cafe".to_vec(),
+        signal: -80,
+        security: Security::Open,
+    };
+    let mut status = Status::default();
+    assert_eq!(headline(&status), "Not connected");
+    status.online = true;
+    assert_eq!(headline(&status), "Online");
+    status.connected = Some("home".into());
+    assert_eq!(headline(&status), "Online, through home");
+    status.joining = Some("cafe".into());
+    assert_eq!(headline(&status), "Joining cafe…");
+
+    status.saved = vec![Saved {
+        id: 3,
+        ssid: b"cafe".to_vec(),
+        current: false,
+    }];
+    assert!(detail(&home, &status).starts_with("Connected · ▂▄▆█ · "));
+    assert!(detail(&cafe, &status).starts_with("Saved · ▂ · "));
+    assert_eq!(status.saved(b"cafe").map(|s| s.id), Some(3));
+    assert!(status.saved(b"home").is_none());
+}

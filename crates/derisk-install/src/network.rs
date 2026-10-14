@@ -254,6 +254,25 @@ impl Control {
     pub fn forget(&self, id: u32) -> io::Result<()> {
         self.ok(&format!("REMOVE_NETWORK {id}"))
     }
+
+    /// The networks wpa_supplicant knows, joined before or added now.
+    pub fn saved(&self) -> io::Result<Vec<Saved>> {
+        Ok(parse_list_networks(&self.request("LIST_NETWORKS")?))
+    }
+
+    /// Joins a network wpa_supplicant already knows, which, like
+    /// [`Control::connect`], disables every other one.
+    pub fn select(&self, id: u32) -> io::Result<()> {
+        self.ok(&format!("SELECT_NETWORK {id}"))
+    }
+
+    /// Lets wpa_supplicant pick among every known network again, after a
+    /// SELECT_NETWORK disabled the rest. Without it, the networks saved
+    /// before would be written to the configuration as disabled and never
+    /// joined by themselves again.
+    pub fn enable_all(&self) -> io::Result<()> {
+        self.ok("ENABLE_NETWORK all")
+    }
 }
 
 impl Drop for Control {
@@ -484,6 +503,44 @@ fn hex_value(digit: u8) -> u8 {
         b'a'..=b'f' => digit - b'a' + 10,
         _ => digit - b'A' + 10,
     }
+}
+
+/// A network wpa_supplicant knows, from LIST_NETWORKS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Saved {
+    /// wpa_supplicant's id for it.
+    pub id: u32,
+    /// The SSID's raw bytes.
+    pub ssid: Vec<u8>,
+    /// Whether it is the network in use.
+    pub current: bool,
+}
+
+impl Saved {
+    /// The SSID as text.
+    pub fn name(&self) -> String {
+        String::from_utf8_lossy(&self.ssid).into_owned()
+    }
+}
+
+/// LIST_NETWORKS: a header line, then one tab-separated line per network --
+/// id, ssid, bssid, flags such as `[CURRENT]` or `[DISABLED]`.
+pub fn parse_list_networks(reply: &str) -> Vec<Saved> {
+    reply
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let mut fields = line.splitn(4, '\t');
+            let id = fields.next()?.parse().ok()?;
+            let ssid = decode_ssid(fields.next()?);
+            let flags = fields.nth(1).unwrap_or_default();
+            Some(Saved {
+                id,
+                ssid,
+                current: flags.contains("[CURRENT]"),
+            })
+        })
+        .collect()
 }
 
 /// STATUS's reply as key-value pairs.
