@@ -36,6 +36,9 @@ pub struct MachinesApp {
     templates: Vec<Template>,
     plugin: Plugin,
     looked: Option<Instant>,
+    /// The machine apps open in by default, as the settings file says;
+    /// empty for this computer.
+    open_apps_in: String,
     /// Each running machine's apps, as it listed them, and when it was
     /// asked; forgotten when the machine stops.
     #[cfg(not(target_arch = "wasm32"))]
@@ -103,6 +106,7 @@ impl MachinesApp {
             templates: Vec::new(),
             plugin: Plugin::NotShipped,
             looked: None,
+            open_apps_in: String::new(),
             #[cfg(not(target_arch = "wasm32"))]
             apps: std::collections::HashMap::new(),
         };
@@ -122,7 +126,42 @@ impl MachinesApp {
         self.templates = setup::templates(&dirs);
         self.plugin =
             setup::plugin_dir().map_or(Plugin::NotShipped, |mine| Plugin::find(&dirs, &mine));
+        self.open_apps_in = derisk_settings::default_path()
+            .and_then(|path| derisk_settings::Settings::load(&path).ok())
+            .map(|(settings, _)| settings.machines.open_apps_in)
+            .unwrap_or_default();
         self.looked = Some(Instant::now());
+    }
+
+    /// For the selected machine, whether apps opened from the desktop open
+    /// in it: derisk's `machines.open_apps_in` setting, which the session
+    /// reads when it launches an app. Only a machine pm made has the guest
+    /// side that opens apps.
+    fn default_machine(&mut self, ui: &mut egui::Ui) {
+        let Some(name) = self
+            .selected
+            .as_ref()
+            .and_then(|name| self.machines.iter().find(|m| &m.name == name))
+            .filter(|m| m.from_pm())
+            .map(|m| m.name.clone())
+        else {
+            return;
+        };
+        let mut here = self.open_apps_in == name;
+        let changed = ui
+            .checkbox(&mut here, format!("Open apps in {name}"))
+            .on_hover_text(
+                "Apps you open from the desktop open in this machine instead of on this \
+                 computer, starting it if it is off. derisk's own apps stay here.",
+            )
+            .changed();
+        if changed {
+            let value = if here { name } else { String::new() };
+            match save_open_apps_in(&value) {
+                Ok(()) => self.open_apps_in = value,
+                Err(error) => self.status = Some(Err(error)),
+            }
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -620,6 +659,18 @@ enum Act {
     Remove,
 }
 
+/// Sets which machine apps open in, keeping the rest of the settings file.
+fn save_open_apps_in(machine: &str) -> Result<(), String> {
+    let path = derisk_settings::default_path()
+        .ok_or_else(|| "There is no config directory to save the setting in".to_owned())?;
+    let (mut settings, _) = derisk_settings::Settings::load(&path)
+        .map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    settings.machines.open_apps_in = machine.to_owned();
+    settings
+        .save(&path)
+        .map_err(|e| format!("Cannot save {}: {e}", path.display()))
+}
+
 /// The second line of a machine's row.
 fn details(machine: &Machine) -> String {
     let template = machine.template.as_ref().map_or_else(
@@ -696,6 +747,7 @@ impl App for MachinesApp {
             self.plugin_banner(ui);
             self.toolbar(ui);
             self.confirmation(ui);
+            self.default_machine(ui);
             #[cfg(not(target_arch = "wasm32"))]
             self.open_in(ui);
             self.form(ui);

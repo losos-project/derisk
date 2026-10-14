@@ -36,8 +36,9 @@ use mcsapi_ui::{
 };
 pub use model::{
     Accent, Appearance, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit, Input, Layout,
-    LowPower, Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings, ThemeId, TopBar,
-    Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
+    LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings,
+    ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
+    machine_name,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};

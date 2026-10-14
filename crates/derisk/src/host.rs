@@ -980,6 +980,17 @@ impl Session {
             self.spawn_command(id, &argv);
             return;
         }
+        // Settings may send apps to a machine. Not derisk's own, which only
+        // this compositor can draw; and here after all when that machine
+        // is gone, rather than nowhere.
+        let machine = &self.settings.current().machines.open_apps_in;
+        if id.is_none()
+            && !machine.is_empty()
+            && let Some(machines) = &self.machines
+            && machines.open(machine, app)
+        {
+            return;
+        }
         self.commands.push(Command::Launch(app.to_owned()));
     }
 

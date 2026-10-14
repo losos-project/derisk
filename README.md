@@ -564,7 +564,7 @@ in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 | Text Editor | `derisk-editor` | UTF-8 files up to 8 MiB, atomic saves that keep permissions, find and replace, line/column, unsaved-change prompts. |
 | System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
 | Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
-| Machines | `derisk-machines` | The libvirt machines apps run in, each in its label's colour: make one from a template the OS ships (through `pm machine create`), start, shut down, force off and remove them, and set pm's libvirt plugin up with your own key. |
+| Machines | `derisk-machines` | The libvirt machines apps run in, each in its label's colour: make one from a template the OS ships (through `pm machine create`), start, shut down, force off and remove them, open the apps a machine has, choose the machine apps you launch open in (`machines.open_apps_in` in `settings.conf`; derisk's own apps stay on the host), and set pm's libvirt plugin up with your own key. |
 
 `derisk-apps` lists them, registers them with `mcsapi-runtime`, and keeps the
 running app objects next to their instances (`derisk_apps::Session`), so the

@@ -336,3 +336,24 @@ fn default_apps_is_listed_only_when_the_policy_says() {
     });
     assert!(shown.listed(Page::DefaultApps));
 }
+
+#[test]
+fn the_machine_apps_open_in_round_trips_and_must_be_a_name() {
+    let mut settings = Settings::default();
+    assert_eq!(settings.machines.open_apps_in, "");
+    settings.machines.open_apps_in = "work".into();
+    let text = settings.to_text();
+    assert!(text.contains("machines.open_apps_in = work\n"), "{text}");
+    let (parsed, warnings) = Settings::parse(&text);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(parsed, settings);
+    // Back to this computer.
+    let (parsed, warnings) = Settings::parse("machines.open_apps_in =\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(parsed.machines.open_apps_in, "");
+    for bad in ["Work", "../work", "-work", "a b"] {
+        let (parsed, warnings) = Settings::parse(&format!("machines.open_apps_in = {bad}\n"));
+        assert_eq!(warnings.len(), 1, "{bad}");
+        assert_eq!(parsed.machines.open_apps_in, "", "{bad}");
+    }
+}

@@ -164,10 +164,7 @@ pub fn plugin_dir() -> Option<PathBuf> {
 /// up to 31 lowercase letters, digits and hyphens. The same rule as pm's
 /// `check_machine_name`, so the app can say so before pm runs.
 pub fn valid_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_lowercase())
-        && name.len() <= 32
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    derisk_settings::machine_name(name)
 }
 
 #[cfg(test)]

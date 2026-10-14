@@ -16,6 +16,9 @@ miette.workspace = true
 # The Machines app.
 derisk-sys.workspace = true
 mcsapi-ui.workspace = true
+# Which machine apps open in by default is a desktop setting, which the
+# Machines app sets and the session reads.
+derisk-settings.workspace = true
 
 # libvirt itself exists only on Linux hosts; the browser demo of the core
 # apps builds this crate for wasm32 with the parsing and the labels alone.
