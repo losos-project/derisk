@@ -20,8 +20,8 @@ use std::{cell::RefCell, collections::HashMap, sync::Arc};
 use derisk_settings::BarPosition;
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
-    Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder,
-    accesskit::Role, pos2, vec2,
+    Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui,
+    UiBuilder, accesskit::Role, epaint::RectShape, pos2, vec2,
 };
 use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 
@@ -186,6 +186,16 @@ fn card<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// What every window on screen shows, for the overview's cards to draw
+/// instead of an icon. The compositor host hands it over each frame the
+/// overview is open (mcsapi-compositor's `WindowPictures`).
+pub struct WindowPictures {
+    /// The screen with its windows drawn and nothing over them.
+    pub texture: TextureId,
+    /// Where an area of the screen (logical) lies in the texture.
+    pub uv: Box<dyn Fn(Rect) -> Rect>,
+}
+
 /// Persistent UI state for the shell chrome.
 pub struct ShellUi {
     /// Shared colors (from mcsapi).
@@ -198,6 +208,8 @@ pub struct ShellUi {
     /// The overview's cards, from the widget plugins.
     board: Board,
     overview_open: bool,
+    /// What the windows show, while the host provides it.
+    pub window_pictures: Option<WindowPictures>,
     /// Window being dragged in the overview, toward a workspace.
     overview_drag: Option<WindowId>,
     tray: Option<(u64, Vec<TextureHandle>)>,
@@ -386,6 +398,7 @@ impl ShellUi {
             fields: HashMap::new(),
             board: Board::default(),
             overview_open: false,
+            window_pictures: None,
             overview_drag: None,
             tray: None,
             palette: PaletteUi::default(),
@@ -474,6 +487,28 @@ impl ShellUi {
                 self.theme.border,
             );
         }
+    }
+
+    /// A window picture's label: the app icon and name on a pill over the
+    /// picture's lower edge, where it reads on any content.
+    fn paint_picture_label(&self, painter: &Painter, r: Rect, look: &AppLook) {
+        let size = 13.0;
+        let height = 28.0;
+        let width = (r.width() - 16.0).min(220.0);
+        let pill = Rect::from_center_size(
+            pos2(r.center().x, r.bottom() - 8.0 - height / 2.0),
+            vec2(width, height),
+        );
+        painter.rect_filled(pill, height / 2.0, self.theme.surface.gamma_multiply(0.92));
+        self.paint_icon_label(
+            painter,
+            pill.center(),
+            width - 16.0,
+            look,
+            &look.name,
+            size,
+            self.theme.foreground,
+        );
     }
 
     /// What the on-screen keyboard typed for the focused window since the
@@ -1616,20 +1651,35 @@ impl ShellUi {
             }
             let minimized = shell.is_minimized(*w);
             let hovered = response.hovered() && dragging.is_none();
-            let fill = if minimized {
-                self.theme.background
-            } else {
-                self.theme.surface
+            // The window as it is, when nothing on screen covers it (it
+            // would show in the window's place) and it isn't minimized.
+            let picture = self
+                .window_pictures
+                .as_ref()
+                .filter(|_| !minimized)
+                .and_then(|pictures| {
+                    let at = placements.iter().position(|p| p.window == *w)?;
+                    let frame = to_rect(placements[at].frame);
+                    let covered = placements[at + 1..]
+                        .iter()
+                        .any(|p| to_rect(p.frame).intersects(frame));
+                    (!covered).then(|| (pictures.texture, (pictures.uv)(frame)))
+                });
+            let fill = match (picture, minimized) {
+                (Some(_), _) => Color32::WHITE,
+                (None, true) => self.theme.background,
+                (None, false) => self.theme.surface,
             };
-            ui.painter().rect_filled(
-                r,
-                12,
-                if lifted {
-                    fill.gamma_multiply(0.4)
-                } else {
-                    fill
-                },
-            );
+            let fill = if lifted {
+                fill.gamma_multiply(0.4)
+            } else {
+                fill
+            };
+            let card = RectShape::filled(r, 12, fill);
+            ui.painter().add(match picture {
+                Some((texture, uv)) => card.with_texture(texture, uv),
+                None => card,
+            });
             ui.painter().rect_stroke(
                 r,
                 12,
@@ -1645,7 +1695,11 @@ impl ShellUi {
             );
             let (app, title) = shell.window_label(*w).unwrap_or_default();
             let look = shell.apps.look(app);
-            self.paint_window_card(ui.painter(), r, &look, title);
+            if picture.is_some() {
+                self.paint_picture_label(ui.painter(), r, &look);
+            } else {
+                self.paint_window_card(ui.painter(), r, &look, title);
+            }
             // Without title bars, a phone closes apps from here: a close
             // button on each card, a full touch target in its corner.
             let mut closed = false;

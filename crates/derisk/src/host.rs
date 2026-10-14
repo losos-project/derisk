@@ -55,7 +55,10 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
-    ui::{ChoiceInput, PolkitInput, ShellUi, set_touch_style, show_choice, show_lock, show_polkit},
+    ui::{
+        ChoiceInput, PolkitInput, ShellUi, WindowPictures, set_touch_style, show_choice, show_lock,
+        show_polkit,
+    },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
 };
@@ -1428,6 +1431,18 @@ impl compositor::Shell for Session {
         {
             self.ui.paint_decoration(painter, &self.shell, &p);
         }
+    }
+
+    fn wants_window_pictures(&self) -> bool {
+        // The overview's cards show what each window holds.
+        self.shell.overview_visible() && !self.lock.is_locked()
+    }
+
+    fn window_pictures(&mut self, pictures: Option<compositor::WindowPictures>) {
+        self.ui.window_pictures = pictures.map(|p| WindowPictures {
+            texture: p.texture,
+            uv: Box::new(move |area| p.uv(area)),
+        });
     }
 
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
