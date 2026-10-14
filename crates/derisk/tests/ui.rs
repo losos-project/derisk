@@ -1114,7 +1114,8 @@ fn the_focused_window_is_ringed_in_the_accent() {
 /// How many of the overview's window cards are drawn from the windows'
 /// pictures.
 fn picture_cards(shell: &Shell) -> usize {
-    let mut ui = ShellUi::new(shell, false);
+    // Without motion, so the cards are drawn where they settle.
+    let mut ui = ShellUi::new(shell, true);
     ui.window_pictures = Some(derisk::ui::WindowPictures {
         texture: egui::TextureId::User(7),
         uv: Box::new(|area| area),
@@ -1273,4 +1274,152 @@ fn a_finished_request_folds_the_palette_into_the_dot_that_rings_the_window() {
     assert_eq!(ring_drawn(&ui, &shapes), (false, true));
     let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], landed + 0.7);
     assert_eq!(ring_drawn(&ui, &shapes), (true, true));
+}
+
+#[test]
+fn the_overview_rises_in_and_a_picked_card_grows_into_its_window() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.map_window("files", "Files");
+    let (editor, _) = shell.map_window("editor", "Untitled");
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    // A window card's name, and where it is drawn.
+    let label = |shapes: &[egui::Shape]| {
+        shapes.iter().find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text() == "Untitled" => Some(t.pos.y),
+            _ => None,
+        })
+    };
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    // Still below its place, and see-through: not drawn yet.
+    assert_eq!(label(&shapes), None);
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.3);
+    let rising = label(&shapes).expect("the card rising in");
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 3.0);
+    let settled = label(&shapes).expect("the card in place");
+    assert!(rising > settled, "{rising} {settled}");
+
+    // Clicking the card picks the window, which grows out of the card.
+    let card = shapes
+        .iter()
+        .find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text() == "Untitled" => Some(t.pos),
+            _ => None,
+        })
+        .unwrap();
+    let click = |pressed| egui::Event::PointerButton {
+        pos: card,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    timed(
+        &ctx,
+        &mut ui,
+        &shell,
+        vec![egui::Event::PointerMoved(card)],
+        3.1,
+    );
+    timed(&ctx, &mut ui, &shell, vec![click(true)], 3.13);
+    let (actions, _) = timed(&ctx, &mut ui, &shell, vec![click(false)], 3.16);
+    assert!(actions.contains(&Action::Focus {
+        window: editor.get()
+    }));
+    let (picked, from) = ui.take_picked().expect("a picked window");
+    assert_eq!(picked, editor);
+    assert!(from.contains(card));
+}
+
+#[test]
+fn the_keyboard_rises_and_a_typed_key_glows() {
+    let mut shell = Shell::new(rect(0, 0, 392, 872), true);
+    shell.map_window("editor", "Untitled");
+    shell
+        .apply(Action::Keyboard {
+            visible: Some(true),
+        })
+        .unwrap();
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    let key_q = |shapes: &[egui::Shape]| {
+        shapes.iter().find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text().eq_ignore_ascii_case("q") => Some(t.pos),
+            _ => None,
+        })
+    };
+    timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 1.1);
+    let rising = key_q(&shapes).expect("the q key");
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    let risen = key_q(&shapes).expect("the q key");
+    assert!(rising.y > risen.y, "{rising:?} {risen:?}");
+
+    // Typed, its label turns to the background colour on the accent.
+    let at = risen + egui::vec2(4.0, 8.0);
+    let tap = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let background = ui.theme.background;
+    let label_color = |shapes: &[egui::Shape]| {
+        shapes.iter().find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text().eq_ignore_ascii_case("q") => {
+                Some(t.fallback_color)
+            }
+            _ => None,
+        })
+    };
+    timed(
+        &ctx,
+        &mut ui,
+        &shell,
+        vec![egui::Event::PointerMoved(at)],
+        2.1,
+    );
+    timed(&ctx, &mut ui, &shell, vec![tap(true)], 2.11);
+    timed(&ctx, &mut ui, &shell, vec![tap(false)], 2.12);
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.13);
+    assert_eq!(label_color(&shapes), Some(background));
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.5);
+    assert_ne!(label_color(&shapes), Some(background));
+}
+
+#[test]
+fn the_screen_shuts_into_a_line() {
+    let shell = Shell::new(rect(0, 0, 1280, 800), false);
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    ui.shut_down();
+    timed(&ctx, &mut ui, &shell, vec![], 1.1);
+    assert!(!ui.has_shut());
+    // 10 frames' wait, then 16 to narrow.
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 1.1 + 27.0 / 60.0);
+    assert!(ui.has_shut());
+    let accent = ui.theme.accent;
+    let line = shapes
+        .iter()
+        .find_map(|s| match s {
+            egui::Shape::Rect(r) if r.fill == accent => Some(r.rect),
+            _ => None,
+        })
+        .expect("the line");
+    assert_eq!(line.size(), egui::vec2(300.0, 4.0));
+    assert_eq!(line.center(), egui::pos2(640.0, 400.0));
+
+    ui.open_up();
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    assert!(
+        !shapes.iter().any(
+            |s| matches!(s, egui::Shape::Rect(r) if r.fill == accent && r.rect.height() == 4.0)
+        )
+    );
 }

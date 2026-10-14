@@ -61,6 +61,7 @@ use derisk::{
     },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
+    window_motion::{Shown, WindowMotion},
 };
 use derisk_settings::{Power, Privacy, Shortcuts};
 use mcsapi::WindowId;
@@ -69,8 +70,8 @@ use tracing::{info, warn};
 use crate::{pam, polkit_agent, unlock};
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
-    Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
-    Remote, Reserved, Role, RuntimeClient, TextField, Theme, WindowHint, WorkspaceInfo,
+    Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, Motion, OutputTiming, Placement,
+    Press, Remote, Reserved, Role, RuntimeClient, TextField, Theme, WindowHint, WorkspaceInfo,
     a11y::{Origin, Snapshot, Subtree},
     accesskit::{self, NodeId},
     egui,
@@ -155,6 +156,14 @@ pub struct Session {
     commands: Vec<Command>,
     super_tap: SuperTap,
     start: Instant,
+    /// A power off, reboot or log out waiting for the screen to shut, and
+    /// when it was carried out.
+    ending: Vec<Effect>,
+    ended: Option<Instant>,
+    /// Windows opening, gliding and snapping, and where each is drawn this
+    /// frame while it does.
+    window_motion: WindowMotion,
+    shown: HashMap<WindowId, Shown>,
     last_tick: Option<Instant>,
     last_sleep_check: Option<Instant>,
     palette_open: bool,
@@ -299,6 +308,24 @@ fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps:
 }
 
 impl Session {
+    /// The clock window motion runs on, in milliseconds.
+    fn motion_now(&self) -> f64 {
+        self.start.elapsed().as_secs_f64() * 1000.0
+    }
+
+    /// Works out where each window is drawn this frame.
+    fn move_windows(&mut self) {
+        self.window_motion.keyboard(self.shell.keyboard_visible());
+        self.shown = self.window_motion.update(
+            self.motion_now(),
+            &self.shell.placements(),
+            self.shell.window_ids(),
+            self.shell.dragged(),
+            self.shell.work_area(),
+            self.ui.animates(&self.shell),
+        );
+    }
+
     fn new(options: &Options, pending_actions: PendingActions, phone: Arc<AtomicBool>) -> Self {
         let (w, h) = options.size;
         let mut shell = Shell::new(rect(0, 0, w, h), false);
@@ -337,6 +364,10 @@ impl Session {
             commands: Vec::new(),
             super_tap: SuperTap::default(),
             start: Instant::now(),
+            ending: Vec::new(),
+            ended: None,
+            window_motion: WindowMotion::default(),
+            shown: HashMap::new(),
             last_tick: None,
             last_sleep_check: None,
             palette_open: false,
@@ -998,6 +1029,14 @@ impl Session {
                         self.commands.push(Command::Close(id));
                     }
                 }
+                Effect::Session {
+                    op: SessionOp::PowerOff | SessionOp::Reboot | SessionOp::Logout,
+                } if !self.ui.has_shut() && !self.lock.is_locked() => {
+                    // The screen shuts into the boot screen's line first
+                    // (see `tick`); the lock screen has no shell to shut.
+                    self.ui.shut_down();
+                    self.ending.push(effect);
+                }
                 Effect::Session { .. }
                 | Effect::RestartUnit { .. }
                 | Effect::ResetFailed { .. } => {
@@ -1179,6 +1218,10 @@ impl compositor::Shell for Session {
                     == (Mode::Snapped {
                         zone: SnapZone::Maximize,
                     }),
+                motion: self.shown.get(&p.window).map(|s| Motion {
+                    shown: s.frame,
+                    opacity: s.opacity,
+                }),
             })
             .collect()
     }
@@ -1212,6 +1255,22 @@ impl compositor::Shell for Session {
     /// minute.
     fn tick(&mut self) {
         self.poll_idle();
+        // Every frame, before the host asks where the windows are.
+        self.move_windows();
+        if !self.ending.is_empty() && self.ui.has_shut() {
+            let ending = std::mem::take(&mut self.ending);
+            self.perform(ending);
+            self.ended = Some(Instant::now());
+        }
+        // Still here a while later (refused, or not --execute): the screen
+        // opens again.
+        if self
+            .ended
+            .is_some_and(|t| t.elapsed() >= Duration::from_secs(5))
+        {
+            self.ended = None;
+            self.ui.open_up();
+        }
         if self
             .last_tick
             .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
@@ -1501,6 +1560,18 @@ impl compositor::Shell for Session {
             if let Err(e) = outcome.result {
                 info!("request failed: {e}");
             }
+        }
+        // A window picked in the overview grows out of its card. Worked out
+        // again now, so it is never drawn at its frame first.
+        if let Some((window, card)) = self.ui.take_picked() {
+            let card = rect(
+                card.left().round() as i32,
+                card.top().round() as i32,
+                card.width().round() as i32,
+                card.height().round() as i32,
+            );
+            self.window_motion.grow(window, card, self.motion_now());
+            self.move_windows();
         }
         self.palette_opened();
     }

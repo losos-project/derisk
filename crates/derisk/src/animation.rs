@@ -103,6 +103,9 @@ pub mod ease {
     pub const REST: Ease = Ease::new(0.45, 0.0, 0.1, 1.0);
     /// Expo-in-out: whips and slides.
     pub const IN_OUT: Ease = Ease::new(0.87, 0.0, 0.13, 1.0);
+    /// The film's camera: a slow start and a long settle, for something
+    /// growing to fill the screen.
+    pub const CAM: Ease = Ease::new(0.48, 0.1, 0.0, 0.9);
 }
 
 /// Eased progress of `now` through `[from, to]` (milliseconds), 0 before and
@@ -112,6 +115,16 @@ pub fn progress(now: f32, from: f32, to: f32, ease: Ease) -> f32 {
         return if now >= to { 1.0 } else { 0.0 };
     }
     ease.at((now - from) / (to - from))
+}
+
+/// When the `i`th of `n` things starts, spread evenly over `span` (ms):
+/// how the film staggers a group in.
+pub fn stagger(i: usize, n: usize, span: f32) -> f32 {
+    if n > 1 {
+        span * (i as f32 / (n - 1) as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 /// A hit's envelope `ms` after it: up to 1 in 2 frames, then an exponential

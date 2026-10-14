@@ -696,6 +696,16 @@ impl Shell {
         self.drag.filter(|d| d.started).map(|d| d.target)
     }
 
+    /// The window the pointer is dragging, once the drag has started.
+    pub fn dragged(&self) -> Option<WindowId> {
+        self.drag.filter(|d| d.started).map(|d| d.window)
+    }
+
+    /// Every window, on any workspace.
+    pub fn window_ids(&self) -> impl Iterator<Item = WindowId> + '_ {
+        self.windows.keys().copied()
+    }
+
     /// A window's app ID and title.
     pub fn window_label(&self, window: WindowId) -> Option<(&str, &str)> {
         self.windows

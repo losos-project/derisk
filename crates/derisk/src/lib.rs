@@ -88,6 +88,7 @@ pub mod ui;
 pub mod wallpaper;
 pub mod widgets;
 pub mod wifi;
+pub mod window_motion;
 pub mod wizard;
 
 // The layers with nothing above them in the shell live in their own crates;
