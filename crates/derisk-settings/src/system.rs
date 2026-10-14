@@ -238,12 +238,14 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
             let mut sorted: Vec<&Check> = checks.iter().collect();
             sorted.sort_by_key(|c| c.passed);
             for (i, check) in sorted.into_iter().enumerate() {
-                let (mark, color) = if check.passed {
-                    ("✓", theme.accent)
+                // Words, not check marks: the Settings app's font has none.
+                let (verdict, color) = if check.passed {
+                    ("passed", theme.accent)
                 } else {
-                    ("✗", RED)
+                    ("did not pass", RED)
                 };
-                let title = egui::RichText::new(format!("{mark} {}", check.summary)).color(color);
+                let title =
+                    egui::RichText::new(format!("{} · {verdict}", check.summary)).color(color);
                 egui::CollapsingHeader::new(title)
                     .id_salt(("security-check", i))
                     .show(ui, |ui| ui.label(&check.description));
