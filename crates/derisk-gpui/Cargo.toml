@@ -13,6 +13,8 @@ derisk-settings.workspace = true
 mcsapi-theme.workspace = true
 gpui = { workspace = true, optional = true }
 gpui_platform = { workspace = true, optional = true }
+# The picker reads the color under the pointer from the screenshot.
+image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }
 mcsapi-components-gpui = { workspace = true, optional = true }
 mcsapi-ui.workspace = true
 tracing.workspace = true
@@ -26,6 +28,7 @@ thiserror = { workspace = true, optional = true }
 # mcsapi's own `gpui` feature, so the workspace builds without them.
 gpui = [
     "dep:gpui",
+    "dep:image",
     "dep:gpui_platform",
     "dep:mcsapi-components-gpui",
     "mcsapi-components-gpui/gpui",

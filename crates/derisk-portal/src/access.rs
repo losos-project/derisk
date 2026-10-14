@@ -119,28 +119,49 @@ pub async fn ask(
 }
 
 async fn ask_derisk(program: &Path, token: &str, q: &Question<'_>) -> std::io::Result<bool> {
-    let mut child = tokio::process::Command::new(program)
-        .args(dialog_args(q, "Cancel"))
+    let mut command = tokio::process::Command::new(program);
+    command.args(dialog_args(q, "Cancel"));
+    Ok(run_closable(token, command)
+        .await?
+        .is_some_and(|(granted, _)| granted))
+}
+
+/// Runs one of derisk's own windows for the request `token` until it exits,
+/// returning whether it succeeded and what it printed, or `None` when the
+/// app gave up on its request first and [`close`] took the window down.
+pub async fn run_closable(
+    token: &str,
+    mut command: tokio::process::Command,
+) -> std::io::Result<Option<(bool, String)>> {
+    use tokio::io::AsyncReadExt;
+
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
+    let mut stdout = child.stdout.take();
     let (closed, close) = tokio::sync::oneshot::channel();
     SHOWING
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get_or_insert_default()
         .insert(token.to_owned(), closed);
-    let granted = tokio::select! {
-        status = child.wait() => status?.success(),
-        // The app gave up on its request: take the dialog down unanswered.
-        _ = close => {
-            child.kill().await?;
-            false
-        }
+    let finished = tokio::select! {
+        done = async {
+            let mut text = String::new();
+            if let Some(out) = stdout.as_mut() {
+                out.read_to_string(&mut text).await?;
+            }
+            Ok::<_, std::io::Error>((child.wait().await?.success(), text))
+        } => Some(done),
+        // The app gave up on its request: the window goes down unanswered,
+        // killed when `child` is dropped.
+        _ = close => None,
     };
     if let Some(showing) = SHOWING.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         showing.remove(token);
     }
-    Ok(granted)
+    finished.transpose()
 }
 
 async fn ask_gtk(
