@@ -48,7 +48,7 @@ pub fn headline(status: &Status) -> String {
 
 /// What a network's row says under its name.
 pub fn detail(network: &Network, status: &Status) -> String {
-    let mut parts = vec![bars(network.signal), network.security.label()];
+    let mut parts = vec![signal(network.signal), network.security.label()];
     if status.connected.as_deref() == Some(network.name().as_str()) {
         parts.insert(0, "Connected");
     } else if status.saved(&network.ssid).is_some() {
@@ -57,13 +57,14 @@ pub fn detail(network: &Network, status: &Status) -> String {
     parts.join(" · ")
 }
 
-/// Signal strength as one to four bars.
-fn bars(dbm: i32) -> &'static str {
+/// Signal strength in words. The setup pages draw bars with block
+/// characters, which the Settings app's font does not have.
+fn signal(dbm: i32) -> &'static str {
     match dbm {
-        d if d >= -55 => "▂▄▆█",
-        d if d >= -67 => "▂▄▆",
-        d if d >= -78 => "▂▄",
-        _ => "▂",
+        d if d >= -55 => "Strong signal",
+        d if d >= -67 => "Good signal",
+        d if d >= -78 => "Fair signal",
+        _ => "Weak signal",
     }
 }
 
