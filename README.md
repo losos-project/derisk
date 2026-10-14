@@ -538,6 +538,7 @@ nothing but the workspace at the root:
 | `derisk-install` | The installer's backend protocol, locales and time zones, and the network. |
 | `derisk-login` | The greetd login protocol, the lock screen's state and the polkit dialog's. |
 | `derisk-portal` | `xdg-desktop-portal-derisk`. |
+| `derisk-machines` | The libvirt machines apps run in: labels, states, starting and stopping them, and running programs in them. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
 
 Each crate keeps everything it needs in its own directory (its README,
