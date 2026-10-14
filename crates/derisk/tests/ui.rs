@@ -1114,7 +1114,8 @@ fn the_focused_window_is_ringed_in_the_accent() {
 /// How many of the overview's window cards are drawn from the windows'
 /// pictures.
 fn picture_cards(shell: &Shell) -> usize {
-    let mut ui = ShellUi::new(shell, false);
+    // Without motion, so the cards are drawn where they settle.
+    let mut ui = ShellUi::new(shell, true);
     ui.window_pictures = Some(derisk::ui::WindowPictures {
         texture: egui::TextureId::User(7),
         uv: Box::new(|area| area),
@@ -1273,4 +1274,64 @@ fn a_finished_request_folds_the_palette_into_the_dot_that_rings_the_window() {
     assert_eq!(ring_drawn(&ui, &shapes), (false, true));
     let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], landed + 0.7);
     assert_eq!(ring_drawn(&ui, &shapes), (true, true));
+}
+
+#[test]
+fn the_overview_rises_in_and_a_picked_card_grows_into_its_window() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.map_window("files", "Files");
+    let (editor, _) = shell.map_window("editor", "Untitled");
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    // A window card's name, and where it is drawn.
+    let label = |shapes: &[egui::Shape]| {
+        shapes.iter().find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text() == "Untitled" => Some(t.pos.y),
+            _ => None,
+        })
+    };
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    // Still below its place, and see-through: not drawn yet.
+    assert_eq!(label(&shapes), None);
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.3);
+    let rising = label(&shapes).expect("the card rising in");
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 3.0);
+    let settled = label(&shapes).expect("the card in place");
+    assert!(rising > settled, "{rising} {settled}");
+
+    // Clicking the card picks the window, which grows out of the card.
+    let card = shapes
+        .iter()
+        .find_map(|s| match s {
+            egui::Shape::Text(t) if t.galley.text() == "Untitled" => Some(t.pos),
+            _ => None,
+        })
+        .unwrap();
+    let click = |pressed| egui::Event::PointerButton {
+        pos: card,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    timed(
+        &ctx,
+        &mut ui,
+        &shell,
+        vec![egui::Event::PointerMoved(card)],
+        3.1,
+    );
+    timed(&ctx, &mut ui, &shell, vec![click(true)], 3.13);
+    let (actions, _) = timed(&ctx, &mut ui, &shell, vec![click(false)], 3.16);
+    assert!(actions.contains(&Action::Focus {
+        window: editor.get()
+    }));
+    let (picked, from) = ui.take_picked().expect("a picked window");
+    assert_eq!(picked, editor);
+    assert!(from.contains(card));
 }

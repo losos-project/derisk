@@ -27,7 +27,7 @@ use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 
 use crate::{
     action::Action,
-    animation::{DOT, LoginFrame, StartupAnimation, StartupFrame, arc, ease, f},
+    animation::{DOT, LoginFrame, StartupAnimation, StartupFrame, arc, ease, f, stagger},
     apps::{AppLook, Apps},
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
@@ -174,6 +174,9 @@ fn elide(text: &str, width: f32, size: f32) -> String {
 /// Width of the accent ring around the focused window, in logical pixels.
 pub const FOCUS_RING: f32 = 2.0;
 
+/// How far below its place an overview card starts rising in.
+const RISE: f32 = 40.0;
+
 fn card<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::new()
         .fill(theme.surface)
@@ -209,6 +212,19 @@ pub struct ShellUi {
     /// The overview's cards, from the widget plugins.
     board: Board,
     overview_open: bool,
+    /// When the overview last opened (ms on [`motion::now`]'s clock).
+    overview_since: f64,
+    /// The window card pressed in the overview, and since when.
+    pressed: Option<(WindowId, f64)>,
+    /// A window picked in the overview and the card it was picked from,
+    /// for the host to grow the window out of ([`ShellUi::take_picked`]).
+    picked: Option<(WindowId, Rect)>,
+    /// That card, fading off the growing window, and since when.
+    grown: Option<(WindowId, Rect, f64)>,
+    /// The overview's widget cards last frame, for the cascade.
+    widget_cards: usize,
+    /// When the widget card being drawn finished rising.
+    card_risen: f64,
     /// What the windows show, while the host provides it.
     pub window_pictures: Option<WindowPictures>,
     /// Window being dragged in the overview, toward a workspace.
@@ -425,6 +441,12 @@ impl ShellUi {
             fields: HashMap::new(),
             board: Board::default(),
             overview_open: false,
+            overview_since: 0.0,
+            pressed: None,
+            picked: None,
+            grown: None,
+            widget_cards: 0,
+            card_risen: 0.0,
             window_pictures: None,
             overview_drag: None,
             tray: None,
@@ -455,6 +477,64 @@ impl ShellUi {
                     .map(|p| p.window),
                 f64::NEG_INFINITY,
             ),
+        }
+    }
+
+    /// The window picked in the overview since the last call, and the card
+    /// it was picked from: the host draws the window growing out of that
+    /// card into its frame (54 frames, the film's camera curve).
+    pub fn take_picked(&mut self) -> Option<(WindowId, Rect)> {
+        self.picked.take()
+    }
+
+    /// After a window is picked in the overview, the rest of the overview
+    /// fades back (40 frames, expo-out) and the picked card fades off the
+    /// window growing under it (from 2 to 18 frames), as the film's card
+    /// grows into the phone.
+    fn grow(&mut self, ui: &Ui, shell: &Shell) {
+        let Some((window, card, at)) = self.grown else {
+            return;
+        };
+        let ctx = ui.ctx();
+        let back = motion::since(ctx, at, f(40), ease::OUT);
+        let Some(p) = shell.placements().into_iter().find(|p| p.window == window) else {
+            self.grown = None;
+            return;
+        };
+        if back >= 1.0 {
+            self.grown = None;
+            return;
+        }
+        let grown = motion::since(ctx, at, f(54), ease::CAM);
+        let r = motion::lerp_rect(card, to_rect(p.frame), grown);
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            Order::Background,
+            Id::new("derisk-overview-grow"),
+        ));
+        // What is left of the overview's backdrop, around the window.
+        let dim = self
+            .theme
+            .background
+            .gamma_multiply(self.look.overview * (1.0 - back));
+        let screen = to_rect(shell.work_area());
+        for side in [
+            Rect::from_min_max(screen.min, pos2(screen.max.x, r.top())),
+            Rect::from_min_max(pos2(screen.min.x, r.bottom()), screen.max),
+            Rect::from_min_max(pos2(screen.min.x, r.top()), pos2(r.left(), r.bottom())),
+            Rect::from_min_max(pos2(r.right(), r.top()), pos2(screen.max.x, r.bottom())),
+        ] {
+            if side.is_positive() {
+                painter.rect_filled(side, 0, dim);
+            }
+        }
+        let card_out = motion::since(ctx, at + f64::from(f(2)), f(16), ease::SMOOTH);
+        if card_out < 1.0 {
+            let mut painter = painter.clone();
+            painter.multiply_opacity(1.0 - card_out);
+            painter.rect_filled(r, 12, self.theme.surface);
+            let (app, title) = shell.window_label(window).unwrap_or_default();
+            let look = shell.apps.look(app);
+            self.paint_window_card(&painter, r, &look, title);
         }
     }
 
@@ -840,6 +920,8 @@ impl ShellUi {
         self.overview_open = shell.overview_visible();
         if !self.overview_open {
             self.overview_drag = None;
+            self.pressed = None;
+            self.grow(ui, shell);
         }
         if phone {
             self.status_bar(ui, shell, frame, &mut actions);
@@ -1599,12 +1681,25 @@ impl ShellUi {
                 });
             }
         }
+        // It comes in as the film's does: the backdrop fades up while the
+        // search field's outline folds onto the current workspace (30
+        // frames), and everything else rises in around it, one after
+        // another (30 frames each, starting 4 to 28 frames in).
+        let ctx = ui.ctx().clone();
+        let now = motion::now(&ctx);
+        if !self.overview_open {
+            self.overview_since = now;
+        }
+        let since = self.overview_since;
+        let backdrop = motion::since(&ctx, since, f(30), ease::SMOOTH);
         let area = shell.work_area();
-        self.frost(to_rect(area), 0, self.look.overview);
+        self.frost(to_rect(area), 0, self.look.overview * backdrop);
         ui.painter().rect_filled(
             to_rect(area),
             0,
-            self.theme.background.gamma_multiply(self.look.overview),
+            self.theme
+                .background
+                .gamma_multiply(self.look.overview * backdrop),
         );
         let layout = OverviewLayout::new(area, shell.profile().form_factor);
 
@@ -1621,9 +1716,31 @@ impl ShellUi {
             .filter(|w| shell.workspace_of(*w) == Some(open[active as usize - 1]));
         let dragging = self.overview_drag;
         let drop_on = pointer.and_then(|p| cells.iter().position(|c| to_rect(*c).contains(p)));
+        let windows = shell.windows_on(open[active as usize - 1]);
+        let risers = slots - 1 + windows.len() + self.widget_cards;
+        let mut riser = 0;
+        let mut rise = || {
+            let at = since + f64::from(f(4) + stagger(riser, risers, f(24)));
+            riser += 1;
+            (at, motion::since(&ctx, at, f(30), ease::OUT))
+        };
         for (i, cell) in cells.iter().enumerate() {
             let n = i as u64 + 1;
-            let r = to_rect(*cell);
+            let mut painter = ui.painter().clone();
+            let mut r = to_rect(*cell);
+            if n == active {
+                // Its contents come up under the outline.
+                painter.multiply_opacity(motion::since(
+                    &ctx,
+                    since + f64::from(f(12)),
+                    f(18),
+                    ease::SMOOTH,
+                ));
+            } else {
+                let (_, p) = rise();
+                r = r.translate(vec2(0.0, RISE * (1.0 - p)));
+                painter.multiply_opacity(p);
+            }
             let response = ui.interact(r, Id::new(("derisk-ws", n)), Sense::click());
             name(
                 ui,
@@ -1642,7 +1759,7 @@ impl ShellUi {
             };
             let Some(&ws) = open.get(i) else {
                 // The "+" slot.
-                ui.painter().rect_filled(
+                painter.rect_filled(
                     r,
                     10,
                     if hot {
@@ -1651,7 +1768,7 @@ impl ShellUi {
                         self.theme.background
                     },
                 );
-                ui.painter().rect_stroke(
+                painter.rect_stroke(
                     r,
                     10,
                     Stroke::new(
@@ -1670,7 +1787,7 @@ impl ShellUi {
                     self.theme.foreground
                 };
                 icons::paint(
-                    ui.painter(),
+                    &painter,
                     Rect::from_center_size(r.center(), vec2(20.0, 20.0)),
                     "list-add",
                     plus,
@@ -1680,29 +1797,42 @@ impl ShellUi {
                 }
                 continue;
             };
-            ui.painter().rect_filled(r, 10, self.theme.surface);
-            ui.painter().rect_stroke(
-                r,
-                10,
-                Stroke::new(
-                    if n == active || hot { 2.0 } else { 1.0 },
-                    if n == active || hot {
-                        self.theme.accent
-                    } else {
-                        self.theme.border
-                    },
-                ),
-                StrokeKind::Inside,
-            );
+            painter.rect_filled(r, 10, self.theme.surface);
+            if n == active {
+                // The outline the top bar's search field folds into.
+                let g = motion::since(&ctx, since, f(30), ease::OUT);
+                let (from, radius) = self
+                    .search_rect
+                    .map_or((r, 10.0), |s| (s, s.height() / 2.0));
+                ui.painter().rect_stroke(
+                    motion::lerp_rect(from, r, g),
+                    radius + (10.0 - radius) * g,
+                    Stroke::new(2.0 * (5.0 / 3.5 + (1.0 - 5.0 / 3.5) * g), self.theme.accent),
+                    StrokeKind::Inside,
+                );
+            } else {
+                painter.rect_stroke(
+                    r,
+                    10,
+                    Stroke::new(
+                        if hot { 2.0 } else { 1.0 },
+                        if hot {
+                            self.theme.accent
+                        } else {
+                            self.theme.border
+                        },
+                    ),
+                    StrokeKind::Inside,
+                );
+            }
             // The workspace in miniature: each window where it really is,
             // with its app's icon, so a workspace reads as what is open on
             // it and how it is arranged.
             let screen = fit(area, inset(*cell, 8));
             for p in shell.placements_on(ws) {
                 let m = to_rect(miniature(p.frame, area, screen));
-                ui.painter()
-                    .rect_filled(m, 3, self.theme.border.gamma_multiply(0.35));
-                ui.painter().rect_stroke(
+                painter.rect_filled(m, 3, self.theme.border.gamma_multiply(0.35));
+                painter.rect_stroke(
                     m,
                     3,
                     Stroke::new(1.0, self.theme.border),
@@ -1713,7 +1843,7 @@ impl ShellUi {
                 if side >= 10.0 {
                     let look = shell.apps.look(app);
                     self.paint_app_icon(
-                        ui.painter(),
+                        &painter,
                         Rect::from_center_size(m.center(), vec2(side, side)),
                         &look,
                     );
@@ -1721,8 +1851,8 @@ impl ShellUi {
             }
             // The workspace's number, in a corner clear of the windows.
             let badge = Rect::from_min_size(r.left_top() + vec2(6.0, 6.0), vec2(20.0, 20.0));
-            ui.painter().rect_filled(badge, 6, self.theme.background);
-            ui.painter().text(
+            painter.rect_filled(badge, 6, self.theme.background);
+            painter.text(
                 badge.center(),
                 Align2::CENTER_CENTER,
                 format!("{n}"),
@@ -1736,7 +1866,6 @@ impl ShellUi {
 
         // Window grid (exposé), including minimized windows. Drag a window
         // onto a workspace to move it there.
-        let windows = shell.windows_on(open[active as usize - 1]);
         let placements = shell.placements();
         let mut ghost = None;
         for (w, cell) in windows.iter().zip(grid(windows.len(), layout.windows, 24)) {
@@ -1744,9 +1873,29 @@ impl ShellUi {
                 .iter()
                 .find(|p| p.window == *w)
                 .map_or(cell, |p| p.frame);
-            let r = to_rect(fit(frame, cell));
+            let (_, risen) = rise();
+            let mut painter = ui.painter().clone();
+            painter.multiply_opacity(risen);
+            let placed = to_rect(fit(frame, cell));
+            let r = placed.translate(vec2(0.0, RISE * (1.0 - risen)));
             let response =
                 ui.interact(r, Id::new(("derisk-win", w.get())), Sense::click_and_drag());
+            // Pressed, the card dips to 97.5% and back (12 frames).
+            if response.is_pointer_button_down_on() && self.pressed.is_none_or(|(p, _)| p != *w) {
+                self.pressed = Some((*w, now));
+            }
+            let dip = self.pressed.filter(|(p, _)| p == w).map_or(0.0, |(_, at)| {
+                let t = (now - at) as f32 / f(6);
+                if t < 2.0 {
+                    ctx.request_repaint();
+                }
+                (1.0 - (t - 1.0).abs()).max(0.0)
+            });
+            let r = if motion::enabled(&ctx) {
+                Rect::from_center_size(r.center(), r.size() * (1.0 - 0.025 * dip))
+            } else {
+                r
+            };
             let (app, title) = shell.window_label(*w).unwrap_or_default();
             name(
                 ui,
@@ -1788,11 +1937,11 @@ impl ShellUi {
                 fill
             };
             let card = RectShape::filled(r, 12, fill);
-            ui.painter().add(match picture {
+            painter.add(match picture {
                 Some((texture, uv)) => card.with_texture(texture, uv),
                 None => card,
             });
-            ui.painter().rect_stroke(
+            painter.rect_stroke(
                 r,
                 12,
                 Stroke::new(
@@ -1808,9 +1957,9 @@ impl ShellUi {
             let (app, title) = shell.window_label(*w).unwrap_or_default();
             let look = shell.apps.look(app);
             if picture.is_some() {
-                self.paint_picture_label(ui.painter(), r, &look);
+                self.paint_picture_label(&painter, r, &look);
             } else {
-                self.paint_window_card(ui.painter(), r, &look, title);
+                self.paint_window_card(&painter, r, &look, title);
             }
             // Without title bars, a phone closes apps from here: a close
             // button on each card, a full touch target in its corner.
@@ -1830,7 +1979,7 @@ impl ShellUi {
                         format!("Close {}", look.name),
                     )
                 });
-                ui.painter().circle_filled(
+                painter.circle_filled(
                     close.center(),
                     14.0,
                     button_color(Button::Close).gamma_multiply(
@@ -1842,7 +1991,7 @@ impl ShellUi {
                     ),
                 );
                 icons::paint(
-                    ui.painter(),
+                    &painter,
                     Rect::from_center_size(close.center(), vec2(16.0, 16.0)),
                     "window-close",
                     Color32::WHITE,
@@ -1855,6 +2004,11 @@ impl ShellUi {
                 }
             }
             if response.clicked() && !closed {
+                // It grows into the window (see `grow`).
+                if !minimized {
+                    self.picked = Some((*w, placed));
+                    self.grown = Some((*w, placed, now));
+                }
                 actions.push(if minimized {
                     Action::Restore { window: w.get() }
                 } else {
@@ -1923,11 +2077,30 @@ impl ShellUi {
                     board
                 };
                 let names: Vec<&str> = plugins.iter().map(|p| p.name()).collect();
+                let mut cards = 0;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for (plugin, card) in board.cards() {
-                        self.widget_card(ui, shell, names[plugin], card, actions);
+                        cards += 1;
+                        // Drawn lower while it rises, then the space it
+                        // took back, so the cards below stay put.
+                        let (at, p) = rise();
+                        self.card_risen = at + f64::from(f(30));
+                        let dy = (RISE * (1.0 - p)).round();
+                        let top = ui.cursor().min + vec2(0.0, dy);
+                        ui.scope_builder(
+                            UiBuilder::new().max_rect(Rect::from_min_size(
+                                top,
+                                vec2(ui.available_width(), f32::INFINITY),
+                            )),
+                            |ui| {
+                                ui.multiply_opacity(p);
+                                self.widget_card(ui, shell, names[plugin], card, actions);
+                            },
+                        );
+                        ui.add_space(-dy);
                     }
                 });
+                self.widget_cards = cards;
                 self.board = board;
             },
         );
@@ -1996,7 +2169,16 @@ impl ShellUi {
                                             egui::Shape::rect_filled(
                                                 r,
                                                 6,
-                                                theme.accent.gamma_multiply(0.2),
+                                                // Washed in once its card is
+                                                // up (8 frames).
+                                                theme.accent.gamma_multiply(
+                                                    0.2 * motion::since(
+                                                        ui.ctx(),
+                                                        self.card_risen,
+                                                        f(8),
+                                                        ease::OUT,
+                                                    ),
+                                                ),
                                             ),
                                         );
                                     }
