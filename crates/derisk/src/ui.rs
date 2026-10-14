@@ -239,6 +239,8 @@ pub struct ShellUi {
     /// Where the top bar took the pointer in the last frame; `None` while it
     /// is hidden.
     bar_rect: Option<Rect>,
+    /// Where the top bar's search field was drawn last frame.
+    search_rect: Option<Rect>,
     /// Move keyboard focus into the top bar next frame (Super+B).
     focus_bar: bool,
     /// Decoded app icons by theme name or path, `None` when the theme has
@@ -416,6 +418,7 @@ impl ShellUi {
             bar_shown: 1.0,
             bar_rect: None,
             focus_bar: false,
+            search_rect: None,
             icons: RefCell::default(),
         }
     }
@@ -768,7 +771,13 @@ impl ShellUi {
                 Order::Foreground,
                 Id::new("derisk-startup"),
             ));
-            paint_startup(&painter, to_rect(shell.output()), frame, &self.theme);
+            paint_startup(
+                &painter,
+                to_rect(shell.output()),
+                frame,
+                &self.theme,
+                self.search_rect,
+            );
             ui.ctx().request_repaint();
         }
         // Nobody used the session for a while: fade the screen, over the
@@ -1016,6 +1025,20 @@ impl ShellUi {
                 });
                 if let Some(search) = &search {
                     name(ui, search, Role::Button, "Search or ask");
+                }
+                // Where the startup's dot lands; it stays the field's focus
+                // while no window has the keyboard (typing then asks).
+                self.search_rect = search.as_ref().map(|s| s.rect);
+                if let Some(search) = search.as_ref().filter(|_| frame.open >= 1.0)
+                    && focused.is_none()
+                    && !shell.palette_visible()
+                {
+                    ui.painter().rect_stroke(
+                        search.rect.expand(3.0),
+                        11,
+                        Stroke::new(2.5, self.theme.accent),
+                        StrokeKind::Inside,
+                    );
                 }
                 if search.is_some_and(|s| s.clicked()) {
                     actions.push(Action::Palette { visible: None });
@@ -3167,31 +3190,74 @@ pub fn show_greeter(
     input
 }
 
-/// Paints one frame of the startup animation over `screen`.
-pub fn paint_startup(painter: &Painter, screen: Rect, frame: StartupFrame, theme: &Theme) {
-    painter.rect_filled(screen, 0, theme.background.gamma_multiply(frame.cover));
-    let center: Pos2 = screen.center();
-    let accent = theme.accent.gamma_multiply(frame.logo_opacity);
-    let radius = 44.0 * frame.logo_scale;
-    painter.circle_filled(center, radius, accent);
-    painter.text(
-        center,
-        Align2::CENTER_CENTER,
-        "d",
-        FontId::proportional(radius * 1.2),
-        theme.background.gamma_multiply(frame.logo_opacity),
-    );
-    if frame.ring > 0.0 && frame.logo_opacity > 0.0 {
-        let ring = radius + 16.0;
+/// Paints one frame of the startup animation over `screen`: the cover with
+/// the iris the desktop shows through, the ring, and the dot on its way to
+/// `field` (the search field's frame, when the top bar has one).
+pub fn paint_startup(
+    painter: &Painter,
+    screen: Rect,
+    frame: StartupFrame,
+    theme: &Theme,
+    field: Option<Rect>,
+) {
+    use crate::animation::{DOT, RING_RADIUS, RING_WIDTH, arc};
+    let center = screen.center();
+    let corner = screen.size().length() / 2.0;
+    let iris = frame.reveal.radius(corner);
+    if iris <= 0.0 {
+        painter.rect_filled(screen, 0, theme.background);
+    } else if iris.is_finite() {
+        // Everything outside the iris: a ring out past the corners.
+        let outer = corner + 2.0;
+        if iris < outer {
+            painter.circle_stroke(
+                center,
+                (iris + outer) / 2.0,
+                Stroke::new(outer - iris, theme.background),
+            );
+        }
+    }
+    if frame.cover > 0.0 {
+        painter.rect_filled(screen, 0, theme.background.gamma_multiply(frame.cover));
+    }
+    if frame.sweep > 0.0 {
+        // Clockwise from twelve o'clock.
         let steps = 96;
-        let sweep = frame.ring * std::f32::consts::TAU;
+        let sweep = frame.sweep * std::f32::consts::TAU;
         let points: Vec<Pos2> = (0..=steps)
             .map(|i| {
                 let a = -std::f32::consts::FRAC_PI_2 + sweep * i as f32 / steps as f32;
-                center + vec2(a.cos(), a.sin()) * ring
+                center + vec2(a.cos(), a.sin()) * RING_RADIUS
             })
             .collect();
-        painter.line(points, Stroke::new(4.0, accent));
+        painter.line(points, Stroke::new(RING_WIDTH, theme.accent));
+    }
+    if frame.bloom > 0.0 {
+        painter.circle_stroke(
+            center,
+            iris,
+            Stroke::new(
+                RING_WIDTH + 6.0 * frame.bloom,
+                theme.accent.gamma_multiply(1.0 - 0.6 * frame.bloom),
+            ),
+        );
+    }
+    if frame.open < 1.0 {
+        let target = field.map_or(center, |f| f.center());
+        let (x, y) = arc(
+            (center.x, center.y),
+            (target.x, target.y),
+            frame.flight,
+            -0.18,
+        );
+        // Landed, it opens into the field's focus outline as it fades.
+        let to = field.map_or(vec2(DOT, DOT), |f| f.size() + vec2(6.0, 6.0));
+        let size = vec2(DOT, DOT) + (to - vec2(DOT, DOT)) * frame.open;
+        painter.rect_filled(
+            Rect::from_center_size(pos2(x, y), size * frame.dot_scale),
+            DOT,
+            theme.accent.gamma_multiply(1.0 - frame.open),
+        );
     }
 }
 

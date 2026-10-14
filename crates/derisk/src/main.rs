@@ -629,11 +629,11 @@ fn demo() -> Result {
 
     let mut ui = ShellUi::new(&shell, false);
     println!("\nstartup animation:");
-    for ms in [0, 300, 700, 1200, 1500, 1800] {
+    for ms in [0, 450, 900, 1250, 1600, 2000, 2200] {
         let f = ui.startup.frame(ms);
         println!(
-            "  {ms:>4} ms  cover {:.2}  logo {:.2} x{:.2}  ring {:.2}  bar {:+.1}px  done {}",
-            f.cover, f.logo_opacity, f.logo_scale, f.ring, f.bar_offset, f.done
+            "  {ms:>4} ms  {:?}  ring {:.2}  bloom {:.2}  dot {:.2}/{:.2}  bar {:+.1}px  done {}",
+            f.reveal, f.sweep, f.bloom, f.flight, f.open, f.bar_offset, f.done
         );
     }
 
