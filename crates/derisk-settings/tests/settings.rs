@@ -377,3 +377,67 @@ fn network_page_says_what_it_sees() {
     assert_eq!(status.saved(b"cafe").map(|s| s.id), Some(3));
     assert!(status.saved(b"home").is_none());
 }
+
+#[test]
+fn bluetooth_reads_what_bluetoothctl_prints() {
+    use derisk_settings::bluetooth::{self, Adapter};
+
+    let show = "Controller 00:1A:7D:DA:71:13 (public)\n\
+        \tManufacturer: 0x000a (10)\n\
+        \tName: losos\n\
+        \tAlias: Matus's laptop\n\
+        \tPowered: yes\n\
+        \tDiscoverable: no\n";
+    assert_eq!(
+        bluetooth::parse_show(show),
+        Some(Adapter {
+            name: "Matus's laptop".into(),
+            powered: true,
+        })
+    );
+    assert_eq!(
+        bluetooth::parse_show("No default controller available\n"),
+        None
+    );
+    assert_eq!(bluetooth::parse_show(""), None);
+
+    let all = "Device 11:22:33:44:55:66 WH-1000XM4\n\
+        Device AA:BB:CC:DD:EE:FF AA-BB-CC-DD-EE-FF\n\
+        Device 01:02:03:04:05:06 MX Master 3\n\
+        Waiting to connect to bluetoothd...\n";
+    let paired = "Device 01:02:03:04:05:06 MX Master 3\n";
+    let connected = "Device 01:02:03:04:05:06 MX Master 3\n";
+    let devices = bluetooth::merge(all, paired, connected);
+    let seen: Vec<_> = devices
+        .iter()
+        .map(|d| (d.name.as_str(), d.paired, d.connected, d.unnamed()))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("MX Master 3", true, true, false),
+            ("WH-1000XM4", false, false, false),
+            ("AA-BB-CC-DD-EE-FF", false, false, true),
+        ]
+    );
+
+    let pair = bluetooth::pair(&devices[1]);
+    assert_eq!(
+        pair.steps[0],
+        [
+            "bluetoothctl",
+            "--timeout",
+            "30",
+            "--agent",
+            "NoInputNoOutput",
+            "pair",
+            "11:22:33:44:55:66"
+        ]
+    );
+    assert_eq!(pair.steps.len(), 3);
+    assert_eq!(
+        bluetooth::forget(&devices[0]).steps[0].last().unwrap(),
+        "01:02:03:04:05:06"
+    );
+    assert_eq!(bluetooth::power(false).steps[0][3..], ["power", "off"]);
+}
