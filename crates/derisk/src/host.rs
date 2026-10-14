@@ -304,6 +304,23 @@ fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps:
 }
 
 impl Session {
+    /// The clock window motion runs on, in milliseconds.
+    fn motion_now(&self) -> f64 {
+        self.start.elapsed().as_secs_f64() * 1000.0
+    }
+
+    /// Works out where each window is drawn this frame.
+    fn move_windows(&mut self) {
+        self.shown = self.window_motion.update(
+            self.motion_now(),
+            &self.shell.placements(),
+            self.shell.window_ids(),
+            self.shell.dragged(),
+            self.shell.work_area(),
+            self.ui.animates(&self.shell),
+        );
+    }
+
     fn new(options: &Options, pending_actions: PendingActions, phone: Arc<AtomicBool>) -> Self {
         let (w, h) = options.size;
         let mut shell = Shell::new(rect(0, 0, w, h), false);
@@ -1224,14 +1241,7 @@ impl compositor::Shell for Session {
     fn tick(&mut self) {
         self.poll_idle();
         // Every frame, before the host asks where the windows are.
-        self.shown = self.window_motion.update(
-            self.start.elapsed().as_secs_f64() * 1000.0,
-            &self.shell.placements(),
-            self.shell.window_ids(),
-            self.shell.dragged(),
-            self.shell.work_area(),
-            self.ui.animates(&self.shell),
-        );
+        self.move_windows();
         if self
             .last_tick
             .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
@@ -1521,6 +1531,18 @@ impl compositor::Shell for Session {
             if let Err(e) = outcome.result {
                 info!("request failed: {e}");
             }
+        }
+        // A window picked in the overview grows out of its card. Worked out
+        // again now, so it is never drawn at its frame first.
+        if let Some((window, card)) = self.ui.take_picked() {
+            let card = rect(
+                card.left().round() as i32,
+                card.top().round() as i32,
+                card.width().round() as i32,
+                card.height().round() as i32,
+            );
+            self.window_motion.grow(window, card, self.motion_now());
+            self.move_windows();
         }
         self.palette_opened();
     }

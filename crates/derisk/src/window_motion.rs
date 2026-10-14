@@ -3,7 +3,9 @@
 //! the screen, slides in from that edge (26 frames, expo-out). One whose
 //! frame changes glides from where it is drawn to its new frame (24
 //! frames, the film's glide), and one snapped where it already is nudges
-//! 6 pixels away from the edge and back, so the snap still shows.
+//! 6 pixels away from the edge and back, so the snap still shows. One
+//! picked in the overview grows out of its card (54 frames, the film's
+//! camera curve).
 //!
 //! Only the drawing moves: the host draws each window where
 //! [`WindowMotion::update`] says this frame, while the client is already
@@ -108,9 +110,18 @@ pub struct WindowMotion {
     /// before the first frame, when nothing opens.
     known: Option<HashSet<WindowId>>,
     tracks: HashMap<WindowId, Track>,
+    /// A window to grow out of a rectangle, and since when.
+    grow: Option<(WindowId, Geometry, f64)>,
 }
 
 impl WindowMotion {
+    /// Grows `window` out of `from`, where it was picked in the overview,
+    /// into its frame, starting at `now` (ms): 54 frames on the film's
+    /// camera curve.
+    pub fn grow(&mut self, window: WindowId, from: Geometry, now: f64) {
+        self.grow = Some((window, from, now));
+    }
+
     /// Works out this frame's motion at `now` (ms): `placements` are the
     /// windows drawn, `windows` every window the shell has, `dragged` the
     /// one the pointer is moving (it follows the pointer exactly) and
@@ -158,6 +169,12 @@ impl WindowMotion {
                     t
                 }
             };
+            if let Some((_, from, start)) = self.grow.take_if(|(w, ..)| *w == p.window) {
+                track.moving = Some((RectF::of(from), start, f(54), ease::CAM));
+                track.fading = None;
+                track.pulse = None;
+                track.frame = p.frame;
+            }
             if dragged == Some(p.window) {
                 track.moving = None;
                 track.pulse = None;
@@ -375,6 +392,25 @@ mod tests {
         assert_eq!(nudged.frame, g(494, 0, 500, 600));
         assert!(
             m.update(10.0 + 1000.0, &snapped, [id(1)], None, area(), true)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_picked_window_grows_out_of_its_card() {
+        let mut m = WindowMotion::default();
+        let p = [placed(1, area(), Mode::Tiled)];
+        m.update(0.0, &p, [id(1)], None, area(), true);
+        let card = g(400, 200, 200, 120);
+        m.grow(id(1), card, 10.0);
+        assert_eq!(
+            m.update(10.0, &p, [id(1)], None, area(), true)[&id(1)].frame,
+            card
+        );
+        let mid = m.update(10.0 + f64::from(f(27)), &p, [id(1)], None, area(), true)[&id(1)];
+        assert!(mid.frame.size.w > 200 && mid.frame.size.w < 1000, "{mid:?}");
+        assert!(
+            m.update(10.0 + f64::from(f(54)), &p, [id(1)], None, area(), true)
                 .is_empty()
         );
     }
