@@ -23,9 +23,10 @@ use std::{
 };
 
 use derisk::{
+    animation::LoginAnimation,
     greetd::{self, Login, Phase, Request, Response},
     time::Clock,
-    ui::{GreeterInput, paint_wallpaper, show_greeter},
+    ui::{GreeterInput, paint_login, paint_startup, paint_wallpaper, show_greeter},
 };
 use mcsapi::WindowId;
 use mcsapi_compositor::{
@@ -70,6 +71,9 @@ struct Greeter {
     next_window: u64,
     /// Whether the greeter has decided to exit.
     quit: bool,
+    /// When (ms since the first frame) the session was started: the exit
+    /// animation runs from then, and the greeter quits at its end.
+    leaving: Option<u32>,
     commands: Vec<Command>,
 }
 
@@ -99,8 +103,9 @@ impl Greeter {
         }
     }
 
-    /// Applies greetd's answers that arrived since the last frame.
-    fn poll(&mut self) {
+    /// Applies greetd's answers that arrived since the last frame. `now` is
+    /// ms since the first frame.
+    fn poll(&mut self, now: u32) {
         loop {
             match self.from_greetd.try_recv() {
                 Ok(Ok(response)) => {
@@ -112,9 +117,17 @@ impl Greeter {
                 Err(mpsc::TryRecvError::Disconnected) => return self.lost("worker stopped"),
             }
         }
-        if *self.login.phase() == Phase::Started && !self.quit {
+        if *self.login.phase() == Phase::Started && self.leaving.is_none() {
             // The display manager logs the session; logind records whose it is.
             info!("starting the session");
+            self.leaving = Some(now);
+        }
+        // The session starts once the screen has closed round the dot,
+        // which it opens from.
+        if self
+            .leaving
+            .is_some_and(|at| now.saturating_sub(at) as f32 >= LoginAnimation::LEAVE_MS)
+        {
             self.quit();
         }
     }
@@ -174,8 +187,8 @@ impl compositor::Shell for Greeter {
         paint_wallpaper(painter, screen, &self.theme);
     }
 
-    fn chrome(&mut self, ui: &mut egui::Ui, _elapsed_ms: u32) {
-        self.poll();
+    fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
+        self.poll(elapsed_ms);
         if std::mem::take(&mut self.auto_submit) {
             let request = self.login.submit();
             self.send(request);
@@ -184,7 +197,7 @@ impl compositor::Shell for Greeter {
             egui::Pos2::ZERO,
             egui::vec2(self.output.0 as f32, self.output.1 as f32),
         );
-        let input = show_greeter(
+        let (input, field) = show_greeter(
             ui,
             &mut self.login,
             &self.users,
@@ -192,6 +205,27 @@ impl compositor::Shell for Greeter {
             &self.clock,
             &self.theme,
         );
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("derisk-greeter-motion"),
+        ));
+        let login = LoginAnimation;
+        match self.leaving {
+            Some(at) => {
+                let frame = login.leaving(elapsed_ms.saturating_sub(at) as f32);
+                paint_startup(&painter, screen, frame, &self.theme, field);
+            }
+            None if !login.arrived(elapsed_ms) => {
+                paint_login(
+                    &painter,
+                    screen,
+                    login.frame(elapsed_ms),
+                    &self.theme,
+                    field,
+                );
+            }
+            None => {}
+        }
         let request = match input {
             GreeterInput::Submit => self.login.submit(),
             GreeterInput::Back => self.login.back(),
@@ -327,6 +361,7 @@ pub fn run(options: Options) -> Result {
         from_greetd,
         next_window: 0,
         quit: false,
+        leaving: None,
         commands: Vec::new(),
     };
     Compositor::new(greeter).title("derisk greeter").run()?;
