@@ -1110,3 +1110,46 @@ fn the_focused_window_is_ringed_in_the_accent() {
     phone.map_window("editor", "Untitled");
     assert!(focus_rings(&phone).is_empty());
 }
+
+/// How many of the overview's window cards are drawn from the windows'
+/// pictures.
+fn picture_cards(shell: &Shell) -> usize {
+    let mut ui = ShellUi::new(shell, false);
+    ui.window_pictures = Some(derisk::ui::WindowPictures {
+        texture: egui::TextureId::User(7),
+        uv: Box::new(|area| area),
+    });
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(to_rect(shell.output())),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(input, |root| {
+        ui.show(root, shell, 5000);
+    });
+    out.textures_delta.clear();
+    out.shapes
+        .iter()
+        .filter(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Rect(r)
+                if r.fill_texture_id() == egui::TextureId::User(7))
+        })
+        .count()
+}
+
+#[test]
+fn overview_cards_show_what_windows_hold() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.map_window("files", "Files");
+    shell.map_window("editor", "Untitled");
+    shell
+        .apply(Action::Overview {
+            visible: Some(true),
+        })
+        .unwrap();
+    assert_eq!(picture_cards(&shell), 2);
+
+    // A minimized window isn't on screen to copy: it keeps its icon.
+    shell.apply(Action::Minimize { window: None }).unwrap();
+    assert_eq!(picture_cards(&shell), 1);
+}
