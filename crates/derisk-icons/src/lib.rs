@@ -20,7 +20,6 @@
 //! [icon theme spec]: https://specifications.freedesktop.org/icon-theme-spec/latest/
 
 use std::{
-    fs,
     path::{Path, PathBuf},
     sync::{
         RwLock,
@@ -28,6 +27,7 @@ use std::{
     },
 };
 
+use derisk_sys::fs;
 use mcsapi_ui::egui::{
     self, Align2, Atom, Color32, ColorImage, Context, FontId, Id, Painter, Pos2, Rect, Response,
     RichText, Sense, TextureHandle, TextureOptions, Ui, WidgetInfo, WidgetText, WidgetType, pos2,
@@ -40,12 +40,12 @@ const MAX_BYTES: u64 = 4 << 20;
 
 /// `icons` and `pixmaps` roots in XDG precedence order.
 fn roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let data_home = std::env::var_os("XDG_DATA_HOME")
+    let home = derisk_sys::env::var_os("HOME").map(PathBuf::from);
+    let data_home = derisk_sys::env::var_os("XDG_DATA_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
-    let data_dirs = std::env::var("XDG_DATA_DIRS")
+    let data_dirs = derisk_sys::env::var("XDG_DATA_DIRS")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "/usr/local/share:/usr/share".to_owned());
@@ -108,7 +108,7 @@ fn in_theme(
             let size = a_size.or_else(|| dir_size(&b.file_name().to_string_lossy()));
             for ext in ["png", "svg"] {
                 let path = b.path().join(format!("{name}.{ext}"));
-                if !path.is_file() {
+                if !fs::is_file(&path) {
                     continue;
                 }
                 let score = match (small, size) {
@@ -223,7 +223,7 @@ pub fn find_in(
     themes: &[String],
 ) -> Option<PathBuf> {
     if name.starts_with('/') {
-        return Some(PathBuf::from(name)).filter(|p| p.is_file());
+        return Some(PathBuf::from(name)).filter(|p| fs::is_file(p));
     }
     // A name with a path separator or a leading dot would escape the theme.
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
@@ -260,7 +260,7 @@ pub fn find_in(
         ["png", "svg"]
             .iter()
             .map(|ext| dir.join(format!("{name}.{ext}")))
-            .find(|p| p.is_file())
+            .find(|p| fs::is_file(p))
     })
 }
 

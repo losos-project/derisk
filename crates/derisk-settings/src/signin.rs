@@ -18,7 +18,7 @@ use std::{
     io::{BufRead, BufReader},
     process::{Command, Stdio},
     sync::mpsc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::UNIX_EPOCH,
 };
 
 use mcsapi_ui::{Theme, egui};
@@ -230,7 +230,7 @@ impl Account {
 }
 
 fn now() -> std::time::Duration {
-    SystemTime::now()
+    derisk_sys::time::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
 }
@@ -252,7 +252,7 @@ struct Running {
 fn spawn(job: Job) -> Running {
     let (tx, events) = mpsc::channel();
     let label = job.label;
-    std::thread::spawn(move || {
+    derisk_sys::thread::detach(move || {
         let child = Command::new(&job.argv[0])
             .args(&job.argv[1..])
             .envs(job.env.iter().map(|(k, v)| (k, v)))
@@ -353,7 +353,7 @@ impl SigninUi {
     /// Reads where everything stands; again after each job.
     fn load(&mut self) {
         self.loaded = true;
-        self.user = std::env::var("USER").unwrap_or_default();
+        self.user = derisk_sys::env::var("USER").unwrap_or_default();
         let output = |argv: &[&str]| {
             Command::new(argv[0])
                 .args(&argv[1..])
@@ -374,7 +374,7 @@ impl SigninUi {
             now_usec,
         );
         self.reader = Some(parse_fprintd_list(&output(&["fprintd-list", &self.user])));
-        self.codes_on = totp::file_path().is_some_and(|p| p.exists());
+        self.codes_on = totp::file_path().is_some_and(derisk_sys::fs::exists);
     }
 
     fn run(&mut self, job: Job) {
@@ -649,7 +649,7 @@ fn codes(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
                     Some(Err(e)) => (format!("Could not turn codes off: {e}"), true),
                     None => ("HOME is not set".into(), true),
                 });
-                state.codes_on = totp::file_path().is_some_and(|p| p.exists());
+                state.codes_on = totp::file_path().is_some_and(derisk_sys::fs::exists);
             }
         });
     } else if ui.button("Set up codes").clicked() {
@@ -671,13 +671,13 @@ fn turn_codes_on(state: &mut SigninUi, secret: &Secret) {
         Err(e) => state.status = Some((format!("Could not turn codes on: {e}"), true)),
     }
     state.code_setup = None;
-    state.codes_on = totp::file_path().is_some_and(|p| p.exists());
+    state.codes_on = totp::file_path().is_some_and(derisk_sys::fs::exists);
 }
 
 fn start_codes(state: &mut SigninUi) {
     match Secret::generate() {
         Ok(secret) => {
-            let host = std::fs::read_to_string("/etc/hostname")
+            let host = derisk_sys::fs::read_to_string("/etc/hostname")
                 .map(|h| h.trim().to_owned())
                 .unwrap_or_default();
             let issuer = if host.is_empty() {

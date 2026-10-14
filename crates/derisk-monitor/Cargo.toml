@@ -9,4 +9,5 @@ repository.workspace = true
 
 [dependencies]
 derisk-icons.workspace = true
+derisk-sys.workspace = true
 mcsapi-ui.workspace = true

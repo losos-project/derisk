@@ -14,10 +14,12 @@
 
 use std::{
     collections::BTreeMap,
-    fmt, fs, io,
+    fmt, io,
     path::{Path, PathBuf},
     process::Command,
 };
+
+use derisk_sys::fs;
 
 /// A `[Context]` key of a flatpak keyfile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -373,18 +375,18 @@ impl Dirs {
     /// The standard places, honoring `$FLATPAK_USER_DIR` and
     /// `$FLATPAK_SYSTEM_DIR`.
     pub fn standard() -> Option<Self> {
-        let user = std::env::var_os("FLATPAK_USER_DIR")
+        let user = derisk_sys::env::var_os("FLATPAK_USER_DIR")
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::var_os("XDG_DATA_HOME")
+                derisk_sys::env::var_os("XDG_DATA_HOME")
                     .map(PathBuf::from)
                     .filter(|d| d.is_absolute())
                     .or_else(|| {
-                        std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share"))
+                        derisk_sys::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share"))
                     })
                     .map(|d| d.join("flatpak"))
             })?;
-        let system = std::env::var_os("FLATPAK_SYSTEM_DIR")
+        let system = derisk_sys::env::var_os("FLATPAK_SYSTEM_DIR")
             .map_or_else(|| PathBuf::from("/var/lib/flatpak"), PathBuf::from);
         Some(Self {
             user,
@@ -518,7 +520,7 @@ impl fmt::Display for CommandError {
 }
 
 fn flatpak(args: &[&str]) -> Result<String, CommandError> {
-    let program = std::env::var_os("DERISK_FLATPAK").unwrap_or_else(|| "flatpak".into());
+    let program = derisk_sys::env::var_os("DERISK_FLATPAK").unwrap_or_else(|| "flatpak".into());
     let output = Command::new(&program)
         .args(args)
         .output()

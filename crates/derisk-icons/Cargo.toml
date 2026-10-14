@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+derisk-sys.workspace = true
 # App icons from the icon theme are PNG; SVG goes through resvg.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 mcsapi-ui.workspace = true

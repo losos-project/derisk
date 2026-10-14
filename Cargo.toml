@@ -43,6 +43,7 @@ derisk-monitor = { path = "crates/derisk-monitor", version = "0.1.0" }
 derisk-calculator = { path = "crates/derisk-calculator", version = "0.1.0" }
 derisk-apps = { path = "crates/derisk-apps", version = "0.1.0" }
 derisk-icons = { path = "crates/derisk-icons", version = "0.1.0" }
+derisk-sys = { path = "crates/derisk-sys", version = "0.1.0" }
 derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 # The GPUI mcsapi-components-gpui is built on (Sonne's fork, at the revision
 # mcsapi pins): two GPUIs in one build cannot share a window or an element.

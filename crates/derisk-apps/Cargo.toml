@@ -13,6 +13,7 @@ derisk-editor.workspace = true
 derisk-files.workspace = true
 derisk-monitor.workspace = true
 derisk-settings.workspace = true
+derisk-sys.workspace = true
 mcsapi-runtime.workspace = true
 mcsapi-ui.workspace = true
 eframe = { workspace = true, optional = true }

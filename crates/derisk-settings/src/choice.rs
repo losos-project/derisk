@@ -38,10 +38,12 @@
 //! ```
 
 use std::{
-    fs, io,
+    io,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
 };
+
+use derisk_sys::fs;
 
 use mcsapi_ui::{Theme, egui};
 
@@ -96,10 +98,10 @@ impl Policy {
 
 /// `$XDG_STATE_HOME/derisk/policy.conf`, falling back to `~/.local/state`.
 pub fn policy_path() -> Option<PathBuf> {
-    let state = std::env::var_os("XDG_STATE_HOME")
+    let state = derisk_sys::env::var_os("XDG_STATE_HOME")
         .filter(|dir| Path::new(dir).is_absolute())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/state")))?;
+        .or_else(|| derisk_sys::env::var_os("HOME").map(|h| Path::new(&h).join(".local/state")))?;
     Some(state.join("derisk").join("policy.conf"))
 }
 
@@ -248,11 +250,11 @@ impl Browser {
 
 /// The `applications` directories, user first, as the XDG spec orders them.
 pub fn application_dirs() -> Vec<PathBuf> {
-    let data_home = std::env::var_os("XDG_DATA_HOME")
+    let data_home = derisk_sys::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share")));
-    let data_dirs =
-        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+        .or_else(|| derisk_sys::env::var_os("HOME").map(|h| Path::new(&h).join(".local/share")));
+    let data_dirs = derisk_sys::env::var("XDG_DATA_DIRS")
+        .unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
     data_home
         .into_iter()
         .chain(
@@ -396,10 +398,10 @@ pub fn with_default_browser(text: &str, id: &str) -> String {
 
 /// `$XDG_CONFIG_HOME/mimeapps.list`, falling back to `~/.config`.
 pub fn mimeapps_path() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
+    derisk_sys::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| Path::new(dir).is_absolute())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))
+        .or_else(|| derisk_sys::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))
         .map(|dir| dir.join("mimeapps.list"))
 }
 
@@ -431,7 +433,7 @@ pub fn shuffle<T>(items: &mut [T], seed: u64) {
 }
 
 fn seed() -> u64 {
-    std::time::SystemTime::now()
+    derisk_sys::time::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as u64)
 }
@@ -503,7 +505,7 @@ impl ChoiceUi {
     /// the OS allows its administrators, then for this user alone from the
     /// app's flatpakref, which needs no configured remote.
     fn install(&mut self, flathub: &'static str, user: bool) {
-        let program = std::env::var_os("DERISK_FLATPAK").unwrap_or_else(|| "flatpak".into());
+        let program = derisk_sys::env::var_os("DERISK_FLATPAK").unwrap_or_else(|| "flatpak".into());
         let mut command = Command::new(program);
         command.args(["install", "--noninteractive", "-y"]);
         if user {

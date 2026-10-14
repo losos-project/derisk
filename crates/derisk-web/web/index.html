@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<!-- An internal demo: keep it out of search results. -->
+<meta name="robots" content="noindex, nofollow">
+<title>derisk demo</title>
+<style>
+  /* derisk-dark's background and foreground, until the apps draw. */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0e12; color: #e2e8f0; }
+  canvas { display: block; width: 100%; height: 100%; outline: none; }
+  #loading {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font: 15px system-ui, sans-serif; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="derisk"></canvas>
+<div id="loading">Starting derisk…</div>
+<script type="module">
+  // derisk_web.js is wasm-bindgen's loader; its start function runs the
+  // desktop on the canvas above.
+  import init from "./derisk_web.js";
+  init().catch((error) => {
+    document.getElementById("loading").textContent = `derisk could not start: ${error}`;
+  });
+</script>
+</body>
+</html>

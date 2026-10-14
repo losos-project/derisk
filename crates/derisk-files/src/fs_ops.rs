@@ -3,10 +3,12 @@
 
 use std::{
     ffi::OsStr,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use derisk_sys::{fs, unix::PermissionsExt};
 
 /// What a directory entry is.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -152,8 +154,9 @@ pub fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
     copy_into(from, to)
 }
 
+#[cfg(unix)]
 fn copy_into(from: &Path, to: &Path) -> io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     let meta = fs::symlink_metadata(from)?;
     let mode = meta.permissions().mode() & 0o7777;
     if meta.file_type().is_symlink() {
@@ -192,6 +195,23 @@ fn copy_into(from: &Path, to: &Path) -> io::Result<()> {
         io::copy(&mut source, &mut target)?;
         target.set_permissions(fs::Permissions::from_mode(mode))
     }
+}
+
+/// The demo system a browser build runs on has one user and no links, so
+/// there is no swap to guard against: the copy is a plain walk.
+#[cfg(not(unix))]
+fn copy_into(from: &Path, to: &Path) -> io::Result<()> {
+    let mode = fs::symlink_metadata(from)?.permissions().mode() & 0o7777;
+    if fs::is_dir(from) {
+        fs::create_dir(to)?;
+        for item in fs::read_dir(from)? {
+            let name = item?.file_name();
+            copy_into(&from.join(&name), &to.join(&name))?;
+        }
+    } else {
+        fs::copy(from, to)?;
+    }
+    fs::set_permissions(to, fs::Permissions::from_mode(mode))
 }
 
 /// Moves `from` to `to`, copying and removing when they are on different
@@ -233,11 +253,11 @@ pub struct Trash {
 impl Trash {
     /// `$XDG_DATA_HOME/Trash`, falling back to `~/.local/share/Trash`.
     pub fn home() -> Option<Self> {
-        let data = std::env::var_os("XDG_DATA_HOME")
+        let data = derisk_sys::env::var_os("XDG_DATA_HOME")
             .filter(|dir| Path::new(dir).is_absolute())
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/share"))
+                derisk_sys::env::var_os("HOME").map(|home| Path::new(&home).join(".local/share"))
             })?;
         Some(Self::at(data.join("Trash")))
     }
@@ -259,7 +279,7 @@ impl Trash {
     /// Moves `path` to the trash and records where it came from. Returns its
     /// new location.
     pub fn put(&self, path: &Path) -> io::Result<PathBuf> {
-        let original = std::path::absolute(path)?;
+        let original = derisk_sys::path::absolute(path)?;
         let name = original
             .file_name()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cannot trash `/`"))?;
@@ -274,11 +294,11 @@ impl Trash {
         // whatever private folder kept it from other users, and its
         // .trashinfo says where it came from.
         for dir in [&self.root, &files, &info] {
-            std::os::unix::fs::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
+            derisk_sys::unix::DirBuilderExt::mode(fs::DirBuilder::new().recursive(true), 0o700)
                 .create(dir)?;
             // `mode` only applies to directories made just now; tighten
             // trash trees an earlier version created world-readable.
-            fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
         }
         // Reserve the info file first with create_new, as the spec requires,
         // so two trashers cannot pick the same name.
@@ -293,7 +313,7 @@ impl Trash {
             let info_path = info.join(info_name);
             let target = files.join(&candidate);
             if fs::symlink_metadata(&target).is_err() {
-                match std::os::unix::fs::OpenOptionsExt::mode(
+                match derisk_sys::unix::OpenOptionsExt::mode(
                     fs::OpenOptions::new().write(true).create_new(true),
                     0o600,
                 )
@@ -311,7 +331,7 @@ impl Trash {
         let record = format!(
             "[Trash Info]\nPath={}\nDeletionDate={}\n",
             percent_encode(&original),
-            timestamp(SystemTime::now()),
+            timestamp(derisk_sys::time::now()),
         );
         let result = fs::write(&info_path, record).and_then(|()| move_path(&original, &target));
         if result.is_err() {
@@ -322,9 +342,8 @@ impl Trash {
 }
 
 fn percent_encode(path: &Path) -> String {
-    use std::os::unix::ffi::OsStrExt;
     let mut out = String::new();
-    for &byte in path.as_os_str().as_bytes() {
+    for &byte in path.as_os_str().as_encoded_bytes() {
         if byte.is_ascii_alphanumeric() || b"/-_.~".contains(&byte) {
             out.push(byte as char);
         } else {

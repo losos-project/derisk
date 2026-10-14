@@ -9,7 +9,11 @@ repository.workspace = true
 
 [dependencies]
 derisk-icons.workspace = true
-# Only for the O_NOFOLLOW and O_DIRECTORY values, which differ by architecture.
-libc = "0.2"
+derisk-sys.workspace = true
 mcsapi-components.workspace = true
 mcsapi-ui.workspace = true
+
+# Only for the O_NOFOLLOW and O_DIRECTORY values, which differ by
+# architecture. A browser build copies without them (fs_ops::copy_into).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

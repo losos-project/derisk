@@ -1,7 +1,9 @@
 use std::{
-    fmt, fs, io,
+    fmt, io,
     path::{Path, PathBuf},
 };
+
+use derisk_sys::fs;
 
 use mcsapi_ui::{
     Theme,
@@ -1037,9 +1039,9 @@ impl Settings {
 /// Where derisk keeps its settings: `$XDG_CONFIG_HOME/derisk/settings.conf`,
 /// falling back to `~/.config`. `None` when neither variable is set.
 pub fn default_path() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
+    let config = derisk_sys::env::var_os("XDG_CONFIG_HOME")
         .filter(|dir| Path::new(dir).is_absolute())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
+        .or_else(|| derisk_sys::env::var_os("HOME").map(|home| Path::new(&home).join(".config")))?;
     Some(config.join("derisk").join("settings.conf"))
 }

@@ -1,0 +1,5 @@
+LosOS nightly
+
+- Swimming salmon on the boot splash.
+- The installer installs its own release.
+- Hibernation on machines with a TPM.
