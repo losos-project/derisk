@@ -458,6 +458,12 @@ impl ShellUi {
         }
     }
 
+    /// Whether the shell animates: not when reduced motion was asked for,
+    /// nor when the Look setting (or low power mode) turns animation off.
+    pub fn animates(&self, shell: &Shell) -> bool {
+        !self.reduced_motion && shell.look().animate
+    }
+
     /// Paints an app's icon into `r`; see [`paint_app_icon`].
     fn paint_app_icon(&self, painter: &Painter, r: Rect, look: &AppLook) {
         paint_app_icon(&self.icons, &self.theme, painter, r, look);
