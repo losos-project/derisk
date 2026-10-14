@@ -64,6 +64,8 @@
             libgbm
             libdrm
             seatd
+            # derisk-machines talks to libvirt through its own C library.
+            libvirt
           ];
 
           # dlopen'd at run time by winit, Smithay's EGL renderer and eframe.
