@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod bluetooth;
 pub mod choice;
 pub mod flatpak;
 mod model;
@@ -68,6 +69,8 @@ pub enum Page {
     Shortcuts,
     /// Wired ports and Wi-Fi networks.
     Network,
+    /// The adapter and paired devices.
+    Bluetooth,
     /// Device access, history, trash, and Flatpak app permissions.
     Privacy,
     /// The password, fingerprints, verification codes and security keys.
@@ -85,7 +88,7 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
@@ -93,6 +96,7 @@ impl Page {
         Self::Input,
         Self::Shortcuts,
         Self::Network,
+        Self::Bluetooth,
         Self::Privacy,
         Self::SignIn,
         Self::Notifications,
@@ -109,6 +113,7 @@ impl Page {
             Self::TopBar => "Top bar",
             Self::Shortcuts => "Shortcuts",
             Self::Network => "Network",
+            Self::Bluetooth => "Bluetooth",
             Self::Privacy => "Privacy",
             Self::SignIn => "Sign-in",
             Self::Desktop => "Desktop",
@@ -137,6 +142,7 @@ pub struct SettingsApp {
     privacy: privacy::PrivacyUi,
     signin: signin::SigninUi,
     network: network::NetworkUi,
+    bluetooth: bluetooth::BluetoothUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
     /// Which choice screens are on, read once when opened.
@@ -213,6 +219,7 @@ impl SettingsApp {
             privacy: privacy::PrivacyUi::default(),
             signin: signin::SigninUi::default(),
             network: network::NetworkUi::default(),
+            bluetooth: bluetooth::BluetoothUi::default(),
             saved,
             page: Page::default(),
             status: error.as_ref().map(ToString::to_string),
@@ -328,6 +335,9 @@ impl SettingsApp {
         if self.page == Page::Network {
             return network::page(ui, &mut self.network, theme);
         }
+        if self.page == Page::Bluetooth {
+            return bluetooth::page(ui, &mut self.bluetooth, theme);
+        }
         if self.page == Page::DefaultApps {
             let state = self.choice.get_or_insert_with(choice::ChoiceUi::default);
             if self.policy.browser {
@@ -430,7 +440,11 @@ impl SettingsApp {
                     theme,
                 ),
                 Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
-                Page::Privacy | Page::SignIn | Page::Network | Page::DefaultApps => {}
+                Page::Privacy
+                | Page::SignIn
+                | Page::Network
+                | Page::Bluetooth
+                | Page::DefaultApps => {}
                 Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;
