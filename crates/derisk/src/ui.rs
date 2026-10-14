@@ -39,7 +39,7 @@ use crate::{
     lock::LockScreen,
     menu::{Menu, MenuEntry},
     mobile::{self, NavState},
-    overview::{Battery, OverviewLayout, fit, grid, row},
+    overview::{Battery, OverviewLayout, fit, grid, miniature, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
@@ -169,6 +169,9 @@ fn elide(text: &str, width: f32, size: f32) -> String {
         s
     }
 }
+
+/// Width of the accent ring around the focused window, in logical pixels.
+pub const FOCUS_RING: f32 = 2.0;
 
 fn card<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::new()
@@ -638,6 +641,40 @@ impl ShellUi {
         );
     }
 
+    /// Rings the focused window in the accent, just outside its frame.
+    ///
+    /// The decoration's own border sits under the client surface, which
+    /// covers all of it but the title bar, so the ring is chrome: drawn
+    /// above every surface, under the bars and the palette. Phones and a
+    /// window filling the work area have no frame to ring.
+    fn focus_ring(&self, ui: &Ui, shell: &Shell) {
+        if shell.profile().title_bar.height == 0 {
+            return;
+        }
+        let Some(p) = shell.placements().into_iter().find(|p| p.focused) else {
+            return;
+        };
+        if p.frame == shell.work_area() {
+            return;
+        }
+        let r = shell.effects.windows.corner_radius.min(20);
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            Order::Background,
+            Id::new("derisk-focus-ring"),
+        ));
+        painter.rect_stroke(
+            to_rect(p.frame),
+            CornerRadius {
+                nw: r,
+                ne: r,
+                sw: 0,
+                se: 0,
+            },
+            Stroke::new(FOCUS_RING, self.theme.accent),
+            StrokeKind::Outside,
+        );
+    }
+
     /// Shows the chrome above client surfaces and returns requested actions.
     ///
     /// `elapsed_ms` is time since the session started (drives the startup
@@ -664,6 +701,9 @@ impl ShellUi {
         {
             self.keyboard_shown = shell.keyboard_visible();
             self.keyboard.reset();
+        }
+        if !shell.overview_visible() {
+            self.focus_ring(ui, shell);
         }
         self.drag_preview(ui, shell);
         self.snap_assist(ui, shell, &mut actions);
@@ -1033,18 +1073,6 @@ impl ShellUi {
                 ui.visuals_mut().override_text_color = Some(self.theme.foreground);
                 ui.spacing_mut().item_spacing.x = 10.0;
                 ui.label(RichText::new(shell.clock.time_label()).strong());
-                if let Some(w) = shell.focused() {
-                    let (app, title) = shell.window_label(w).unwrap_or_default();
-                    let name = if app.contains('.') && !title.is_empty() {
-                        title
-                    } else {
-                        app
-                    };
-                    ui.label(
-                        RichText::new(elide(name, bar.width() * 0.4, 14.0))
-                            .color(self.theme.border),
-                    );
-                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(b) = shell.battery {
                         battery(ui, b, self.theme.foreground);
@@ -1054,6 +1082,28 @@ impl ShellUi {
                 });
             },
         );
+        // The app on screen, centred, as its title bar would name it on a
+        // desktop: its icon and name (phones have no title bars).
+        if let Some(w) = shell.focused() {
+            let (app, title) = shell.window_label(w).unwrap_or_default();
+            let look = shell.apps.look(app);
+            let name = if !look.name.is_empty() {
+                &look.name[..]
+            } else if app.contains('.') && !title.is_empty() {
+                title
+            } else {
+                app
+            };
+            self.paint_icon_label(
+                ui.painter(),
+                bar.center(),
+                bar.width() * 0.4,
+                &look,
+                name,
+                14.0,
+                self.theme.foreground,
+            );
+        }
     }
 
     /// The phone's navigation bar along the bottom edge: Back, Home and
@@ -1483,7 +1533,6 @@ impl ShellUi {
                 }
                 continue;
             };
-            let windows = shell.windows_on(ws);
             ui.painter().rect_filled(r, 10, self.theme.surface);
             ui.painter().rect_stroke(
                 r,
@@ -1498,15 +1547,22 @@ impl ShellUi {
                 ),
                 StrokeKind::Inside,
             );
-            // A miniature of each window with its app's icon, so a
-            // workspace reads as what is open on it.
-            let minis = grid(windows.len(), inset(*cell, 12), 4);
-            for (mini, w) in minis.zip(&windows) {
-                let m = to_rect(mini);
+            // The workspace in miniature: each window where it really is,
+            // with its app's icon, so a workspace reads as what is open on
+            // it and how it is arranged.
+            let screen = fit(area, inset(*cell, 8));
+            for p in shell.placements_on(ws) {
+                let m = to_rect(miniature(p.frame, area, screen));
                 ui.painter()
                     .rect_filled(m, 3, self.theme.border.gamma_multiply(0.35));
-                let (app, _) = shell.window_label(*w).unwrap_or_default();
-                let side = (m.height().min(m.width()) * 0.6).min(32.0);
+                ui.painter().rect_stroke(
+                    m,
+                    3,
+                    Stroke::new(1.0, self.theme.border),
+                    StrokeKind::Inside,
+                );
+                let (app, _) = shell.window_label(p.window).unwrap_or_default();
+                let side = (m.height().min(m.width()) * 0.5).min(28.0);
                 if side >= 10.0 {
                     let look = shell.apps.look(app);
                     self.paint_app_icon(
@@ -1516,11 +1572,14 @@ impl ShellUi {
                     );
                 }
             }
+            // The workspace's number, in a corner clear of the windows.
+            let badge = Rect::from_min_size(r.left_top() + vec2(6.0, 6.0), vec2(20.0, 20.0));
+            ui.painter().rect_filled(badge, 6, self.theme.background);
             ui.painter().text(
-                r.center(),
+                badge.center(),
                 Align2::CENTER_CENTER,
                 format!("{n}"),
-                FontId::proportional(15.0),
+                FontId::proportional(13.0),
                 self.theme.foreground,
             );
             if response.clicked() {
@@ -1754,7 +1813,27 @@ impl ShellUi {
                             .max_col_width(col)
                             .show(ui, |ui| {
                                 for (i, cell) in grid.cells.iter().enumerate() {
-                                    ui.label(rich_text(&theme, cell));
+                                    // Cells are centred in their column, and
+                                    // the current one (today, in the
+                                    // calendar) sits on an accent wash.
+                                    let height = ui.spacing().interact_size.y;
+                                    let wash = ui.painter().add(egui::Shape::Noop);
+                                    let r = ui
+                                        .add_sized(
+                                            [col, height],
+                                            egui::Label::new(rich_text(&theme, cell)),
+                                        )
+                                        .rect;
+                                    if matches!(cell.tone, Tone::Accent) && !cell.text.is_empty() {
+                                        ui.painter().set(
+                                            wash,
+                                            egui::Shape::rect_filled(
+                                                r,
+                                                6,
+                                                theme.accent.gamma_multiply(0.2),
+                                            ),
+                                        );
+                                    }
                                     if (i + 1) % columns == 0 {
                                         ui.end_row();
                                     }

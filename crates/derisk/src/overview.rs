@@ -114,6 +114,19 @@ pub fn fit(window: Geometry, cell: Geometry) -> Geometry {
     )
 }
 
+/// Where `frame`, a window on a screen whose work area is `area`, sits in
+/// `screen`, that work area drawn in miniature (from [`fit`]): the
+/// overview's workspace cells show their windows where they really are.
+pub fn miniature(frame: Geometry, area: Geometry, screen: Geometry) -> Geometry {
+    let sx = f64::from(screen.size.w) / f64::from(area.size.w.max(1));
+    let sy = f64::from(screen.size.h) / f64::from(area.size.h.max(1));
+    let x = |v: i32| screen.loc.x + (f64::from(v - area.loc.x) * sx).round() as i32;
+    let y = |v: i32| screen.loc.y + (f64::from(v - area.loc.y) * sy).round() as i32;
+    let (x0, y0) = (x(frame.loc.x), y(frame.loc.y));
+    let (x1, y1) = (x(frame.loc.x + frame.size.w), y(frame.loc.y + frame.size.h));
+    rect(x0, y0, (x1 - x0).max(1), (y1 - y0).max(1))
+}
+
 /// Battery state for the battery widget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Battery {

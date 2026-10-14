@@ -319,6 +319,36 @@ fn unmatched_text_goes_to_the_assistant() {
 }
 
 #[test]
+fn a_request_lists_the_apps_it_opens_under_the_assistant() {
+    let shell = shell();
+    let entries = palette::entries(&shell, &apps(), &[]);
+    let query = "open files and snap it left, then open editor and snap it right";
+    let hits = palette::search(&entries, query, &History::default());
+    let rows = palette::rows(&shell, query);
+    let listed: Vec<&str> = palette::list(&entries, &hits, &rows, query)
+        .iter()
+        .map(|e| e.title.as_str())
+        .collect();
+    assert_eq!(
+        listed[..3],
+        [
+            "Ask derisk: open files and snap it left, then open editor and snap it right",
+            "Files",
+            "Text Editor",
+        ]
+    );
+    // Each app once, however often the request names it.
+    let twice = "open files, then open files again";
+    let hits = palette::search(&entries, twice, &History::default());
+    let rows = palette::rows(&shell, twice);
+    let files = palette::list(&entries, &hits, &rows, twice)
+        .iter()
+        .filter(|e| e.title == "Files")
+        .count();
+    assert!(files <= 1);
+}
+
+#[test]
 fn destructive_session_commands_need_confirmation() {
     let entries = palette::entries(&shell(), &[], &[]);
     let by_title = |t: &str| entries.iter().find(|e| e.title == t).unwrap();
