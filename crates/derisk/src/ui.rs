@@ -174,6 +174,9 @@ fn elide(text: &str, width: f32, size: f32) -> String {
 /// Width of the accent ring around the focused window, in logical pixels.
 pub const FOCUS_RING: f32 = 2.0;
 
+/// How thick the line the screen shuts into is.
+const SHUT_LINE: f32 = 4.0;
+
 /// How far below its place an overview card starts rising in.
 const RISE: f32 = 40.0;
 
@@ -225,6 +228,11 @@ pub struct ShellUi {
     widget_cards: usize,
     /// When the widget card being drawn finished rising.
     card_risen: f64,
+    /// The screen shutting into a line before the session ends: asked
+    /// for, and since when (ms on [`motion::now`]'s clock).
+    shutting: Option<Option<f64>>,
+    /// Whether it has shut.
+    shut: bool,
     /// What the windows show, while the host provides it.
     pub window_pictures: Option<WindowPictures>,
     /// Window being dragged in the overview, toward a workspace.
@@ -447,6 +455,8 @@ impl ShellUi {
             grown: None,
             widget_cards: 0,
             card_risen: 0.0,
+            shutting: None,
+            shut: false,
             window_pictures: None,
             overview_drag: None,
             tray: None,
@@ -965,7 +975,73 @@ impl ShellUi {
                     Color32::from_black_alpha((dim * 170.0) as u8),
                 );
         }
+        self.shutter(ui, shell);
         actions
+    }
+
+    /// Shuts the screen into the boot screen's line, as the film's phone
+    /// does, before the session ends: the host holds a power off, reboot or
+    /// log out until [`ShellUi::has_shut`].
+    pub fn shut_down(&mut self) {
+        self.shutting.get_or_insert(None);
+    }
+
+    /// Whether the screen has shut since [`ShellUi::shut_down`].
+    pub fn has_shut(&self) -> bool {
+        self.shut
+    }
+
+    /// Opens the screen again, when the session did not end after all.
+    pub fn open_up(&mut self) {
+        self.shutting = None;
+        self.shut = false;
+    }
+
+    /// The screen presses into a 4 pixel bar from top and bottom (16
+    /// frames, expo-in) as what it showed fades (the first 13), turning to
+    /// the accent once it is nearly a bar; from the 10th frame the bar
+    /// narrows to 300 pixels (16 frames).
+    fn shutter(&mut self, ui: &Ui, shell: &Shell) {
+        let Some(started) = self.shutting else {
+            return;
+        };
+        let ctx = ui.ctx();
+        let at = started.unwrap_or_else(|| motion::now(ctx));
+        self.shutting = Some(Some(at));
+        let pressed = motion::since(ctx, at, f(16), ease::IN);
+        let faded = motion::since(ctx, at, f(16) * 0.8, ease::SMOOTH);
+        let narrowed = motion::since(ctx, at + f64::from(f(10)), f(16), ease::SMOOTH);
+        self.shut = narrowed >= 1.0;
+        let screen = to_rect(shell.output());
+        let bar = Rect::from_center_size(
+            screen.center(),
+            vec2(
+                screen.width() + (300.0 - screen.width()) * narrowed,
+                screen.height() + (SHUT_LINE - screen.height()) * pressed,
+            ),
+        );
+        let painter =
+            ctx.layer_painter(egui::LayerId::new(Order::Debug, Id::new("derisk-shutter")));
+        let ground = self.theme.background;
+        for side in [
+            Rect::from_min_max(screen.min, pos2(screen.max.x, bar.top())),
+            Rect::from_min_max(pos2(screen.min.x, bar.bottom()), screen.max),
+            Rect::from_min_max(
+                pos2(screen.min.x, bar.top()),
+                pos2(bar.left(), bar.bottom()),
+            ),
+            Rect::from_min_max(
+                pos2(bar.right(), bar.top()),
+                pos2(screen.max.x, bar.bottom()),
+            ),
+        ] {
+            if side.is_positive() {
+                painter.rect_filled(side, 0, ground);
+            }
+        }
+        let teal = ((pressed - 0.7) / 0.3).clamp(0.0, 1.0);
+        let fill = self.theme.surface.lerp_to_gamma(self.theme.accent, teal);
+        painter.rect_filled(bar, SHUT_LINE / 2.0 * pressed, fill.gamma_multiply(faded));
     }
 
     /// Asks the person to confirm a session operation an agent or injected
