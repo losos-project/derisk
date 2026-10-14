@@ -72,6 +72,7 @@ pub mod keys;
 pub mod mcp;
 pub mod menu;
 pub mod mobile;
+pub mod motion;
 pub mod overview;
 pub mod palette;
 pub mod password_age;
