@@ -1645,6 +1645,7 @@ dependencies = [
  "derisk-calculator",
  "derisk-editor",
  "derisk-files",
+ "derisk-machines",
  "derisk-monitor",
  "derisk-settings",
  "derisk-sys",
@@ -1747,6 +1748,8 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "crossbeam-channel",
+ "derisk-sys",
+ "mcsapi-ui",
  "miette",
  "roxmltree 0.21.1",
  "serde_json",

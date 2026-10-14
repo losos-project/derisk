@@ -36,6 +36,8 @@ pub const EDITOR: &str = "org.derisk.editor";
 pub const MONITOR: &str = "org.derisk.monitor";
 /// App ID of the Calculator.
 pub const CALCULATOR: &str = "org.derisk.calculator";
+/// App ID of Machines.
+pub const MACHINES: &str = derisk_machines::APP_ID;
 
 /// A catalog entry for one core app.
 #[derive(Clone, Copy, Debug)]
@@ -95,7 +97,7 @@ impl AppInfo {
 }
 
 /// Every core app, in launcher order.
-pub const APPS: [AppInfo; 5] = [
+pub const APPS: [AppInfo; 6] = [
     AppInfo {
         id: FILES,
         name: "Files",
@@ -167,6 +169,27 @@ pub const APPS: [AppInfo; 5] = [
         action: |a| {
             new_window(a, "new-window", || {
                 Box::new(derisk_calculator::CalculatorApp::default())
+            })
+        },
+    },
+    AppInfo {
+        id: MACHINES,
+        name: "Machines",
+        summary: "Make, start and stop the machines apps run in",
+        icon: "💻",
+        keywords: &[
+            "virtual machine",
+            "vm",
+            "libvirt",
+            "qube",
+            "sandbox",
+            "hypervisor",
+        ],
+        desktop_file: include_str!("../data/org.derisk.machines.desktop"),
+        create: || Box::new(derisk_machines::MachinesApp::new()),
+        action: |a| {
+            new_window(a, "new-window", || {
+                Box::new(derisk_machines::MachinesApp::new())
             })
         },
     },
