@@ -61,6 +61,7 @@ use derisk::{
     },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
+    window_motion::{Shown, WindowMotion},
 };
 use derisk_settings::{Power, Privacy, Shortcuts};
 use mcsapi::WindowId;
@@ -69,8 +70,8 @@ use tracing::{info, warn};
 use crate::{pam, polkit_agent, unlock};
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
-    Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, OutputTiming, Placement, Press,
-    Remote, Reserved, Role, RuntimeClient, TextField, Theme, WindowHint, WorkspaceInfo,
+    Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, Motion, OutputTiming, Placement,
+    Press, Remote, Reserved, Role, RuntimeClient, TextField, Theme, WindowHint, WorkspaceInfo,
     a11y::{Origin, Snapshot, Subtree},
     accesskit::{self, NodeId},
     egui,
@@ -155,6 +156,10 @@ pub struct Session {
     commands: Vec<Command>,
     super_tap: SuperTap,
     start: Instant,
+    /// Windows opening, gliding and snapping, and where each is drawn this
+    /// frame while it does.
+    window_motion: WindowMotion,
+    shown: HashMap<WindowId, Shown>,
     last_tick: Option<Instant>,
     last_sleep_check: Option<Instant>,
     palette_open: bool,
@@ -337,6 +342,8 @@ impl Session {
             commands: Vec::new(),
             super_tap: SuperTap::default(),
             start: Instant::now(),
+            window_motion: WindowMotion::default(),
+            shown: HashMap::new(),
             last_tick: None,
             last_sleep_check: None,
             palette_open: false,
@@ -1179,6 +1186,10 @@ impl compositor::Shell for Session {
                     == (Mode::Snapped {
                         zone: SnapZone::Maximize,
                     }),
+                motion: self.shown.get(&p.window).map(|s| Motion {
+                    shown: s.frame,
+                    opacity: s.opacity,
+                }),
             })
             .collect()
     }
@@ -1212,6 +1223,15 @@ impl compositor::Shell for Session {
     /// minute.
     fn tick(&mut self) {
         self.poll_idle();
+        // Every frame, before the host asks where the windows are.
+        self.shown = self.window_motion.update(
+            self.start.elapsed().as_secs_f64() * 1000.0,
+            &self.shell.placements(),
+            self.shell.window_ids(),
+            self.shell.dragged(),
+            self.shell.work_area(),
+            self.ui.animates(&self.shell),
+        );
         if self
             .last_tick
             .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
