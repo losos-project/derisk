@@ -55,7 +55,10 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
-    ui::{ChoiceInput, PolkitInput, ShellUi, set_touch_style, show_choice, show_lock, show_polkit},
+    ui::{
+        ChoiceInput, PolkitInput, ShellUi, WindowPictures, set_touch_style, show_choice, show_lock,
+        show_polkit,
+    },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
 };
@@ -1373,6 +1376,20 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Chrome;
         }
+        // With no window to type into, the search field has the focus (the
+        // startup's dot lands there): typing opens the palette with it.
+        if self.shell.focused().is_none()
+            && !self.shell.overview_visible()
+            && key.pressed
+            && !key.mods.ctrl
+            && !key.mods.alt
+            && key.text.is_some_and(|c| !c.is_control())
+        {
+            self.dispatch(vec![Action::Palette {
+                visible: Some(true),
+            }]);
+            return KeyRoute::Chrome;
+        }
         if self.shell.overview_visible() {
             if key.pressed && key.sym == Keysym::Escape {
                 self.dispatch(vec![Action::Overview {
@@ -1428,6 +1445,18 @@ impl compositor::Shell for Session {
         {
             self.ui.paint_decoration(painter, &self.shell, &p);
         }
+    }
+
+    fn wants_window_pictures(&self) -> bool {
+        // The overview's cards show what each window holds.
+        self.shell.overview_visible() && !self.lock.is_locked()
+    }
+
+    fn window_pictures(&mut self, pictures: Option<compositor::WindowPictures>) {
+        self.ui.window_pictures = pictures.map(|p| WindowPictures {
+            texture: p.texture,
+            uv: Box::new(move |area| p.uv(area)),
+        });
     }
 
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {

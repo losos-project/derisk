@@ -534,3 +534,37 @@ fn attention_lasts_until_the_window_is_focused() {
     assert_eq!(shell.wanting_attention().count(), 0);
     assert!(!shell.workspace_wants_attention(ws));
 }
+
+#[test]
+fn every_workspace_reports_where_its_windows_sit() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("files", "Files");
+    let (b, _) = shell.map_window("editor", "Untitled");
+    let first = shell.workspaces()[0];
+    let tiled = shell.placements();
+    // A second workspace with one window, then back to the first.
+    shell
+        .apply(Action::SwitchWorkspace { workspace: 2 })
+        .unwrap();
+    let (c, _) = shell.map_window("terminal", "sh");
+    let second = shell.workspaces()[1];
+    shell
+        .apply(Action::SwitchWorkspace { workspace: 1 })
+        .unwrap();
+
+    // The active workspace: its placements, focus and all.
+    assert_eq!(shell.placements_on(first), shell.placements());
+    let windows: Vec<_> = shell
+        .placements_on(first)
+        .iter()
+        .map(|p| p.window)
+        .collect();
+    assert_eq!(windows, [a, b]);
+    // Another one: laid out the same way, with nothing focused.
+    let others = shell.placements_on(second);
+    assert_eq!(others.len(), 1);
+    assert_eq!(others[0].window, c);
+    assert!(!others[0].focused);
+    assert_eq!(others[0].frame, shell.work_area());
+    assert_eq!(tiled.len(), 2);
+}

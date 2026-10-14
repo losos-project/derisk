@@ -1,8 +1,8 @@
 use derisk::{
     adaptive::{FormFactor, Habits, Profile},
-    animation::StartupAnimation,
+    animation::{Reveal, StartupAnimation},
     geom::rect,
-    overview::{Battery, grid},
+    overview::{Battery, grid, miniature},
     snap::{Direction, Nudge, SnapConfig, SnapZone, zone_at},
     time::{Clock, utc_offset},
     tray::{Pixmap, monochrome},
@@ -90,18 +90,24 @@ fn startup_animation_runs_to_completion() {
         bar_height: 28.0,
     };
     let start = anim.frame(0);
-    assert_eq!(start.cover, 1.0);
+    assert_eq!(start.reveal, Reveal::Hidden);
+    assert_eq!(start.bar_offset, -28.0);
     assert!(!start.done);
+    // The ring has swept round before it blooms open.
+    assert!(anim.frame(950).sweep > 0.99);
+    assert!(matches!(anim.frame(1200).reveal, Reveal::Iris(_)));
     let end = anim.frame(anim.duration_ms());
     assert!(end.done);
-    assert_eq!(end.cover, 0.0);
-    assert_eq!(end.shell_opacity, 1.0);
+    assert_eq!(end.reveal, Reveal::Shown);
+    assert_eq!(end.open, 1.0);
+    assert_eq!(end.bar_offset, 0.0);
     let reduced = StartupAnimation {
         reduced_motion: true,
         bar_height: 28.0,
     };
     assert!(reduced.duration_ms() < anim.duration_ms());
-    assert_eq!(reduced.frame(150).logo_scale, 1.0);
+    assert_eq!(reduced.frame(0).reveal, Reveal::Shown);
+    assert_eq!(reduced.frame(0).cover, 1.0);
 }
 
 #[test]
@@ -230,4 +236,21 @@ fn overview_grid_and_battery() {
     std::fs::write(ac.join("online"), "1\n").unwrap();
     assert!(!Battery::read(&dir).unwrap().discharging);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn workspace_miniatures_keep_windows_where_they_are() {
+    // A 1920x1000 work area under a 80 px bar, drawn at a fifth of its size.
+    let area = rect(0, 80, 1920, 1000);
+    let screen = rect(100, 10, 384, 200);
+    // The left half lands on the miniature's left half...
+    assert_eq!(
+        miniature(rect(0, 80, 960, 1000), area, screen),
+        rect(100, 10, 192, 200)
+    );
+    // ...and a window at the bottom right, at its bottom right.
+    assert_eq!(
+        miniature(rect(1440, 580, 480, 500), area, screen),
+        rect(388, 110, 96, 100)
+    );
 }
