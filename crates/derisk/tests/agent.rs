@@ -244,15 +244,16 @@ fn requests_are_recorded_with_step_progress() {
     let turn = shell.conversation.turns().last().unwrap().clone();
     assert_eq!(turn.source, Source::User);
     assert_eq!(turn.steps[0].label, "Open kitty");
-    assert_eq!(turn.steps[0].status, StepStatus::Done);
+    assert_eq!(turn.steps[0].status, StepStatus::Waiting);
     assert_eq!(turn.steps[1].label, "Snap the window left");
     assert_eq!(turn.steps[1].status, StepStatus::Waiting);
     assert!(!turn.is_settled());
     assert!(turn.reply().starts_with("Waiting"));
 
-    // The step finishes when kitty's window maps.
+    // Both finish when kitty's window maps: the launch first, then the snap.
     shell.map_window("kitty", "~");
     let turn = shell.conversation.turns().last().unwrap();
+    assert_eq!(turn.steps[0].status, StepStatus::Done);
     assert_eq!(turn.steps[1].status, StepStatus::Done);
     assert_eq!(turn.reply(), "Done.");
 
@@ -494,4 +495,55 @@ fn custom_widgets_register_press_and_go_with_their_owner() {
     let (resp, _) = ipc::handle_line(&mut shell, r#"{"method":"remove_widget","id":"weather"}"#);
     assert!(resp.contains("\"ok\":true"), "{resp}");
     assert!(shell.widgets.list().is_empty());
+}
+
+#[test]
+fn steps_finish_in_the_order_they_were_asked_for() {
+    use derisk::conversation::{Source, StepStatus};
+
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let statuses = |shell: &Shell| -> Vec<StepStatus> {
+        let turn = shell.conversation.turns().last().unwrap();
+        turn.steps.iter().map(|s| s.status.clone()).collect()
+    };
+    let effects = shell
+        .ask(
+            "open files and snap it left, then open editor and snap it right",
+            Source::User,
+            false,
+        )
+        .into_result()
+        .unwrap();
+    // Only the first app starts; the editor waits for Files' window.
+    assert_eq!(
+        effects,
+        vec![Effect::Launch {
+            app: "files".into()
+        }]
+    );
+    assert_eq!(statuses(&shell), vec![StepStatus::Waiting; 4]);
+
+    let (_, effects) = shell.map_window("org.derisk.files", "Files");
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Launch { .. }))
+            .collect::<Vec<_>>(),
+        vec![&Effect::Launch {
+            app: "editor".into()
+        }]
+    );
+    assert_eq!(
+        statuses(&shell),
+        [
+            StepStatus::Done,
+            StepStatus::Done,
+            StepStatus::Waiting,
+            StepStatus::Waiting
+        ]
+    );
+
+    shell.map_window("org.derisk.editor", "Text Editor");
+    assert_eq!(statuses(&shell), vec![StepStatus::Done; 4]);
+    assert_eq!(shell.conversation.turns().last().unwrap().reply(), "Done.");
 }

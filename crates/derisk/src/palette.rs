@@ -563,13 +563,56 @@ pub fn list<'a>(
         .as_ref()
         .filter(|ask| !ask.actions.is_empty() || hits.is_empty());
     let first = ask.filter(|_| prefer_assistant(entries, hits, query));
+    // A request that opens apps lists them under the assistant's row, so
+    // they can be opened on their own: a sentence matches no title, so the
+    // search alone would not.
+    let named = first.map_or_else(Vec::new, |ask| named_apps(entries, ask));
     first
         .into_iter()
+        .chain(named.iter().map(|&i| &entries[i]))
         .chain(&rows.top)
-        .chain(hits.iter().map(|&i| &entries[i]))
+        .chain(
+            hits.iter()
+                .filter(|i| !named.contains(i))
+                .map(|&i| &entries[i]),
+        )
         .chain(ask.filter(|_| first.is_none()))
         .chain(&rows.bottom)
         .collect()
+}
+
+/// Indices of the app entries that `ask`'s steps open, in step order.
+fn named_apps(entries: &[Entry], ask: &Entry) -> Vec<usize> {
+    let mut named = Vec::new();
+    for action in &ask.actions {
+        let Action::Launch { app } = action else {
+            continue;
+        };
+        let found = entries
+            .iter()
+            .position(|e| e.category == Category::App && opens(e, app));
+        if let Some(i) = found.filter(|i| !named.contains(i)) {
+            named.push(i);
+        }
+    }
+    named
+}
+
+/// Whether an app entry is the app the assistant calls `name`: its ID, the
+/// ID's last segment (`files`), or its title, as the host resolves it.
+fn opens(entry: &Entry, name: &str) -> bool {
+    let name = name.trim().to_lowercase();
+    let title = entry.title.to_lowercase();
+    title == name
+        || title.replace(' ', "") == name
+        || entry.actions.iter().any(|a| match a {
+            Action::Launch { app } => {
+                let id = app.to_lowercase();
+                let id = id.strip_suffix(".desktop").unwrap_or(&id);
+                id == name || id.rsplit('.').next() == Some(name.as_str())
+            }
+            _ => false,
+        })
 }
 
 /// How often each entry was chosen, so frequent picks rank first.

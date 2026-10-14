@@ -7,7 +7,7 @@ use std::{
 };
 
 use derisk_settings::BarPosition;
-use mcsapi::{Desktop, Geometry, Layout, WindowId, WorkspaceId};
+use mcsapi::{Desktop, Geometry, Layout, WindowId, Workspace, WorkspaceId};
 use serde::Serialize;
 
 use crate::{
@@ -33,6 +33,17 @@ use crate::{
 /// A window action waiting for a launched app's window, with the
 /// conversation step it reports to.
 type Deferred = (Action, Option<StepRef>);
+
+/// A request waiting for a launched app's window before it goes on.
+#[derive(Debug)]
+struct Pending {
+    /// The app's ID or name, lowercase, as the launch named it.
+    app: String,
+    /// The launch's own step, done when the window maps.
+    launch: Option<StepRef>,
+    /// The steps after the launch, still to run.
+    rest: Vec<Deferred>,
+}
 
 /// Maximum number of workspaces.
 pub const MAX_WORKSPACES: u64 = 9;
@@ -267,7 +278,7 @@ pub struct Shell {
     overview: bool,
     palette: bool,
     snap_assist: Option<SnapAssist>,
-    pending: Vec<(String, Vec<Deferred>)>,
+    pending: Vec<Pending>,
     /// Global menus registered by apps.
     pub menus: GlobalMenu,
     /// System tray items.
@@ -755,39 +766,23 @@ impl Shell {
         Ok(self.apply_pending(app_id))
     }
 
-    /// Applies the actions an agent queued after launching `app_id`.
+    /// Carries on with a request that was waiting for `app_id`'s window:
+    /// the launch's own step is done now that its window is here, and the
+    /// steps after it run (and may wait again, for the next launch).
     fn apply_pending(&mut self, app_id: &str) -> Vec<Effect> {
         let key = app_id.to_lowercase();
-        let mut effects = Vec::new();
-        if let Some(i) = self
+        let Some(i) = self
             .pending
             .iter()
-            .position(|(app, _)| *app == key || key.contains(app.as_str()))
-        {
-            let (_, actions) = self.pending.remove(i);
-            // Like `run_steps`: the first failure stops the rest.
-            let mut failed = false;
-            for (action, step) in actions {
-                let status = if failed {
-                    StepStatus::Skipped
-                } else {
-                    match self.apply(action) {
-                        Ok(more) => {
-                            effects.extend(more);
-                            StepStatus::Done
-                        }
-                        Err(e) => {
-                            failed = true;
-                            StepStatus::Failed(e.to_string())
-                        }
-                    }
-                };
-                if let Some(step) = step {
-                    self.conversation.set(step, status);
-                }
-            }
+            .position(|p| p.app == key || key.contains(p.app.as_str()))
+        else {
+            return Vec::new();
+        };
+        let pending = self.pending.remove(i);
+        if let Some(step) = pending.launch {
+            self.conversation.set(step, StepStatus::Done);
         }
-        effects
+        self.run_deferred(pending.rest).effects
     }
 
     /// Stops managing a destroyed toplevel.
@@ -1370,11 +1365,23 @@ impl Shell {
     }
 
     fn run_steps(&mut self, actions: Vec<Action>, turn: Option<u64>) -> Outcome {
-        let step = |i: usize| turn.map(|t| (t, i));
-        let total = actions.len();
+        let steps = actions
+            .into_iter()
+            .enumerate()
+            .map(|(i, action)| (action, turn.map(|t| (t, i))))
+            .collect();
+        self.run_deferred(steps)
+    }
+
+    /// Runs steps in order. A launch followed by steps aimed at the new
+    /// window ("open files and snap it left") stops the run there: the
+    /// launch's step stays waiting, and it and everything after it go on
+    /// when the app's window maps ([`Shell::map_window`]), so the steps
+    /// finish one at a time, in the order they were asked for.
+    fn run_deferred(&mut self, steps: Vec<Deferred>) -> Outcome {
         let mut effects = Vec::new();
-        let mut actions = actions.into_iter().enumerate().peekable();
-        while let Some((i, action)) = actions.next() {
+        let mut steps = steps.into_iter().peekable();
+        while let Some((action, step)) = steps.next() {
             let launched = match &action {
                 Action::Launch { app } | Action::LaunchAction { app, .. } => {
                     Some(app.strip_suffix(".desktop").unwrap_or(app).to_lowercase())
@@ -1382,18 +1389,14 @@ impl Shell {
                 _ => None,
             };
             match self.apply(action) {
-                Ok(more) => {
-                    effects.extend(more);
-                    if let Some(s) = step(i) {
-                        self.conversation.set(s, StepStatus::Done);
-                    }
-                }
+                Ok(more) => effects.extend(more),
                 Err(e) => {
-                    if let Some(t) = turn {
-                        self.conversation
-                            .set((t, i), StepStatus::Failed(e.to_string()));
-                        for rest in i + 1..total {
-                            self.conversation.set((t, rest), StepStatus::Skipped);
+                    if let Some(s) = step {
+                        self.conversation.set(s, StepStatus::Failed(e.to_string()));
+                    }
+                    for (_, rest) in steps {
+                        if let Some(r) = rest {
+                            self.conversation.set(r, StepStatus::Skipped);
                         }
                     }
                     return Outcome {
@@ -1402,14 +1405,18 @@ impl Shell {
                     };
                 }
             }
-            if let Some(key) = launched {
-                let mut deferred = Vec::new();
-                while let Some((j, next)) = actions.next_if(|(_, a)| a.targets_new_window()) {
-                    deferred.push((next, step(j)));
-                }
-                if !deferred.is_empty() {
-                    self.pending.push((key, deferred));
-                }
+            let waits =
+                launched.filter(|_| steps.peek().is_some_and(|(a, _)| a.targets_new_window()));
+            if let Some(app) = waits {
+                self.pending.push(Pending {
+                    app,
+                    launch: step,
+                    rest: steps.collect(),
+                });
+                break;
+            }
+            if let Some(s) = step {
+                self.conversation.set(s, StepStatus::Done);
             }
         }
         Outcome {
@@ -1434,12 +1441,29 @@ impl Shell {
         out
     }
 
+    /// Where a workspace's windows sit, bottom to top, as they would if it
+    /// were the active one (the overview draws each workspace in
+    /// miniature from these). Only the active workspace has a focused
+    /// window.
+    pub fn placements_on(&self, workspace: WorkspaceId) -> Vec<WindowPlacement> {
+        if workspace == self.desktop.active().id() {
+            return self.arranged();
+        }
+        self.desktop
+            .workspaces()
+            .find(|ws| ws.id() == workspace)
+            .map(|ws| self.arranged_on(ws, None))
+            .unwrap_or_default()
+    }
+
     /// [`Shell::placements`] as the layout has them, before the focused
     /// window makes room for the on-screen keyboard.
     fn arranged(&self) -> Vec<WindowPlacement> {
-        let ws = self.desktop.active();
+        self.arranged_on(self.desktop.active(), self.focused())
+    }
+
+    fn arranged_on(&self, ws: &Workspace, focused: Option<WindowId>) -> Vec<WindowPlacement> {
         let members: BTreeSet<WindowId> = ws.windows().collect();
-        let focused = self.focused();
         let area = self.work_area();
         let gap = self.profile.gap;
         let title = self.profile.title_bar;

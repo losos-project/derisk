@@ -1059,3 +1059,54 @@ fn the_overview_draws_the_widget_plugins_cards_and_runs_their_buttons() {
         }]
     );
 }
+
+/// The accent rings drawn around windows in one frame.
+fn focus_rings(shell: &Shell) -> Vec<egui::Rect> {
+    let mut ui = ShellUi::new(shell, false);
+    let accent = ui.theme.accent;
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(to_rect(shell.output())),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(input, |root| {
+        ui.show(root, shell, 5000);
+    });
+    out.textures_delta.clear();
+    out.shapes
+        .into_iter()
+        .filter_map(|clipped| match clipped.shape {
+            egui::Shape::Rect(r)
+                if r.stroke.color == accent && r.stroke.width == derisk::ui::FOCUS_RING =>
+            {
+                Some(r.rect)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_focused_window_is_ringed_in_the_accent() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.map_window("files", "Files");
+    let (editor, _) = shell.map_window("editor", "Untitled");
+    let frame = shell
+        .placements()
+        .into_iter()
+        .find(|p| p.window == editor)
+        .unwrap()
+        .frame;
+    assert_eq!(focus_rings(&shell), vec![to_rect(frame)]);
+
+    // A maximized window meets the screen edges and the top bar: no ring.
+    shell
+        .apply(Action::ToggleMaximize { window: None })
+        .unwrap();
+    assert!(focus_rings(&shell).is_empty());
+
+    // Nor on a phone, where apps have no frame.
+    let mut phone = Shell::new(rect(0, 0, 392, 872), true);
+    phone.map_window("editor", "Untitled");
+    assert!(focus_rings(&phone).is_empty());
+}
