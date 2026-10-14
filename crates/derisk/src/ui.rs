@@ -160,6 +160,19 @@ fn paint_app_icon(app_icons: &AppIcons, theme: &Theme, painter: &Painter, r: Rec
     }
 }
 
+/// Black or white, whichever reads on `fill`: a label's colour is fixed,
+/// so the text on it cannot follow the theme.
+fn on(fill: Color32) -> Color32 {
+    let [r, g, b, _] = fill.to_array();
+    // Rec. 709 luma, near enough for picking between two colours.
+    let luma = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b);
+    if luma > 140.0 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    }
+}
+
 fn elide(text: &str, width: f32, size: f32) -> String {
     let max = ((width / (size * 0.55)) as usize).max(1);
     if text.chars().count() <= max {
@@ -751,25 +764,29 @@ impl ShellUi {
                 .as_shape(to_rect(p.frame), radius),
             );
         }
-        painter.rect_filled(
-            to_rect(bar.bar(p.frame)),
-            radius,
-            if p.focused {
-                theme.surface
-            } else {
-                theme.background
-            },
-        );
+        // A window from a virtual machine wears its machine's label: the
+        // whole title bar in that colour, as Qubes draws it, so where a
+        // window came from is the first thing seen about it. Unfocused, the
+        // colour fades toward the background, as the plain bar does.
+        let machine = shell.window_machine(p.window);
+        let label = machine.map(|m| derisk_machines::colour(m.label));
+        let bar_fill = match (label, p.focused) {
+            (Some(colour), true) => colour,
+            (Some(colour), false) => colour.lerp_to_gamma(theme.background, 0.45),
+            (None, true) => theme.surface,
+            (None, false) => theme.background,
+        };
+        painter.rect_filled(to_rect(bar.bar(p.frame)), radius, bar_fill);
         if !fills {
             painter.rect_stroke(
                 to_rect(p.frame),
                 radius,
                 Stroke::new(
                     1.0,
-                    if p.focused {
-                        theme.accent
-                    } else {
-                        theme.border
+                    match (label, p.focused) {
+                        (Some(colour), _) => colour,
+                        (None, true) => theme.accent,
+                        (None, false) => theme.border,
                     },
                 ),
                 StrokeKind::Inside,
@@ -788,10 +805,10 @@ impl ShellUi {
                 r.width() / 2.0,
                 theme.border.gamma_multiply(0.35),
             );
-            let icon_color = if p.focused {
-                theme.foreground
-            } else {
-                theme.border
+            let icon_color = match label {
+                Some(_) => on(bar_fill),
+                None if p.focused => theme.foreground,
+                None => theme.border,
             };
             icons::paint(painter, r.shrink(r.width() * 0.15), name, icon_color);
         }
@@ -799,14 +816,22 @@ impl ShellUi {
         let (app, title) = shell.window_label(p.window).unwrap_or_default();
         let look = shell.apps.look(app);
         let size = (bar.height as f32 * 0.42).max(11.0);
+        let title = if title.is_empty() { &look.name } else { title };
+        // The machine's name leads the title, so the colour is never the
+        // only way to tell: not everyone sees it, and two labels can look
+        // alike.
+        let title = match machine {
+            Some(machine) => format!("[{}] {title}", machine.name),
+            None => title.to_owned(),
+        };
         self.paint_icon_label(
             painter,
             title_area.center(),
             title_area.width(),
             &look,
-            if title.is_empty() { &look.name } else { title },
+            &title,
             size,
-            theme.foreground,
+            label.map_or(theme.foreground, |_| on(bar_fill)),
         );
     }
 
@@ -837,7 +862,12 @@ impl ShellUi {
             Order::Background,
             Id::new("derisk-focus-ring"),
         ));
-        let stroke = Stroke::new(FOCUS_RING, self.theme.accent);
+        // A machine's window is ringed in its label, not the accent: the
+        // ring is the part of the frame left showing around the surface.
+        let colour = shell
+            .window_machine(p.window)
+            .map_or(self.theme.accent, |m| derisk_machines::colour(m.label));
+        let stroke = Stroke::new(FOCUS_RING, colour);
         if traced < 1.0 {
             // The stroke's middle line, so it lands where the finished
             // ring is drawn.
@@ -1612,6 +1642,25 @@ impl ShellUi {
             if response.on_hover_text(label).clicked() {
                 actions.push(Action::Focus {
                     window: window.get(),
+                });
+            }
+        }
+        // Each running machine, as a dot in its label's colour: what is
+        // running beside the host, and a way to the Machines app.
+        for machine in &shell.machines {
+            let (r, response) = ui.allocate_exact_size(vec2(12.0, side), Sense::click());
+            ui.painter()
+                .circle_filled(r.center(), 5.0, derisk_machines::colour(machine.label));
+            ui.painter().circle_stroke(
+                r.center(),
+                5.0,
+                Stroke::new(1.0, self.theme.foreground.gamma_multiply(0.5)),
+            );
+            let label = format!("{} is running", machine.name);
+            name(ui, &response, Role::Button, label.clone());
+            if response.on_hover_text(label).clicked() {
+                actions.push(Action::Launch {
+                    app: derisk_machines::APP_ID.to_owned(),
                 });
             }
         }

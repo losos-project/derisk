@@ -28,3 +28,5 @@ serde_json.workspace = true
 # guest-exec hands a program's captured output back base64-encoded.
 base64 = "0.22.1"
 tracing.workspace = true
+# The desktop's end of a guest's windows: AF_VSOCK, which std has no type for.
+vsock = "0.5.4"

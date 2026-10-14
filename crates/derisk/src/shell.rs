@@ -186,6 +186,19 @@ struct WindowInfo {
     /// Whether it asked to be seen while it was not focused: it rang the
     /// bell, or asked to come forward when it could not.
     attention: bool,
+    /// The virtual machine it came from, when it came from one.
+    machine: Option<WindowMachine>,
+}
+
+/// The virtual machine a window came from, as the compositor knows it: from
+/// the socket its client connected through, which only that machine's
+/// windows reach (`derisk_machines::display`). The guest has no say in it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WindowMachine {
+    /// The machine's name.
+    pub name: String,
+    /// The colour its windows are drawn in.
+    pub label: derisk_machines::Label,
 }
 
 /// Where a window is drawn this frame.
@@ -299,6 +312,9 @@ pub struct Shell {
     pub conversation: Conversation,
     /// Failed user units, updated by the host (see [`systemd::failed_units`]).
     pub failed_units: Vec<String>,
+    /// Virtual machines that run, updated by the host from libvirt; the
+    /// top bar shows one dot in its label's colour for each.
+    pub machines: Vec<WindowMachine>,
     /// Whether logind says the machine can hibernate, updated by the host
     /// (see [`systemd::can_hibernate`]). The palette offers Hibernate only
     /// when it can.
@@ -442,6 +458,7 @@ impl Shell {
             clock: Clock::default(),
             battery: None,
             failed_units: Vec::new(),
+            machines: Vec::new(),
             can_hibernate: false,
             effects: Effects::default(),
             keyboard: false,
@@ -758,6 +775,7 @@ impl Shell {
                 parent: None,
                 modal: false,
                 attention: false,
+                machine: None,
             },
         );
         self.stack.push(id);
@@ -825,6 +843,21 @@ impl Shell {
     pub fn set_title(&mut self, window: WindowId, title: &str) -> Result<(), Error> {
         self.info_mut(window)?.title = title.to_owned();
         Ok(())
+    }
+
+    /// Marks a window as one from a virtual machine.
+    pub fn set_window_machine(
+        &mut self,
+        window: WindowId,
+        machine: WindowMachine,
+    ) -> Result<(), Error> {
+        self.info_mut(window)?.machine = Some(machine);
+        Ok(())
+    }
+
+    /// The virtual machine a window came from, if it came from one.
+    pub fn window_machine(&self, window: WindowId) -> Option<&WindowMachine> {
+        self.windows.get(&window)?.machine.as_ref()
     }
 
     fn info_mut(&mut self, window: WindowId) -> Result<&mut WindowInfo, Error> {

@@ -29,6 +29,13 @@ pub(crate) enum Order {
     ForceOff(String),
     Create(Create),
     Remove(String),
+    /// Ask a running machine which apps it has.
+    Apps(String),
+    /// Open an app in a machine, starting it first if it is off.
+    Open {
+        machine: String,
+        app: crate::GuestApp,
+    },
     /// Copy the OS's libvirt plugin into the person's plugin directory and
     /// sign it with their own key.
     SetUpPlugin {
@@ -80,6 +87,11 @@ pub(crate) enum Event {
     Line(String),
     /// An order finished: what to tell the person, or what went wrong.
     Done(Result<String, String>),
+    /// The apps a machine has, or why they could not be listed.
+    Apps {
+        machine: String,
+        apps: Result<Vec<crate::GuestApp>, String>,
+    },
 }
 
 /// The app's end of the thread. Dropping it ends the thread at its next
@@ -146,6 +158,15 @@ fn run(orders: &Receiver<Order>, events: &Sender<Event>) {
         }
         select! {
             recv(orders) -> order => match order {
+                // Asked in the background, when a machine is chosen: its
+                // answer is a list, not something the person did.
+                Ok(Order::Apps(machine)) => {
+                    let apps = changing_connection(&mut changing)
+                        .and_then(|h| h.guest_apps(&machine).map_err(|e| e.to_string()));
+                    if events.send(Event::Apps { machine, apps }).is_err() {
+                        return;
+                    }
+                }
                 Ok(order) => {
                     let done = carry_out(order, &mut changing, events);
                     if events.send(Event::Done(done)).is_err() {
@@ -185,6 +206,12 @@ fn carry_out(
             pm(&["machine".into(), "remove".into(), name.clone()], events)?;
             Ok(format!("Removed {name}"))
         }
+        Order::Open { machine, app } => changing_connection(changing)?
+            .open_app(&machine, &app.id)
+            .map(|()| format!("Opened {} in {machine}", app.name))
+            .map_err(|e| e.to_string()),
+        // `run` answers it with Event::Apps before it would come here.
+        Order::Apps(machine) => Err(format!("listing {machine}'s apps is not an action")),
         Order::SetUpPlugin { shipped, installed } => {
             set_up_plugin(&shipped, &installed, events)?;
             Ok("pm can manage machines now".into())

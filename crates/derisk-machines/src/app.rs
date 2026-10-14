@@ -36,7 +36,15 @@ pub struct MachinesApp {
     templates: Vec<Template>,
     plugin: Plugin,
     looked: Option<Instant>,
+    /// Each running machine's apps, as it listed them, and when it was
+    /// asked; forgotten when the machine stops.
+    #[cfg(not(target_arch = "wasm32"))]
+    apps: std::collections::HashMap<String, (Instant, Option<AppList>)>,
 }
+
+/// A machine's answer to which apps it has.
+#[cfg(not(target_arch = "wasm32"))]
+type AppList = Result<Vec<crate::GuestApp>, String>;
 
 /// An action that loses something, waiting for the person to say yes.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,6 +103,8 @@ impl MachinesApp {
             templates: Vec::new(),
             plugin: Plugin::NotShipped,
             looked: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            apps: std::collections::HashMap::new(),
         };
         app.look();
         app
@@ -141,8 +151,21 @@ impl MachinesApp {
                     self.status = Some(done);
                     self.look();
                 }
+                Event::Apps { machine, apps } => {
+                    if let Some(entry) = self.apps.get_mut(&machine) {
+                        entry.1 = Some(apps);
+                    }
+                }
             }
         }
+        // A stopped machine's list may be different when it starts again
+        // (the person installed something in it).
+        let machines = &self.machines;
+        self.apps.retain(|name, _| {
+            machines
+                .iter()
+                .any(|m| &m.name == name && m.state.is_active())
+        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -227,6 +250,68 @@ impl MachinesApp {
                 self.confirm = Some(Confirm::Remove(machine.name.clone()));
             }
         });
+    }
+
+    /// The selected machine's apps, as buttons that open them on the
+    /// desktop. A machine is asked for its list once it runs; one that
+    /// does not answer (it is still booting) is asked again a little later.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_in(&mut self, ui: &mut egui::Ui) {
+        let Some(machine) = self
+            .selected
+            .as_ref()
+            .and_then(|name| self.machines.iter().find(|m| &m.name == name))
+            .filter(|m| m.state == crate::State::Running && m.from_pm())
+            .cloned()
+        else {
+            return;
+        };
+        let stale = |asked: &Instant, answer: &Option<Result<_, _>>| match answer {
+            None => false,
+            Some(Ok(_)) => false,
+            Some(Err(_)) => asked.elapsed() >= std::time::Duration::from_secs(5),
+        };
+        let ask = self
+            .apps
+            .get(&machine.name)
+            .is_none_or(|(asked, answer)| stale(asked, answer));
+        if ask && self.worker.send(Order::Apps(machine.name.clone())) {
+            self.apps
+                .insert(machine.name.clone(), (Instant::now(), None));
+        }
+        let idle = self.busy.is_none();
+        let mut open = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("Open in {}:", machine.name));
+            match self.apps.get(&machine.name).and_then(|(_, a)| a.as_ref()) {
+                None => {
+                    ui.spinner();
+                }
+                Some(Err(_)) => {
+                    ui.weak("waiting for the machine to answer");
+                    ui.spinner();
+                }
+                Some(Ok(apps)) if apps.is_empty() => {
+                    ui.weak("it has no apps to show here");
+                }
+                Some(Ok(apps)) => {
+                    for app in apps {
+                        if ui.add_enabled(idle, egui::Button::new(&app.name)).clicked() {
+                            open = Some(app.clone());
+                        }
+                    }
+                }
+            }
+        });
+        if let Some(app) = open {
+            self.order(
+                format!("Opening {} in {}", app.name, machine.name),
+                Order::Open {
+                    machine: machine.name,
+                    app,
+                },
+            );
+        }
     }
 
     fn new_form(&self) -> NewMachine {
@@ -611,6 +696,8 @@ impl App for MachinesApp {
             self.plugin_banner(ui);
             self.toolbar(ui);
             self.confirmation(ui);
+            #[cfg(not(target_arch = "wasm32"))]
+            self.open_in(ui);
             self.form(ui);
             if let Some(busy) = &self.busy {
                 ui.horizontal(|ui| {
