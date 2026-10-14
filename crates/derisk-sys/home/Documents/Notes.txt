@@ -1,0 +1,7 @@
+Things to show
+
+- Settings > Appearance: switch the accent and watch every window follow.
+- Files: make a folder, copy a document into it, then trash it.
+- Text Editor: open ~/Documents/Notes.txt, change it, save.
+- System Monitor: sort by memory, end a process.
+- Calculator: scientific functions.

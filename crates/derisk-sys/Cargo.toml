@@ -1,0 +1,15 @@
+[package]
+name = "derisk-sys"
+description = "What the derisk apps ask of the system: std on Linux, an in-memory demo system in a browser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Natively this crate is re-exports of std and adds nothing. In a browser
+# (wasm32-unknown-unknown) std has no files, clock, environment or process
+# ID, and asking for the last three panics, so the demo system stands in.
+[target.'cfg(target_family = "wasm")'.dependencies]
+js-sys = "0.3.106"
+web-time = "1.1.0"

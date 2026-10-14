@@ -93,7 +93,8 @@ impl std::fmt::Debug for FilesApp {
 impl Default for FilesApp {
     /// Opens the home directory, or `/` when `HOME` is unset.
     fn default() -> Self {
-        let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
+        let home =
+            derisk_sys::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
         Self::new(Browser::new(home), Box::new(xdg_open))
     }
 }
@@ -146,7 +147,7 @@ impl FilesApp {
 
     /// Opens a folder, or a file with the default application.
     pub fn activate(&mut self, path: &Path) {
-        if path.is_dir() {
+        if derisk_sys::fs::is_dir(path) {
             self.go(|b| b.navigate(path));
         } else if let Err(error) = (self.opener)(path)
             .context(format!("Could not open {}", path.display()))
@@ -194,7 +195,7 @@ impl FilesApp {
 
     /// The sidebar's places: symbolic icon, label and folder.
     fn places(&self) -> impl Iterator<Item = (&'static str, &'static str, PathBuf)> + use<> {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = derisk_sys::env::var_os("HOME").map(PathBuf::from);
         let folders = home.clone().into_iter().flat_map(|home| {
             [
                 ("user-desktop", "Desktop"),
@@ -206,7 +207,7 @@ impl FilesApp {
             ]
             .into_iter()
             .map(move |(icon, dir)| (icon, dir, home.join(dir)))
-            .filter(|(_, _, path)| path.is_dir())
+            .filter(|(_, _, path)| derisk_sys::fs::is_dir(path))
         });
         let trash = self.browser.as_ref().and_then(Browser::trash);
         home.map(|home| ("user-home", "Home", home))

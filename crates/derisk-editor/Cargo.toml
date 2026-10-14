@@ -8,5 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+derisk-sys.workspace = true
 mcsapi-components.workspace = true
 mcsapi-ui.workspace = true

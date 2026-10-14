@@ -9,10 +9,13 @@
 //! the module with `nullok`, so someone without the file is not asked).
 
 use std::{
-    fs,
     io::{self, Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+};
+
+use derisk_sys::{
+    fs,
+    unix::{OpenOptionsExt, PermissionsExt},
 };
 
 use hmac::{Hmac, Mac};
@@ -154,7 +157,7 @@ pub fn file_text(secret: &Secret, recovery: &[u32]) -> String {
 
 /// `~/.google_authenticator`.
 pub fn file_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| Path::new(&home).join(".google_authenticator"))
+    derisk_sys::env::var_os("HOME").map(|home| Path::new(&home).join(".google_authenticator"))
 }
 
 /// Writes the file at `path`, readable by its owner only, as the module

@@ -79,7 +79,7 @@ impl Thumbnails {
         if !self.cache.contains_key(path) {
             self.cache.insert(path.to_owned(), Thumb::Loading);
             let (tx, path, ctx) = (self.tx.clone(), path.to_owned(), ctx.clone());
-            std::thread::spawn(move || {
+            derisk_sys::thread::detach(move || {
                 let image = thumbnail(&path);
                 let _ = tx.send((path, image));
                 ctx.request_repaint();
@@ -106,8 +106,8 @@ fn is_picture(path: &Path) -> bool {
 /// A thumbnail of a picture, a video, or a folder's first picture, with
 /// the source's size (a video's is the thumbnail's own).
 pub fn thumbnail(path: &Path) -> Option<(ColorImage, [usize; 2])> {
-    if path.is_dir() {
-        let mut pictures: Vec<PathBuf> = std::fs::read_dir(path)
+    if derisk_sys::fs::is_dir(path) {
+        let mut pictures: Vec<PathBuf> = derisk_sys::fs::read_dir(path)
             .ok()?
             .flatten()
             .map(|e| e.path())
@@ -117,12 +117,14 @@ pub fn thumbnail(path: &Path) -> Option<(ColorImage, [usize; 2])> {
         return thumbnail(pictures.first()?);
     }
     let image = if is_picture(path) {
-        image::ImageReader::open(path)
-            .ok()?
-            .with_guessed_format()
-            .ok()?
-            .decode()
-            .ok()?
+        // ImageReader::open, through derisk-sys.
+        image::ImageReader::new(std::io::BufReader::new(
+            derisk_sys::fs::File::open(path).ok()?,
+        ))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?
     } else {
         image::load_from_memory_with_format(&video_frame(path)?, image::ImageFormat::Png).ok()?
     };
@@ -140,7 +142,7 @@ pub fn thumbnail(path: &Path) -> Option<(ColorImage, [usize; 2])> {
 /// One PNG frame of a video, from a second in (or the first frame of a
 /// shorter one).
 fn video_frame(path: &Path) -> Option<Vec<u8>> {
-    let program = std::env::var_os("DERISK_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+    let program = derisk_sys::env::var_os("DERISK_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
     for seek in ["1", "0"] {
         let mut child = Command::new(&program)
             .args(["-nostdin", "-loglevel", "error", "-ss", seek, "-i"])

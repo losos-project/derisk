@@ -20,11 +20,14 @@
 #![deny(missing_docs)]
 
 use std::{
-    fs,
     io::{self, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU32, Ordering},
+};
+
+use derisk_sys::{
+    fs,
+    unix::{OpenOptionsExt, PermissionsExt},
 };
 
 use mcsapi_components::{ErrorDialog, Tokens};
@@ -395,7 +398,7 @@ fn create_beside(path: &Path) -> io::Result<(PathBuf, fs::File)> {
     let name = path
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a file name"))?;
-    let nanos = std::time::SystemTime::now()
+    let nanos = derisk_sys::time::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());
     for _ in 0..64 {
@@ -403,7 +406,7 @@ fn create_beside(path: &Path) -> io::Result<(PathBuf, fs::File)> {
         temporary.push(name);
         temporary.push(format!(
             ".derisk-save-{}-{}-{nanos:x}",
-            std::process::id(),
+            derisk_sys::process::id(),
             SAVES.fetch_add(1, Ordering::Relaxed)
         ));
         let temporary = path.with_file_name(temporary);

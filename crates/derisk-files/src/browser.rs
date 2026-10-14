@@ -1,9 +1,11 @@
 use std::{
     collections::BTreeSet,
     ffi::OsString,
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
+
+use derisk_sys::fs;
 
 use crate::fs_ops::{self, Entry, Kind, Trash};
 
@@ -54,7 +56,7 @@ impl Browser {
 
     /// Opens `dir` with an explicit trash (or none, which disables trashing).
     pub fn with_trash(dir: impl Into<PathBuf>, trash: Option<Trash>) -> io::Result<Self> {
-        let cwd = std::path::absolute(dir.into())?;
+        let cwd = derisk_sys::path::absolute(dir.into())?;
         let entries = fs_ops::list(&cwd)?;
         let mut browser = Self {
             cwd,
@@ -135,7 +137,7 @@ impl Browser {
 
     /// Opens a directory, recording history. On error nothing changes.
     pub fn navigate(&mut self, dir: impl AsRef<Path>) -> io::Result<()> {
-        let dir = std::path::absolute(dir.as_ref())?;
+        let dir = derisk_sys::path::absolute(dir.as_ref())?;
         self.enter(dir)?;
         self.forward.clear();
         Ok(())

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 derisk-icons.workspace = true
+derisk-sys.workspace = true
 # Wallpaper thumbnails, in the formats the session decodes.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 mcsapi-components.workspace = true

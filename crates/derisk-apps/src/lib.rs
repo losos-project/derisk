@@ -178,7 +178,7 @@ fn new_window(action: &str, id: &str, create: fn() -> Box<dyn App>) -> Option<Bo
 }
 
 fn files_action(action: &str) -> Option<Box<dyn App>> {
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
+    let home = derisk_sys::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
     let dir = match action {
         "new-window" => home,
         "documents" => home.join("Documents"),
@@ -307,6 +307,15 @@ impl Session {
         let app = info
             .create_action(action)
             .ok_or_else(|| Error::UnknownApp(id.clone()))?;
+        let instance = self.runtime.launch(id)?;
+        self.apps.insert(instance, app);
+        Ok(instance)
+    }
+
+    /// Starts a core app the host made itself, for example Files with its
+    /// own opener or the editor on a document.
+    pub fn launch_app(&mut self, id: &AppId, app: Box<dyn App>) -> Result<InstanceId, Error> {
+        find(id.as_str()).ok_or_else(|| Error::UnknownApp(id.clone()))?;
         let instance = self.runtime.launch(id)?;
         self.apps.insert(instance, app);
         Ok(instance)

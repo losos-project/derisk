@@ -54,11 +54,11 @@ fn chord_text(chord: Option<Chord>) -> String {
 /// folders, and `backgrounds` under each `$XDG_DATA_DIRS` entry.
 fn wallpaper_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = derisk_sys::env::var_os("HOME").map(PathBuf::from) {
         dirs.extend(["Pictures", "Pictures/Wallpapers", "Videos"].map(|d| home.join(d)));
     }
-    let data =
-        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".to_owned());
+    let data = derisk_sys::env::var("XDG_DATA_DIRS")
+        .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_owned());
     dirs.extend(
         data.split(':')
             .filter(|d| Path::new(d).is_absolute())
@@ -82,14 +82,16 @@ pub fn candidates(kind: WallpaperKind, dirs: &[PathBuf]) -> Vec<PathBuf> {
         {
             found.push(dir.clone());
         }
-        let Ok(entries) = std::fs::read_dir(dir) else {
+        let Ok(entries) = derisk_sys::fs::read_dir(dir) else {
             continue;
         };
         for path in entries.flatten().map(|e| e.path()) {
             let wanted = match kind {
                 WallpaperKind::Image => has_ext(&path, &IMAGE_EXTENSIONS),
                 WallpaperKind::Video => has_ext(&path, &VIDEO_EXTENSIONS),
-                WallpaperKind::Slideshow => path.is_dir() && has_pictures(&path) == Some(true),
+                WallpaperKind::Slideshow => {
+                    derisk_sys::fs::is_dir(&path) && has_pictures(&path) == Some(true)
+                }
                 _ => false,
             };
             if wanted {
@@ -104,7 +106,7 @@ pub fn candidates(kind: WallpaperKind, dirs: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn has_pictures(dir: &Path) -> Option<bool> {
-    Some(std::fs::read_dir(dir).ok()?.flatten().any(|e| {
+    Some(derisk_sys::fs::read_dir(dir).ok()?.flatten().any(|e| {
         e.path()
             .extension()
             .and_then(|x| x.to_str())
@@ -223,7 +225,7 @@ fn file_rows(
     ui.end_row();
     if !valid {
         hint(ui, theme, "Type a full path, starting with /.");
-    } else if !w.path.as_os_str().is_empty() && !w.path.exists() {
+    } else if !w.path.as_os_str().is_empty() && !derisk_sys::fs::exists(&w.path) {
         hint(
             ui,
             theme,

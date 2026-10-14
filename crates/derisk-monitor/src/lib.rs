@@ -21,11 +21,11 @@ pub mod proc;
 
 use std::{
     collections::{HashMap, VecDeque},
-    fs,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+use derisk_sys::{fs, time::Instant};
 use mcsapi_ui::{App, Theme, egui};
 use proc::{CpuTimes, Memory, format_duration, format_kib};
 
@@ -195,6 +195,7 @@ pub enum SortKey {
 }
 
 /// Sends SIGTERM to a process with the `kill` command.
+#[cfg(not(target_family = "wasm"))]
 pub fn terminate(pid: u32) -> std::io::Result<()> {
     let status = std::process::Command::new("kill")
         .args(["-TERM", &pid.to_string()])
@@ -204,6 +205,13 @@ pub fn terminate(pid: u32) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::other(format!("kill exited with {status}")))
     }
+}
+
+/// Ends one of the browser demo's made-up processes by taking it out of
+/// its `/proc`, the way an ended process leaves.
+#[cfg(target_family = "wasm")]
+pub fn terminate(pid: u32) -> std::io::Result<()> {
+    fs::remove_dir_all(format!("/proc/{pid}"))
 }
 
 /// The System Monitor app.
