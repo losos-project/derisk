@@ -1391,3 +1391,35 @@ fn the_keyboard_rises_and_a_typed_key_glows() {
     let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.5);
     assert_ne!(label_color(&shapes), Some(background));
 }
+
+#[test]
+fn the_screen_shuts_into_a_line() {
+    let shell = Shell::new(rect(0, 0, 1280, 800), false);
+    let mut ui = ShellUi::new(&shell, false);
+    let ctx = egui::Context::default();
+    timed(&ctx, &mut ui, &shell, vec![], 1.0);
+    ui.shut_down();
+    timed(&ctx, &mut ui, &shell, vec![], 1.1);
+    assert!(!ui.has_shut());
+    // 10 frames' wait, then 16 to narrow.
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 1.1 + 27.0 / 60.0);
+    assert!(ui.has_shut());
+    let accent = ui.theme.accent;
+    let line = shapes
+        .iter()
+        .find_map(|s| match s {
+            egui::Shape::Rect(r) if r.fill == accent => Some(r.rect),
+            _ => None,
+        })
+        .expect("the line");
+    assert_eq!(line.size(), egui::vec2(300.0, 4.0));
+    assert_eq!(line.center(), egui::pos2(640.0, 400.0));
+
+    ui.open_up();
+    let (_, shapes) = timed(&ctx, &mut ui, &shell, vec![], 2.0);
+    assert!(
+        !shapes.iter().any(
+            |s| matches!(s, egui::Shape::Rect(r) if r.fill == accent && r.rect.height() == 4.0)
+        )
+    );
+}

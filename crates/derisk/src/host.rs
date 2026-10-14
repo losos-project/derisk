@@ -156,6 +156,10 @@ pub struct Session {
     commands: Vec<Command>,
     super_tap: SuperTap,
     start: Instant,
+    /// A power off, reboot or log out waiting for the screen to shut, and
+    /// when it was carried out.
+    ending: Vec<Effect>,
+    ended: Option<Instant>,
     /// Windows opening, gliding and snapping, and where each is drawn this
     /// frame while it does.
     window_motion: WindowMotion,
@@ -360,6 +364,8 @@ impl Session {
             commands: Vec::new(),
             super_tap: SuperTap::default(),
             start: Instant::now(),
+            ending: Vec::new(),
+            ended: None,
             window_motion: WindowMotion::default(),
             shown: HashMap::new(),
             last_tick: None,
@@ -1023,6 +1029,14 @@ impl Session {
                         self.commands.push(Command::Close(id));
                     }
                 }
+                Effect::Session {
+                    op: SessionOp::PowerOff | SessionOp::Reboot | SessionOp::Logout,
+                } if !self.ui.has_shut() && !self.lock.is_locked() => {
+                    // The screen shuts into the boot screen's line first
+                    // (see `tick`); the lock screen has no shell to shut.
+                    self.ui.shut_down();
+                    self.ending.push(effect);
+                }
                 Effect::Session { .. }
                 | Effect::RestartUnit { .. }
                 | Effect::ResetFailed { .. } => {
@@ -1243,6 +1257,20 @@ impl compositor::Shell for Session {
         self.poll_idle();
         // Every frame, before the host asks where the windows are.
         self.move_windows();
+        if !self.ending.is_empty() && self.ui.has_shut() {
+            let ending = std::mem::take(&mut self.ending);
+            self.perform(ending);
+            self.ended = Some(Instant::now());
+        }
+        // Still here a while later (refused, or not --execute): the screen
+        // opens again.
+        if self
+            .ended
+            .is_some_and(|t| t.elapsed() >= Duration::from_secs(5))
+        {
+            self.ended = None;
+            self.ui.open_up();
+        }
         if self
             .last_tick
             .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
