@@ -441,3 +441,28 @@ fn bluetooth_reads_what_bluetoothctl_prints() {
     );
     assert_eq!(bluetooth::power(false).steps[0][3..], ["power", "off"]);
 }
+
+#[test]
+fn power_modes_are_read_from_powerprofilesctl() {
+    use derisk_settings::profiles;
+
+    let list = "  performance:\n\
+        \x20   CpuDriver:\tintel_pstate\n\
+        \x20   Degraded:   no\n\
+        \n\
+        * balanced:\n\
+        \x20   CpuDriver:\tintel_pstate\n\
+        \x20   PlatformDriver:\tplatform_profile\n\
+        \n\
+        \x20 power-saver:\n\
+        \x20   CpuDriver:\tintel_pstate\n";
+    let (all, active) = profiles::parse_list(list);
+    assert_eq!(all, ["performance", "balanced", "power-saver"]);
+    assert_eq!(active.as_deref(), Some("balanced"));
+    assert_eq!(profiles::parse_list(""), (Vec::new(), None));
+    assert_eq!(profiles::label("power-saver"), "Power saver");
+    assert_eq!(
+        profiles::set_argv("performance"),
+        ["powerprofilesctl", "set", "performance"]
+    );
+}
