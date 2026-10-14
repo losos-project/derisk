@@ -1,6 +1,6 @@
 use derisk::{
     adaptive::{FormFactor, Habits, Profile},
-    animation::StartupAnimation,
+    animation::{Reveal, StartupAnimation},
     geom::rect,
     overview::{Battery, grid, miniature},
     snap::{Direction, Nudge, SnapConfig, SnapZone, zone_at},
@@ -90,18 +90,24 @@ fn startup_animation_runs_to_completion() {
         bar_height: 28.0,
     };
     let start = anim.frame(0);
-    assert_eq!(start.cover, 1.0);
+    assert_eq!(start.reveal, Reveal::Hidden);
+    assert_eq!(start.bar_offset, -28.0);
     assert!(!start.done);
+    // The ring has swept round before it blooms open.
+    assert!(anim.frame(950).sweep > 0.99);
+    assert!(matches!(anim.frame(1200).reveal, Reveal::Iris(_)));
     let end = anim.frame(anim.duration_ms());
     assert!(end.done);
-    assert_eq!(end.cover, 0.0);
-    assert_eq!(end.shell_opacity, 1.0);
+    assert_eq!(end.reveal, Reveal::Shown);
+    assert_eq!(end.open, 1.0);
+    assert_eq!(end.bar_offset, 0.0);
     let reduced = StartupAnimation {
         reduced_motion: true,
         bar_height: 28.0,
     };
     assert!(reduced.duration_ms() < anim.duration_ms());
-    assert_eq!(reduced.frame(150).logo_scale, 1.0);
+    assert_eq!(reduced.frame(0).reveal, Reveal::Shown);
+    assert_eq!(reduced.frame(0).cover, 1.0);
 }
 
 #[test]

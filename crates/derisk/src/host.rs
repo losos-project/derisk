@@ -1376,6 +1376,20 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Chrome;
         }
+        // With no window to type into, the search field has the focus (the
+        // startup's dot lands there): typing opens the palette with it.
+        if self.shell.focused().is_none()
+            && !self.shell.overview_visible()
+            && key.pressed
+            && !key.mods.ctrl
+            && !key.mods.alt
+            && key.text.is_some_and(|c| !c.is_control())
+        {
+            self.dispatch(vec![Action::Palette {
+                visible: Some(true),
+            }]);
+            return KeyRoute::Chrome;
+        }
         if self.shell.overview_visible() {
             if key.pressed && key.sym == Keysym::Escape {
                 self.dispatch(vec![Action::Overview {
