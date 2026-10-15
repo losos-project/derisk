@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Machines
+GenericName=Virtual Machines
+Comment=Make, start and stop the machines apps run in
+Keywords=virtual machine;vm;libvirt;qube;sandbox;hypervisor;
+Icon=computer
+Exec=derisk launch org.derisk.machines
+Categories=System;Emulator;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=derisk launch org.derisk.machines --action new-window

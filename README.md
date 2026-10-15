@@ -357,7 +357,7 @@ $ cargo run --release --features host -- session --launch foot
 
 `derisk session` runs the desktop as a Smithay compositor nested in a window
 of your current X11 or Wayland session. The core apps (Files, Settings, Text
-Editor, System Monitor, Calculator, in `crates/`) run inside
+Editor, System Monitor, Calculator, Machines, in `crates/`) run inside
 the session and launch by name: `--launch files`, `derisk do open calculator`,
 or the command palette. Wayland apps launched from it (or from any
 terminal with `WAYLAND_DISPLAY` set to the socket it prints) get derisk's
@@ -538,7 +538,7 @@ nothing but the workspace at the root:
 | `derisk-install` | The installer's backend protocol, locales and time zones, and the network. |
 | `derisk-login` | The greetd login protocol, the lock screen's state and the polkit dialog's. |
 | `derisk-portal` | `xdg-desktop-portal-derisk`. |
-| `derisk-machines` | The libvirt machines apps run in: labels, states, starting and stopping them, and running programs in them. |
+| `derisk-machines` | The libvirt machines apps run in (labels, states, starting and stopping them, running programs in them) and the Machines app. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
 
 Each crate keeps everything it needs in its own directory (its README,
@@ -564,6 +564,7 @@ in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 | Text Editor | `derisk-editor` | UTF-8 files up to 8 MiB, atomic saves that keep permissions, find and replace, line/column, unsaved-change prompts. |
 | System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
 | Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
+| Machines | `derisk-machines` | The libvirt machines apps run in, each in its label's colour: make one from a template the OS ships (through `pm machine create`), start, shut down, force off and remove them, and set pm's libvirt plugin up with your own key. |
 
 `derisk-apps` lists them, registers them with `mcsapi-runtime`, and keeps the
 running app objects next to their instances (`derisk_apps::Session`), so the

@@ -14,6 +14,9 @@
 //!   machines, finds the one behind a vsock address, starts, shuts down and
 //!   forces off machines, and runs a program in one through the QEMU guest
 //!   agent. [`watch`] keeps a caller's copy of the list current.
+//! - [`MachinesApp`] is the Machines core app (`org.derisk.machines`): the
+//!   list, with buttons to make machines through `pm machine create`, start,
+//!   shut down, force off and remove them, and to set pm's libvirt plugin up.
 //!
 //! The label and template live in the domain's `<metadata>` under
 //! [`METADATA_NAMESPACE`], where pm's libvirt plugin writes them. A domain
@@ -23,12 +26,17 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod app;
 mod label;
 mod machine;
+pub mod setup;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod hypervisor;
+#[cfg(not(target_arch = "wasm32"))]
+mod worker;
 
+pub use app::{APP_ID, MachinesApp, colour};
 pub use label::{Label, UnknownLabel};
 pub use machine::{Machine, State, TemplateRef};
 

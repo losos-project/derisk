@@ -11,6 +11,7 @@ repository.workspace = true
 derisk-calculator.workspace = true
 derisk-editor.workspace = true
 derisk-files.workspace = true
+derisk-machines.workspace = true
 derisk-monitor.workspace = true
 derisk-settings.workspace = true
 derisk-sys.workspace = true
