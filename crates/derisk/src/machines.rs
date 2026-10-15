@@ -1,6 +1,7 @@
 //! The session's side of virtual machines' windows (`derisk_machines::display`):
-//! a compositor socket and a waypipe client for each running machine, and
-//! the vsock gate that hands each guest's connection to its machine's.
+//! a compositor socket and a waypipe client for each running machine, the
+//! vsock gate that hands each guest's connection to its machine's, and
+//! opening apps in a machine when the settings say apps open there.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -20,12 +21,20 @@ use tracing::{info, warn};
 /// How often libvirt is asked whether machines started or stopped.
 const WATCH: Duration = Duration::from_secs(1);
 
+/// Apps waiting to be opened in a machine. Opening one can take as long as
+/// the machine takes to boot, and launches made meanwhile wait their turn;
+/// past this many, more are dropped with a warning rather than queued.
+const OPENS: usize = 8;
+
 /// Machines and their windows' plumbing, for one session.
 pub struct MachineDisplays {
     sockets: Sockets,
     changes: Receiver<Vec<Machine>>,
     /// Ends the watching thread when this is dropped.
     _stop: Sender<()>,
+    /// Apps to open, as (machine, desktop file ID), for the opening thread;
+    /// dropping it ends that thread once it is idle.
+    opens: Sender<(String, String)>,
     machines: Vec<Machine>,
     /// The waypipe client of each machine whose windows can come in.
     clients: HashMap<String, Child>,
@@ -66,6 +75,13 @@ impl MachineDisplays {
         if let Err(e) = spawned {
             warn!(error = %e, "cannot watch machines");
         }
+        let (opens, orders) = bounded::<(String, String)>(OPENS);
+        let spawned = std::thread::Builder::new()
+            .name("derisk-machines-open".into())
+            .spawn(move || open_apps(&orders));
+        if let Err(e) = spawned {
+            warn!(error = %e, "cannot open apps in machines");
+        }
         let gate_sockets = sockets.clone();
         // The gate serves until the session ends; nothing joins it.
         let spawned = std::thread::Builder::new()
@@ -85,6 +101,7 @@ impl MachineDisplays {
             sockets,
             changes,
             _stop: stop,
+            opens,
             machines: Vec::new(),
             clients: HashMap::new(),
             failed: HashSet::new(),
@@ -94,6 +111,26 @@ impl MachineDisplays {
     /// The machine called `name`, as last seen.
     pub fn machine(&self, name: &str) -> Option<&Machine> {
         self.machines.iter().find(|m| m.name == name)
+    }
+
+    /// Opens `app` (a desktop file ID) in the machine called `machine`,
+    /// starting it first if it is off. Returns `false`, opening nothing,
+    /// when there is no such machine; the caller opens the app here then.
+    pub fn open(&self, machine: &str, app: &str) -> bool {
+        if self.machine(machine).is_none() {
+            return false;
+        }
+        if self
+            .opens
+            .try_send((machine.to_owned(), app.to_owned()))
+            .is_err()
+        {
+            warn!(
+                machine,
+                app, "too many apps waiting to open in machines; not opened"
+            );
+        }
+        true
     }
 
     /// Machines that run, in libvirt's order.
@@ -177,6 +214,31 @@ impl MachineDisplays {
                     commands.push(Command::CloseSandbox(self.sockets.wayland(&machine.name)));
                 }
             }
+        }
+    }
+}
+
+/// Opens each app it is sent in its machine, one after another. A
+/// read-write connection, which polkit grants an administrator outright and
+/// asks anyone else about, made at the first app and kept.
+fn open_apps(orders: &Receiver<(String, String)>) {
+    let mut hypervisor = None;
+    for (machine, app) in orders {
+        if hypervisor.is_none() {
+            match Hypervisor::open() {
+                Ok(opened) => hypervisor = Some(opened),
+                Err(e) => {
+                    warn!(machine, app, error = %e, "cannot open an app in a machine");
+                    continue;
+                }
+            }
+        }
+        let Some(hypervisor) = &hypervisor else {
+            continue;
+        };
+        match hypervisor.open_app(&machine, &app) {
+            Ok(()) => info!(machine, app, "opened an app in a machine"),
+            Err(e) => warn!(machine, app, error = %e, "cannot open an app in a machine"),
         }
     }
 }

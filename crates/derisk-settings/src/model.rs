@@ -550,6 +550,25 @@ pub struct Input {
     pub repeat_rate: u8,
 }
 
+/// Virtual machines (the Machines app, LosOS's machine desktop).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MachinePrefs {
+    /// The machine that apps opened from the desktop (the palette, the
+    /// overview, the dock) open in, by name; empty for this computer.
+    /// derisk's own apps always open on this computer, which is the only
+    /// place they can draw.
+    pub open_apps_in: String,
+}
+
+/// Whether `name` can name a machine: what pm accepts for one, lowercase
+/// letters, digits and dashes, a letter first, at most 32 long.
+pub fn machine_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && name.len() <= 32
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// Notification preferences.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Notifications {
@@ -599,6 +618,8 @@ pub struct Settings {
     pub notifications: Notifications,
     /// Power.
     pub power: Power,
+    /// Virtual machines.
+    pub machines: MachinePrefs,
 }
 
 impl Default for Settings {
@@ -665,6 +686,7 @@ impl Default for Settings {
                 suspend_after_min: 30,
                 low_power: LowPower::OnBattery,
             },
+            machines: MachinePrefs::default(),
         }
     }
 }
@@ -857,6 +879,10 @@ impl Settings {
                     v.is_empty() || (v.ends_with(".desktop") && !v.contains(['/', ';', '\\']))
                 }),
             ),
+            "machines.open_apps_in" => put(
+                &mut self.machines.open_apps_in,
+                Some(value.to_owned()).filter(|v| v.is_empty() || machine_name(v)),
+            ),
             "defaults.search" => put(
                 &mut self.defaults.search,
                 if value.is_empty() {
@@ -933,6 +959,7 @@ impl Settings {
              privacy.usage_ping = {}\n\
              defaults.browser = {}\n\
              defaults.search = {}\n\
+             machines.open_apps_in = {}\n\
              {}",
             a.theme.as_str(),
             a.scheme.as_str(),
@@ -986,6 +1013,7 @@ impl Settings {
             self.privacy.usage_ping,
             self.defaults.browser,
             self.defaults.search.map_or("", |e| e.as_str()),
+            self.machines.open_apps_in,
             self.shortcuts.to_text(),
         )
     }

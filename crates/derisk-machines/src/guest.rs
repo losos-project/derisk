@@ -12,7 +12,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::{Error, Hypervisor, Program, Result};
+use crate::{Error, Exit, Hypervisor, Program, Result};
 
 /// Where the guest template has `losos-guest-run`. The agent's own `PATH`
 /// is not a login's, so the path is spelled out.
@@ -21,7 +21,7 @@ pub const GUEST_RUN: &str = "/run/current-system/sw/bin/losos-guest-run";
 /// How long a machine that was off may take to boot far enough to answer.
 const BOOT_WAIT: Duration = Duration::from_secs(120);
 
-/// How long `losos-guest-run --list` may take.
+/// How long `losos-guest-run` may take to list the apps or start one.
 const LIST_WAIT: Duration = Duration::from_secs(10);
 
 /// An app a guest can open.
@@ -46,35 +46,24 @@ impl Hypervisor {
                 capture_output: true,
             },
         )?;
-        let deadline = Instant::now() + LIST_WAIT;
-        loop {
-            if let Some(exit) = self.exit(machine, pid)? {
-                if !exit.success() {
-                    return Err(Error::Agent {
-                        name: machine.into(),
-                        reply: format!(
-                            "{GUEST_RUN} --list failed: {}",
-                            String::from_utf8_lossy(&exit.stderr).trim()
-                        ),
-                    });
-                }
-                let mut apps: Vec<GuestApp> =
-                    parse_apps(&String::from_utf8_lossy(&exit.stdout)).collect();
-                apps.sort_by_key(|app| app.name.to_lowercase());
-                return Ok(apps);
-            }
-            if Instant::now() >= deadline {
-                return Err(Error::Agent {
-                    name: machine.into(),
-                    reply: format!("{GUEST_RUN} --list did not finish"),
-                });
-            }
-            std::thread::sleep(Duration::from_millis(100));
+        let exit = self.wait(machine, pid, LIST_WAIT, &format!("{GUEST_RUN} --list"))?;
+        if !exit.success() {
+            return Err(Error::Agent {
+                name: machine.into(),
+                reply: format!(
+                    "{GUEST_RUN} --list failed: {}",
+                    String::from_utf8_lossy(&exit.stderr).trim()
+                ),
+            });
         }
+        let mut apps: Vec<GuestApp> = parse_apps(&String::from_utf8_lossy(&exit.stdout)).collect();
+        apps.sort_by_key(|app| app.name.to_lowercase());
+        Ok(apps)
     }
 
     /// Opens the app `app` (a desktop file ID) in `machine`, starting the
-    /// machine and waiting for it to boot first if it is off.
+    /// machine and waiting for it to boot first if it is off. Fails with
+    /// what the guest said when it has no such app.
     pub fn open_app(&self, machine: &str, app: &str) -> Result<()> {
         self.start(machine)?;
         let deadline = Instant::now() + BOOT_WAIT;
@@ -87,16 +76,44 @@ impl Hypervisor {
             }
             std::thread::sleep(Duration::from_secs(1));
         }
-        self.spawn(
+        let pid = self.spawn(
             machine,
             &Program {
                 path: GUEST_RUN.into(),
                 args: vec![app.into()],
                 env: Vec::new(),
-                capture_output: false,
+                capture_output: true,
             },
-        )
-        .map(drop)
+        )?;
+        // It returns as soon as the app's unit has started, so this is a
+        // moment's wait, and it is how an app the guest lacks is told apart
+        // from one that opened.
+        let exit = self.wait(machine, pid, LIST_WAIT, &format!("{GUEST_RUN} {app}"))?;
+        if exit.success() {
+            Ok(())
+        } else {
+            Err(Error::Agent {
+                name: machine.into(),
+                reply: String::from_utf8_lossy(&exit.stderr).trim().to_owned(),
+            })
+        }
+    }
+
+    /// Waits up to `wait` for the guest program `pid` to exit.
+    fn wait(&self, machine: &str, pid: u32, wait: Duration, what: &str) -> Result<Exit> {
+        let deadline = Instant::now() + wait;
+        loop {
+            if let Some(exit) = self.exit(machine, pid)? {
+                return Ok(exit);
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Agent {
+                    name: machine.into(),
+                    reply: format!("{what} did not finish"),
+                });
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
