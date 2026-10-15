@@ -597,3 +597,83 @@ fn a_window_opened_over_snapped_halves_floats_on_top() {
     let area = shell.work_area();
     assert!(frame.size.w >= area.size.w / 2 && frame.size.h >= area.size.h / 2);
 }
+
+#[test]
+fn a_window_kept_on_top_stays_above_the_focused_one() {
+    let mut shell = desktop();
+    let (pinned, _) = shell.map_window("clock", "Clock");
+    shell.apply(Action::Float { window: None }).unwrap();
+    shell
+        .apply(Action::KeepOnTop {
+            window: None,
+            on: None,
+        })
+        .unwrap();
+    assert!(shell.is_on_top(pinned));
+    let (other, _) = shell.map_window("editor", "notes.md");
+    shell.apply(Action::Float { window: None }).unwrap();
+    assert_eq!(shell.focused(), Some(other));
+    let order: Vec<WindowId> = shell.placements().iter().map(|p| p.window).collect();
+    assert_eq!(order.last(), Some(&pinned), "{order:?}");
+    // Where both are, a press reaches the one on top.
+    let f = frame_of(&shell, pinned);
+    let inside = (f.loc.x + f.size.w / 2, f.loc.y + f.size.h / 2);
+    assert_eq!(shell.window_at(inside).map(|p| p.window), Some(pinned));
+
+    // Flipped again, it is stacked like any other.
+    shell
+        .apply(Action::KeepOnTop {
+            window: Some(pinned.get()),
+            on: None,
+        })
+        .unwrap();
+    assert!(!shell.is_on_top(pinned));
+    shell
+        .apply(Action::Focus {
+            window: other.get(),
+        })
+        .unwrap();
+    let order: Vec<WindowId> = shell.placements().iter().map(|p| p.window).collect();
+    assert_eq!(order.last(), Some(&other), "{order:?}");
+}
+
+#[test]
+fn an_untrusted_machines_window_cannot_be_kept_on_top() {
+    use derisk::shell::WindowMachine;
+    use derisk_machines::Label;
+
+    let machine = |label| WindowMachine {
+        name: "mail".into(),
+        label,
+    };
+    let mut shell = desktop();
+    let (window, _) = shell.map_window("foot", "Foot");
+    shell
+        .set_window_machine(window, machine(Label::Red))
+        .unwrap();
+    assert!(shell.is_untrusted(window));
+    let refused = shell.apply(Action::KeepOnTop {
+        window: None,
+        on: Some(true),
+    });
+    assert!(matches!(refused, Err(Error::UntrustedOnTop(name)) if name == "mail"));
+    assert!(!shell.is_on_top(window));
+
+    // A trusted machine's window may be, until the compositor learns the
+    // window is the untrusted machine's after all.
+    let (other, _) = shell.map_window("foot", "Foot");
+    shell
+        .set_window_machine(other, machine(Label::Blue))
+        .unwrap();
+    shell
+        .apply(Action::KeepOnTop {
+            window: None,
+            on: Some(true),
+        })
+        .unwrap();
+    assert!(shell.is_on_top(other));
+    shell
+        .set_window_machine(other, machine(Label::Red))
+        .unwrap();
+    assert!(!shell.is_on_top(other));
+}

@@ -108,6 +108,12 @@ pub enum Error {
     #[error("cannot open {0:?}")]
     #[diagnostic(code(derisk::shell::not_openable))]
     NotOpenable(String),
+    /// The window is from an untrusted machine, whose windows may not be
+    /// kept on top of others: one could sit over another window and pass
+    /// itself off as part of it.
+    #[error("windows from {0}, an untrusted machine, cannot be kept on top")]
+    #[diagnostic(code(derisk::shell::untrusted_on_top))]
+    UntrustedOnTop(String),
     /// The assistant did not understand this request.
     #[error("I don't know how to \"{0}\"")]
     #[diagnostic(code(derisk::shell::not_understood))]
@@ -188,6 +194,9 @@ struct WindowInfo {
     attention: bool,
     /// The virtual machine it came from, when it came from one.
     machine: Option<WindowMachine>,
+    /// Whether it is kept above the windows that are not, whichever has the
+    /// keyboard ([`Action::KeepOnTop`]).
+    on_top: bool,
 }
 
 /// The virtual machine a window came from, as the compositor knows it: from
@@ -792,6 +801,7 @@ impl Shell {
                 modal: false,
                 attention: false,
                 machine: None,
+                on_top: false,
             },
         );
         self.stack.push(id);
@@ -861,14 +871,33 @@ impl Shell {
         Ok(())
     }
 
-    /// Marks a window as one from a virtual machine.
+    /// Marks a window as one from a virtual machine. A window from an
+    /// untrusted machine stops being kept on top, should it have been
+    /// before the compositor knew where it came from.
     pub fn set_window_machine(
         &mut self,
         window: WindowId,
         machine: WindowMachine,
     ) -> Result<(), Error> {
-        self.info_mut(window)?.machine = Some(machine);
+        let info = self.info_mut(window)?;
+        if machine.label.is_untrusted() {
+            info.on_top = false;
+        }
+        info.machine = Some(machine);
         Ok(())
+    }
+
+    /// Whether a window comes from an untrusted machine
+    /// ([`derisk_machines::Label::is_untrusted`]), which limits what it may
+    /// do to the rest of the desktop.
+    pub fn is_untrusted(&self, window: WindowId) -> bool {
+        self.window_machine(window)
+            .is_some_and(|machine| machine.label.is_untrusted())
+    }
+
+    /// Whether a window is kept on top ([`Action::KeepOnTop`]).
+    pub fn is_on_top(&self, window: WindowId) -> bool {
+        self.windows.get(&window).is_some_and(|info| info.on_top)
     }
 
     /// The virtual machine a window came from, if it came from one.
@@ -1235,6 +1264,17 @@ impl Shell {
                     self.snap_assist = None;
                 }
             }
+            Action::KeepOnTop { window, on } => {
+                let w = self.target(window)?;
+                let info = self.info_mut(w)?;
+                let on = on.unwrap_or(!info.on_top);
+                if on
+                    && let Some(machine) = info.machine.as_ref().filter(|m| m.label.is_untrusted())
+                {
+                    return Err(Error::UntrustedOnTop(machine.name.clone()));
+                }
+                info.on_top = on;
+            }
             Action::Minimize { window } => {
                 let w = self.target(window)?;
                 self.info_mut(w)?.minimized = true;
@@ -1576,6 +1616,14 @@ impl Shell {
                 Mode::Snapped { zone } => out.push(place(w, zone.geometry(area, gap))),
             }
         }
+        // Windows kept on top go above the rest, in the order they are
+        // stacked among themselves, so focusing another window raises it
+        // only as far as the first of them.
+        let (mut kept, rest): (Vec<_>, Vec<_>) = out
+            .into_iter()
+            .partition(|p| self.windows[&p.window].on_top);
+        let mut out = rest;
+        out.append(&mut kept);
         out
     }
 

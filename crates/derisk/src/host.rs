@@ -1876,11 +1876,18 @@ impl compositor::Shell for Session {
     /// shell's own has the keyboard (the palette, polkit's prompt), where
     /// taking it away would lose what is being typed: it asks for
     /// attention instead.
+    ///
+    /// A window from an untrusted machine always only asks. The token
+    /// proves that something in that machine was clicked, and the machine
+    /// can click itself: a window that could bring itself forward could
+    /// cover the one being typed into and take what is typed next. The
+    /// person brings it forward themselves, from the top bar or the palette.
     fn activate(&mut self, window: WindowId) {
         let busy = self.lock.is_locked()
             || self.locked_elsewhere
             || self.shell.palette_visible()
-            || !self.polkit.is_empty();
+            || !self.polkit.is_empty()
+            || self.shell.is_untrusted(window);
         if busy {
             let _ = self.shell.set_attention(window, true);
         } else {

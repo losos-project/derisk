@@ -120,6 +120,13 @@ source and widget, which no connection can take over: the palette offers
 "Start web", "Shut down work" and each running machine's apps ("Foot in
 work", `plugins/palette/machines`), and the overview gets a Machines card.
 
+Any window can be kept on top (Window › Keep on Top in the palette, "keep
+it on top" to the assistant, or `{"action":"keep_on_top"}` from an agent),
+above every window that is not, whichever has the keyboard. A red
+machine's windows are untrusted, as in Qubes: they cannot be kept on top,
+and when one asks to come forward (xdg-activation) it only asks for
+attention, since the machine can produce the click its token stands for.
+
 ## Agent-first
 
 Everything the shell can do is an `Action` (see `crates/derisk/src/action.rs`). The UI,

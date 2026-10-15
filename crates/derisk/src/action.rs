@@ -86,6 +86,18 @@ pub enum Action {
         #[serde(default)]
         window: Option<u64>,
     },
+    /// Keep a window above every window that is not kept on top, even
+    /// while another has the keyboard: `on` sets it, and without it the
+    /// window's setting flips. Refused for a window from an untrusted
+    /// machine ([`derisk_machines::Label::is_untrusted`]).
+    KeepOnTop {
+        /// Target window.
+        #[serde(default)]
+        window: Option<u64>,
+        /// Kept on top or not; flipped when absent.
+        #[serde(default)]
+        on: Option<bool>,
+    },
     /// Hide a window until restored.
     Minimize {
         /// Target window.
@@ -259,6 +271,11 @@ impl Action {
             Self::Tile { window } => format!("Tile {}", which(window)),
             Self::Float { window } => format!("Float {}", which(window)),
             Self::ToggleMaximize { window } => format!("Maximize or restore {}", which(window)),
+            Self::KeepOnTop { window, on } => match on {
+                Some(true) => format!("Keep {} on top", which(window)),
+                Some(false) => format!("Stop keeping {} on top", which(window)),
+                None => format!("Keep {} on top, or stop", which(window)),
+            },
             Self::Minimize { window } => format!("Minimize {}", which(window)),
             Self::Restore { window } => format!("Restore window {window}"),
             Self::SwitchWorkspace { workspace } => format!("Go to workspace {workspace}"),
@@ -310,6 +327,7 @@ impl Action {
                 | Self::Tile { window: None }
                 | Self::Float { window: None }
                 | Self::ToggleMaximize { window: None }
+                | Self::KeepOnTop { window: None, .. }
                 | Self::Minimize { window: None }
                 | Self::MoveToWorkspace { window: None, .. }
                 | Self::Promote
