@@ -186,6 +186,7 @@ fn customization_round_trips() {
     settings.wallpaper.color = Rgb(0x12, 0xab, 0xef);
     settings.wallpaper.interval_min = 5;
     settings.wallpaper.pause_in_low_power = false;
+    settings.wallpaper.lock_screen = PathBuf::from("/home/me/Pictures/lake.jpg");
     settings
         .shortcuts
         .set(Shortcut::Palette, Chord::parse("Ctrl+Alt+P"));
@@ -205,6 +206,9 @@ fn wallpaper_paths_must_be_absolute() {
     assert!(!settings.set("wallpaper.path", "Pictures/a.png"));
     assert!(settings.set("wallpaper.path", "/a.png"));
     assert!(settings.set("wallpaper.path", ""));
+    assert!(!settings.set("wallpaper.lock_screen", "lake.jpg"));
+    assert!(settings.set("wallpaper.lock_screen", "/lake.jpg"));
+    assert!(settings.set("wallpaper.lock_screen", ""));
     assert!(!settings.set("wallpaper.color", "red"));
     assert!(!settings.set("wallpaper.color", "#12345"));
     assert!(!settings.set("windows.corner_radius", "21"));
@@ -356,4 +360,174 @@ fn the_machine_apps_open_in_round_trips_and_must_be_a_name() {
         assert_eq!(warnings.len(), 1, "{bad}");
         assert_eq!(parsed.machines.open_apps_in, "", "{bad}");
     }
+}
+
+#[test]
+fn network_page_says_what_it_sees() {
+    use derisk_install::{
+        network::{Network, Saved, Security},
+        wifi::Status,
+    };
+    use derisk_settings::network::{detail, headline};
+
+    let home = Network {
+        ssid: b"home".to_vec(),
+        signal: -50,
+        security: Security::Passphrase {
+            psk: true,
+            sae: false,
+        },
+    };
+    let cafe = Network {
+        ssid: b"cafe".to_vec(),
+        signal: -80,
+        security: Security::Open,
+    };
+    let mut status = Status::default();
+    assert_eq!(headline(&status), "Not connected");
+    status.online = true;
+    assert_eq!(headline(&status), "Online");
+    status.connected = Some("home".into());
+    assert_eq!(headline(&status), "Online, through home");
+    status.joining = Some("cafe".into());
+    assert_eq!(headline(&status), "Joining cafe…");
+
+    status.saved = vec![Saved {
+        id: 3,
+        ssid: b"cafe".to_vec(),
+        current: false,
+    }];
+    assert!(detail(&home, &status).starts_with("Connected · Strong signal · "));
+    assert!(detail(&cafe, &status).starts_with("Saved · Weak signal · "));
+    assert_eq!(status.saved(b"cafe").map(|s| s.id), Some(3));
+    assert!(status.saved(b"home").is_none());
+}
+
+#[test]
+fn bluetooth_reads_what_bluetoothctl_prints() {
+    use derisk_settings::bluetooth::{self, Adapter};
+
+    let show = "Controller 00:1A:7D:DA:71:13 (public)\n\
+        \tManufacturer: 0x000a (10)\n\
+        \tName: losos\n\
+        \tAlias: Matus's laptop\n\
+        \tPowered: yes\n\
+        \tDiscoverable: no\n";
+    assert_eq!(
+        bluetooth::parse_show(show),
+        Some(Adapter {
+            name: "Matus's laptop".into(),
+            powered: true,
+        })
+    );
+    assert_eq!(
+        bluetooth::parse_show("No default controller available\n"),
+        None
+    );
+    assert_eq!(bluetooth::parse_show(""), None);
+
+    let all = "Device 11:22:33:44:55:66 WH-1000XM4\n\
+        Device AA:BB:CC:DD:EE:FF AA-BB-CC-DD-EE-FF\n\
+        Device 01:02:03:04:05:06 MX Master 3\n\
+        Waiting to connect to bluetoothd...\n";
+    let paired = "Device 01:02:03:04:05:06 MX Master 3\n";
+    let connected = "Device 01:02:03:04:05:06 MX Master 3\n";
+    let devices = bluetooth::merge(all, paired, connected);
+    let seen: Vec<_> = devices
+        .iter()
+        .map(|d| (d.name.as_str(), d.paired, d.connected, d.unnamed()))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("MX Master 3", true, true, false),
+            ("WH-1000XM4", false, false, false),
+            ("AA-BB-CC-DD-EE-FF", false, false, true),
+        ]
+    );
+
+    let pair = bluetooth::pair(&devices[1]);
+    assert_eq!(
+        pair.steps[0],
+        [
+            "bluetoothctl",
+            "--timeout",
+            "30",
+            "--agent",
+            "NoInputNoOutput",
+            "pair",
+            "11:22:33:44:55:66"
+        ]
+    );
+    assert_eq!(pair.steps.len(), 3);
+    assert_eq!(
+        bluetooth::forget(&devices[0]).steps[0].last().unwrap(),
+        "01:02:03:04:05:06"
+    );
+    assert_eq!(bluetooth::power(false).steps[0][3..], ["power", "off"]);
+}
+
+#[test]
+fn power_modes_are_read_from_powerprofilesctl() {
+    use derisk_settings::profiles;
+
+    let list = "  performance:\n\
+        \x20   CpuDriver:\tintel_pstate\n\
+        \x20   Degraded:   no\n\
+        \n\
+        * balanced:\n\
+        \x20   CpuDriver:\tintel_pstate\n\
+        \x20   PlatformDriver:\tplatform_profile\n\
+        \n\
+        \x20 power-saver:\n\
+        \x20   CpuDriver:\tintel_pstate\n";
+    let (all, active) = profiles::parse_list(list);
+    assert_eq!(all, ["performance", "balanced", "power-saver"]);
+    assert_eq!(active.as_deref(), Some("balanced"));
+    assert_eq!(profiles::parse_list(""), (Vec::new(), None));
+    assert_eq!(profiles::label("power-saver"), "Power saver");
+    assert_eq!(
+        profiles::set_argv("performance"),
+        ["powerprofilesctl", "set", "performance"]
+    );
+}
+
+#[test]
+fn the_system_page_reads_the_report_and_the_reset() {
+    use derisk_settings::system::{self, Check, Reset};
+
+    let reply = r#"{"type":"aa{sv}","data":[[{"AppstreamId":{"type":"s","data":"io.losos.disk-encryption"},"Summary":{"type":"s","data":"Disk encryption"},"Description":{"type":"s","data":"Home is encrypted.\n\n/sys/block/dm-1/dm/uuid: CRYPT-LUKS2"},"HsiResult":{"type":"u","data":7},"HsiLevel":{"type":"u","data":1},"Flags":{"type":"t","data":8193}},{"Summary":{"type":"s","data":"Kernel lockdown"},"Description":{"type":"s","data":"none"},"Flags":{"type":"t","data":8192}}]]}"#;
+    assert_eq!(
+        system::parse_report(reply),
+        Some(vec![
+            Check {
+                summary: "Disk encryption".into(),
+                description: "Home is encrypted.\n\n/sys/block/dm-1/dm/uuid: CRYPT-LUKS2".into(),
+                passed: true,
+            },
+            Check {
+                summary: "Kernel lockdown".into(),
+                description: "none".into(),
+                passed: false,
+            },
+        ])
+    );
+    assert_eq!(system::parse_report(""), None);
+    assert_eq!(
+        system::parse_report(r#"{"type":"aa{sv}","data":[[]]}"#),
+        Some(Vec::new())
+    );
+
+    assert_eq!(
+        system::parse_reset(r#"{"supported":true}"#, r#"{"mode":"unspecified"}"#),
+        Reset {
+            supported: true,
+            mode: "unspecified".into(),
+        }
+    );
+    assert_eq!(system::parse_reset("", ""), Reset::default());
+    assert_eq!(
+        system::RESET_ARGV,
+        ["systemctl", "start", "factory-reset.target"]
+    );
 }

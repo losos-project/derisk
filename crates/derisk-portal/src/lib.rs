@@ -7,8 +7,8 @@
 //! | Interface | From |
 //! | --- | --- |
 //! | `Settings` (`org.freedesktop.appearance`) | the theme derisk publishes, so GTK 4, Qt, Firefox and Electron apps follow dark mode and the accent |
-//! | `Screenshot` | the compositor, over the agent socket |
-//! | `Wallpaper` | derisk's settings file, which the session watches |
+//! | `Screenshot` | the compositor, over the agent socket; an area or a color picked with `derisk-gpui pick` ([`pick`]) |
+//! | `Wallpaper` | derisk's settings file, which the session watches: the desktop's picture, the lock screen's, or both |
 //! | `Background` | which apps have windows, over the agent socket |
 //!
 //! Everything else (the file chooser, the access dialog, printing, ...) is
@@ -24,6 +24,7 @@ pub mod access;
 pub mod agent;
 pub mod appearance;
 pub mod files;
+pub mod pick;
 pub mod portal;
 
 /// The bus name xdg-desktop-portal looks for, from `derisk.portal`.

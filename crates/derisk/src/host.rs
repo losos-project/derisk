@@ -187,6 +187,8 @@ pub struct Session {
     keyboard_for_field: bool,
     shortcuts: Shortcuts,
     wallpaper: WallpaperPainter,
+    /// The lock screen's picture, when one is set.
+    lock_wallpaper: WallpaperPainter,
     privacy: Privacy,
     last_sweep: Option<Instant>,
     /// Request numbers for [`Command::Describe`] and [`Command::Capture`].
@@ -387,6 +389,7 @@ impl Session {
             keyboard_for_field: false,
             shortcuts: Shortcuts::default(),
             wallpaper: WallpaperPainter::default(),
+            lock_wallpaper: WallpaperPainter::default(),
             privacy: derisk_settings::Settings::default().privacy,
             last_sweep: None,
             requests: 0,
@@ -1397,6 +1400,8 @@ impl compositor::Shell for Session {
             self.shortcuts = settings.shortcuts;
             self.power = settings.power;
             self.wallpaper.configure(&settings.wallpaper);
+            self.lock_wallpaper
+                .configure(&wallpaper::lock_screen(&settings.wallpaper));
             if settings.privacy != self.privacy {
                 self.privacy = settings.privacy;
                 self.last_sweep = None;
@@ -1636,8 +1641,14 @@ impl compositor::Shell for Session {
         }
         if self.lock.is_locked() {
             let theme = self.ui.theme;
-            if show_lock(ui, &mut self.lock, &self.shell, &theme, &self.user)
-                && let Some(request) = self.lock.login.submit()
+            if show_lock(
+                ui,
+                &mut self.lock,
+                &self.shell,
+                &theme,
+                &self.user,
+                &mut self.lock_wallpaper,
+            ) && let Some(request) = self.lock.login.submit()
             {
                 self.send_auth(request);
             }
