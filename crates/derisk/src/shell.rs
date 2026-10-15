@@ -762,13 +762,29 @@ impl Shell {
     pub fn map_window(&mut self, app_id: &str, title: &str) -> (WindowId, Vec<Effect>) {
         let id = WindowId::new(self.next_id).expect("IDs start at 1");
         self.next_id += 1;
+        // Tiled windows are drawn under snapped ones, so a new window tiled
+        // beside two halves filled the work area behind them and showed only
+        // as the gaps between them: Settings opened from the palette that
+        // way looked like a sliver. Over snapped windows it floats instead,
+        // drawn on top and centred. A phone snaps nothing.
+        let over_snapped = !self.is_phone()
+            && self.desktop.active().windows().any(|w| {
+                !self.is_minimized(w) && matches!(self.windows[&w].mode, Mode::Snapped { .. })
+            });
+        let mode = if over_snapped {
+            Mode::Floating {
+                frame: self.default_float().into(),
+            }
+        } else {
+            Mode::Tiled
+        };
         self.desktop.insert(id).expect("fresh IDs are unique");
         self.windows.insert(
             id,
             WindowInfo {
                 app_id: app_id.to_owned(),
                 title: title.to_owned(),
-                mode: Mode::Tiled,
+                mode,
                 before_maximize: None,
                 restore: None,
                 minimized: false,
