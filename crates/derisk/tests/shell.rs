@@ -568,3 +568,32 @@ fn every_workspace_reports_where_its_windows_sit() {
     assert_eq!(others[0].frame, shell.work_area());
     assert_eq!(tiled.len(), 2);
 }
+
+#[test]
+fn a_window_opened_over_snapped_halves_floats_on_top() {
+    let mut shell = desktop();
+    shell.map_window("org.derisk.files", "Files");
+    shell
+        .apply(Action::Snap {
+            window: None,
+            zone: SnapZone::Left,
+        })
+        .unwrap();
+    shell.map_window("org.derisk.editor", "Text Editor");
+    shell
+        .apply(Action::Snap {
+            window: None,
+            zone: SnapZone::Right,
+        })
+        .unwrap();
+    let (settings, _) = shell.map_window("org.derisk.settings", "Settings");
+
+    assert!(matches!(shell.mode(settings), Some(Mode::Floating { .. })));
+    // Placements are drawn bottom to top: the new window is last, over both
+    // halves, at a usable size rather than the gap between them.
+    let placements = shell.placements();
+    assert_eq!(placements.last().map(|p| p.window), Some(settings));
+    let frame = frame_of(&shell, settings);
+    let area = shell.work_area();
+    assert!(frame.size.w >= area.size.w / 2 && frame.size.h >= area.size.h / 2);
+}
