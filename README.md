@@ -114,7 +114,11 @@ Programs feed palette plugins over the agent protocol with
 connection owns the data and hears of picks from the rows made of it as
 `{"event":"palette","source":"danube","command":{...}}` (see
 `plugins/palette/browser`). Cards a program registers with
-`register_widget` are drawn by the bundled `programs` widget plugin.
+`register_widget` are drawn by the bundled `programs` widget plugin. The
+session registers its virtual machines the same way, as the `machines`
+source and widget, which no connection can take over: the palette offers
+"Start web", "Shut down work" and each running machine's apps ("Foot in
+work", `plugins/palette/machines`), and the overview gets a Machines card.
 
 ## Agent-first
 

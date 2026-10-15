@@ -1,0 +1,15 @@
+[package]
+name = "palette-machines"
+description = "derisk palette plugin: Virtual machines to start and shut down, and the apps in each that runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+derisk-palette-sdk = { path = "../sdk" }
