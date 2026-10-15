@@ -791,6 +791,8 @@ mod tests {
                 name: "losos-guest".into(),
                 digest: "d".into(),
             }),
+            system: None,
+            screen: false,
             memory_mib: 2048,
             cpus: 2,
             state: State::Off,

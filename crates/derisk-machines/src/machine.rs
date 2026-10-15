@@ -74,8 +74,15 @@ pub struct Machine {
     pub uuid: String,
     /// The colour its windows are drawn in.
     pub label: Label,
-    /// The template it was made from, when pm made it.
+    /// The template it was made from, when pm made it from one.
     pub template: Option<TemplateRef>,
+    /// The system it installed from CDs, when pm made it to install one
+    /// (`pm machine create --installer`): `linux` or `windows`.
+    pub system: Option<String>,
+    /// Whether it has a screen of its own (a `<graphics>` device), which
+    /// a machine installing from a CD has for its installer, and a Windows
+    /// machine for its whole desktop.
+    pub screen: bool,
     /// Memory it is given, in MiB.
     pub memory_mib: u64,
     /// Virtual processors it is given.
@@ -139,6 +146,13 @@ impl Machine {
             })
         });
 
+        let system = ours_child("system")
+            .and_then(|n| n.text())
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty());
+        let screen = child("devices")
+            .is_some_and(|devices| devices.children().any(|n| n.has_tag_name("graphics")));
+
         let memory = child("memory").ok_or_else(|| broken("it has no <memory>"))?;
         let amount: u64 = memory
             .text()
@@ -167,6 +181,8 @@ impl Machine {
             name,
             label,
             template,
+            system,
+            screen,
             memory_mib,
             cpus,
             state,
@@ -174,9 +190,15 @@ impl Machine {
         })
     }
 
-    /// Whether pm made it: only those carry a template.
+    /// Whether pm made it: only those carry a template or a system.
     pub fn from_pm(&self) -> bool {
-        self.template.is_some()
+        self.template.is_some() || self.system.is_some()
+    }
+
+    /// Whether it runs Windows, which has no `losos-guest-run` and no
+    /// waypipe: its windows are its screen, or WinApps'.
+    pub fn is_windows(&self) -> bool {
+        self.system.as_deref() == Some("windows")
     }
 }
 
@@ -243,6 +265,27 @@ mod tests {
         assert_eq!(machine.cpus, 2);
         assert_eq!(machine.cid, Some(3));
         assert!(machine.from_pm());
+    }
+
+    #[test]
+    fn reads_a_windows_machine_with_a_screen() {
+        let xml = RUNNING
+            .replace(
+                r#"<pm:template name="losos-guest" digest="9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"/>"#,
+                "<pm:system>windows</pm:system><pm:media name='win11' digest='aa'/>",
+            )
+            .replace(
+                "<vsock model='virtio'>",
+                "<graphics type='spice'><listen type='none'/></graphics><vsock model='virtio'>",
+            );
+        let machine = Machine::from_xml(&xml, State::Running).unwrap();
+        assert_eq!(machine.template, None);
+        assert_eq!(machine.system.as_deref(), Some("windows"));
+        assert!(machine.is_windows());
+        assert!(machine.screen);
+        assert!(machine.from_pm());
+        let template = Machine::from_xml(RUNNING, State::Running).unwrap();
+        assert!(!template.screen && !template.is_windows());
     }
 
     #[test]

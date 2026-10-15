@@ -119,6 +119,14 @@ session registers its virtual machines the same way, as the `machines`
 source and widget, which no connection can take over: the palette offers
 "Start web", "Shut down work" and each running machine's apps ("Foot in
 work", `plugins/palette/machines`), and the overview gets a Machines card.
+A running machine with a screen of its own (one installing from a CD, or
+Windows) has that screen shown in a virt-viewer window on the machine's own
+socket, so it is framed in the machine's colour like its apps; closing it
+hides it until the machine next starts or the palette's "Show work's
+screen" brings it back. A Windows machine is not asked for its apps, which
+open through WinApps instead, and a Linux guest that is not LosOS's
+template lists and opens its apps once the LosOS tools CD's `setup.sh` has
+installed `losos-guest-run` in `/usr/local/bin`.
 
 Any window can be kept on top (Window › Keep on Top in the palette, "keep
 it on top" to the assistant, or `{"action":"keep_on_top"}` from an agent),

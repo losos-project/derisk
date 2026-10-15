@@ -1009,7 +1009,7 @@ impl Session {
         }
         let acted = item.split_once(':').is_some_and(|(op, machine)| {
             self.machines
-                .as_ref()
+                .as_mut()
                 .is_some_and(|m| m.act(op, machine, None))
         });
         if !acted {
@@ -1163,7 +1163,7 @@ impl Session {
                     let app = command["app"].as_str();
                     if !self
                         .machines
-                        .as_ref()
+                        .as_mut()
                         .is_some_and(|m| m.act(text("op"), text("machine"), app))
                     {
                         warn!(%command, "no such machine or command");
