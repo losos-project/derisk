@@ -48,7 +48,7 @@ pub use model::{
     Accent, Appearance, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit, Input, Layout,
     LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings,
     ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
-    machine_name,
+    machine_name, web_background_url,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};

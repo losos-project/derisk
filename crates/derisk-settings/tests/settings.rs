@@ -531,3 +531,28 @@ fn the_system_page_reads_the_report_and_the_reset() {
         ["systemctl", "start", "factory-reset.target"]
     );
 }
+
+#[test]
+fn a_web_background_is_an_http_address_or_a_local_file() {
+    use derisk_settings::{WallpaperKind, web_background_url};
+    assert!(web_background_url("https://example.org/#top"));
+    assert!(web_background_url("http://localhost:8080/"));
+    assert!(web_background_url("file:///home/me/page/index.html"));
+    assert!(!web_background_url("https://"));
+    assert!(!web_background_url("javascript:alert(1)"));
+    assert!(!web_background_url("data:text/html,hi"));
+    assert!(!web_background_url("https://example.org/a b"));
+
+    let mut settings = Settings::default();
+    settings.wallpaper.kind = WallpaperKind::Web;
+    // `#` in an address is not a comment.
+    settings.wallpaper.url = "https://example.org/clock.html#dark".into();
+    let (parsed, warnings) = Settings::parse(&settings.to_text());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(parsed, settings);
+
+    let (parsed, warnings) =
+        Settings::parse("wallpaper.kind = web\nwallpaper.url = javascript:alert(1)\n");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(parsed.wallpaper.url.is_empty());
+}

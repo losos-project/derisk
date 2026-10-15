@@ -1,5 +1,5 @@
 //! The desktop background: derisk's gradient, a color, a gradient, a
-//! picture, a slideshow, or a looping video.
+//! picture, a slideshow, a looping video, or a web page.
 //!
 //! [`WallpaperPainter`] follows the Settings app's [`Wallpaper`] and paints
 //! into the compositor's background pass. Pictures decode on a worker
@@ -11,13 +11,24 @@
 //! would pull a large C dependency into the shell for what a pipe does.
 //!
 //! A video pauses by not reading: the pipe fills, ffmpeg blocks on its
-//! write, and both sit idle until the wallpaper is visible again. Anything
-//! that fails to load falls back to derisk's gradient, logged once.
+//! write, and both sit idle until the wallpaper is visible again.
+//!
+//! A web page is drawn by Danube, the LosOS browser, in the same way:
+//! `danube --background URL --size WxH --scale S` (`$DERISK_DANUBE`, else
+//! `danube` on `PATH`) writes each frame the page renders to stdout as a
+//! width and a height (u32, little-endian) and premultiplied RGBA pixels.
+//! It has no window of its own and takes no input. A page is not paused
+//! by not reading, since it would go on rendering frames nobody takes:
+//! derisk writes `hide` on its stdin instead, and Danube stops painting
+//! it and pauses its animations and media until `show`.
+//!
+//! Anything that fails to load falls back to derisk's gradient, logged
+//! once.
 
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{Receiver, TryRecvError, sync_channel},
     time::{Duration, Instant},
 };
@@ -35,6 +46,11 @@ pub const VIDEO_FPS: u32 = 30;
 /// The most pixels a video frame has; bigger screens stretch it. 1080p
 /// RGBA at 30 fps is already about 250 MB/s of texture upload.
 const VIDEO_MAX_PIXELS: u32 = 1920 * 1080;
+
+/// The most pixels a web page frame has; a bigger screen renders the page
+/// at a lower scale and stretches it. 1440p RGBA at 60 fps is already about
+/// 900 MB/s through the pipe.
+const WEB_MAX_PIXELS: f32 = 2560.0 * 1440.0;
 
 /// How long slideshow pictures cross-fade.
 const FADE: Duration = Duration::from_millis(800);
@@ -159,6 +175,39 @@ pub fn ffmpeg_args(
             ]
             .map(str::to_owned),
         )
+}
+
+/// The Danube arguments that draw `url` on a `size` (logical pixels)
+/// screen at `scale`, the scale lowered so that a frame has at most
+/// [`WEB_MAX_PIXELS`].
+pub fn danube_args(url: &str, size: [u32; 2], scale: f32) -> impl Iterator<Item = String> + use<> {
+    let [w, h] = size.map(|v| v.max(1));
+    let most = (WEB_MAX_PIXELS / (w as f32 * h as f32)).sqrt();
+    let scale = scale.min(most).clamp(0.5, 8.0);
+    [
+        "--background".to_owned(),
+        url.to_owned(),
+        "--size".to_owned(),
+        format!("{w}x{h}"),
+        "--scale".to_owned(),
+        format!("{scale:.3}"),
+    ]
+    .into_iter()
+}
+
+/// One frame of Danube's stream: its size, then its pixels.
+fn read_frame(stream: &mut impl Read) -> std::io::Result<([usize; 2], Vec<u8>)> {
+    let mut header = [0; 8];
+    stream.read_exact(&mut header)?;
+    let w = u32::from_le_bytes(header[..4].try_into().expect("four bytes")) as usize;
+    let h = u32::from_le_bytes(header[4..].try_into().expect("four bytes")) as usize;
+    // Danube's sizes are a screen's: anything larger is a broken stream.
+    if w == 0 || h == 0 || w > 16384 || h > 16384 {
+        return Err(std::io::Error::other(format!("a {w}x{h} frame")));
+    }
+    let mut pixels = vec![0; w * h * 4];
+    stream.read_exact(&mut pixels)?;
+    Ok(([w, h], pixels))
 }
 
 /// The video frame size for a `screen`-pixel screen: its shape, at most
@@ -356,6 +405,111 @@ impl Drop for Video {
     }
 }
 
+/// A web page drawn by Danube.
+struct Page {
+    child: Child,
+    stdin: ChildStdin,
+    frames: Receiver<([usize; 2], Vec<u8>)>,
+    errors: Receiver<String>,
+    texture: Option<TextureHandle>,
+    hidden: bool,
+}
+
+impl Page {
+    fn spawn(url: &str, size: [u32; 2], scale: f32, ctx: &egui::Context) -> Result<Self, String> {
+        let program = std::env::var_os("DERISK_DANUBE").unwrap_or_else(|| "danube".into());
+        let mut child = Command::new(&program)
+            .args(danube_args(url, size, scale))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("{}: {e}", program.to_string_lossy()))?;
+        let stdin = child.stdin.take().expect("piped stdin");
+        let mut stdout = child.stdout.take().expect("piped stdout");
+        let mut stderr = child.stderr.take().expect("piped stderr");
+        // One frame in flight, as for a video; Danube replaces the frames
+        // nobody took yet with newer ones.
+        let (tx, frames) = sync_channel(1);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            while let Ok(frame) = read_frame(&mut stdout) {
+                if tx.send(frame).is_err() {
+                    return;
+                }
+                ctx.request_repaint();
+            }
+        });
+        let (etx, errors) = sync_channel(1);
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            let _ = etx.send(text);
+        });
+        Ok(Self {
+            child,
+            stdin,
+            frames,
+            errors,
+            texture: None,
+            hidden: false,
+        })
+    }
+
+    /// Takes the newest frame, and tells Danube when the page is hidden or
+    /// shown. Returns an error once Danube has quit.
+    fn advance(&mut self, painter: &Painter, hidden: bool) -> Option<String> {
+        if hidden != self.hidden {
+            self.hidden = hidden;
+            let line: &[u8] = if hidden { b"hide\n" } else { b"show\n" };
+            // A Danube that has quit shows up below.
+            let _ = self.stdin.write_all(line);
+        }
+        match self.frames.try_recv() {
+            Ok((size, rgba)) => {
+                let image = ColorImage::from_rgba_premultiplied(size, &rgba);
+                match &mut self.texture {
+                    Some(texture) => texture.set(image, TextureOptions::LINEAR),
+                    None => {
+                        self.texture = Some(painter.ctx().load_texture(
+                            "derisk-wallpaper-web",
+                            image,
+                            TextureOptions::LINEAR,
+                        ));
+                    }
+                }
+                None
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(
+                self.errors
+                    .recv_timeout(Duration::from_millis(200))
+                    .ok()
+                    .map(|e| last_line(&e))
+                    .filter(|e| !e.is_empty())
+                    .unwrap_or_else(|| "danube stopped".to_owned()),
+            ),
+        }
+    }
+}
+
+impl Drop for Page {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The last line with something in it: Danube logs as it goes, and says
+/// why it stopped last.
+fn last_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .unwrap_or_default()
+        .to_owned()
+}
+
 enum Source {
     Plain,
     Picture(Picture),
@@ -367,6 +521,7 @@ enum Source {
         picture: Picture,
     },
     Video(Video),
+    Web(Page),
     /// Loading failed; the default shows until the settings change.
     Failed,
 }
@@ -435,6 +590,15 @@ impl WallpaperPainter {
         self.source = match c.kind {
             WallpaperKind::Default | WallpaperKind::Color | WallpaperKind::Gradient => {
                 Source::Plain
+            }
+            WallpaperKind::Web if c.url.is_empty() => return self.fail("no address given"),
+            WallpaperKind::Web => {
+                let ppp = painter.ctx().pixels_per_point();
+                let points = screen.map(|p| (p as f32 / ppp).round() as u32);
+                match Page::spawn(&c.url, points, ppp, painter.ctx()) {
+                    Ok(page) => Source::Web(page),
+                    Err(e) => return self.fail(&e),
+                }
             }
             _ if missing => {
                 let error = if c.path.as_os_str().is_empty() {
@@ -535,6 +699,22 @@ impl WallpaperPainter {
                     tracing::warn!("wallpaper: {e}");
                 }
                 None
+            }
+            Source::Web(page) => {
+                let hidden = (seen.covered && c.pause_when_covered)
+                    || (seen.low_power && c.pause_in_low_power);
+                let error = page.advance(painter, hidden);
+                match &page.texture {
+                    // The page was laid out for this screen; a frame of a
+                    // lowered scale stretches over it.
+                    Some(texture) => {
+                        let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                        painter.image(texture.id(), screen, full, Color32::WHITE);
+                    }
+                    // Loading: the default instead of a black flash.
+                    None => fallback(painter),
+                }
+                error
             }
             Source::Video(video) => {
                 let paused = (seen.covered && c.pause_when_covered)
