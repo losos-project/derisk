@@ -40,6 +40,15 @@ impl Label {
         Label::Black,
     ];
 
+    /// Whether what runs in a machine of this label is untrusted: red, by
+    /// Qubes' convention, is where a person opens what they would not let
+    /// near anything else (a mail attachment, a site they do not know).
+    /// The desktop gives such a machine's windows less: they cannot be kept
+    /// on top of other windows, nor bring themselves forward.
+    pub fn is_untrusted(self) -> bool {
+        self == Label::Red
+    }
+
     /// The name pm and the domain's metadata use.
     pub fn name(self) -> &'static str {
         match self {
@@ -108,6 +117,15 @@ mod tests {
             assert_eq!(label.name().parse::<Label>(), Ok(label));
         }
         assert!("grey".parse::<Label>().is_err());
+    }
+
+    #[test]
+    fn only_red_is_untrusted() {
+        let untrusted: Vec<Label> = Label::ALL
+            .into_iter()
+            .filter(|label| label.is_untrusted())
+            .collect();
+        assert_eq!(untrusted, [Label::Red]);
     }
 
     #[test]

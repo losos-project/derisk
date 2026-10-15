@@ -261,6 +261,8 @@ mod tests {
             uuid: "u".into(),
             label: Label::Blue,
             template: None,
+            system: None,
+            screen: false,
             memory_mib: 1,
             cpus: 1,
             state: State::Running,

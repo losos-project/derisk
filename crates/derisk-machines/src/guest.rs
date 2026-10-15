@@ -1,7 +1,9 @@
 //! What the desktop asks of a guest: which apps it has, and to open one.
 //!
-//! Both go through the QEMU guest agent to [`GUEST_RUN`], a program LosOS's
-//! guest template has (losos-desktop, `nixos/guest/`). Its contract:
+//! Both go through the QEMU guest agent to `losos-guest-run`, a program
+//! LosOS's guest template has (losos-desktop, `nixos/guest/`), and which the
+//! Linux tools CD installs in any other distribution (its `setup.sh`), at
+//! one of [`GUEST_RUN`]. Its contract:
 //!
 //! - `losos-guest-run --list` prints one line per app the guest can show on
 //!   the desktop: its desktop file ID and its name, separated by a tab.
@@ -14,9 +16,37 @@ use std::time::{Duration, Instant};
 
 use crate::{Error, Exit, Hypervisor, Program, Result};
 
-/// Where the guest template has `losos-guest-run`. The agent's own `PATH`
-/// is not a login's, so the path is spelled out.
-pub const GUEST_RUN: &str = "/run/current-system/sw/bin/losos-guest-run";
+/// Where `losos-guest-run` is: the guest template's system profile, then
+/// where the Linux tools CD puts it in another distribution. The agent's own
+/// `PATH` is not a login's, so the paths are spelled out.
+pub const GUEST_RUN: [&str; 2] = [
+    "/run/current-system/sw/bin/losos-guest-run",
+    "/usr/local/bin/losos-guest-run",
+];
+
+/// The guest program that runs the first of [`GUEST_RUN`] there is with
+/// `args`. The agent runs one path and cannot look for it, so `/bin/sh`,
+/// which every Linux has there, does the looking; exit status 127 and a
+/// line on stderr say that neither is installed.
+fn guest_run(args: &[&str]) -> Program {
+    let mut script = String::from("for run in");
+    for path in GUEST_RUN {
+        script.push(' ');
+        script.push_str(path);
+    }
+    script.push_str(
+        "; do [ -x \"$run\" ] && exec \"$run\" \"$@\"; done; \
+         echo 'losos-guest-run is not installed: run setup.sh from the LosOS tools CD' >&2; exit 127",
+    );
+    let mut all = vec!["-c".to_owned(), script, "losos-guest-run".to_owned()];
+    all.extend(args.iter().map(|&arg| arg.to_owned()));
+    Program {
+        path: "/bin/sh".into(),
+        args: all,
+        env: Vec::new(),
+        capture_output: true,
+    }
+}
 
 /// How long a machine that was off may take to boot far enough to answer.
 const BOOT_WAIT: Duration = Duration::from_secs(120);
@@ -37,21 +67,13 @@ impl Hypervisor {
     /// The apps `machine` can open, by name. It must be running with its
     /// guest agent up.
     pub fn guest_apps(&self, machine: &str) -> Result<Vec<GuestApp>> {
-        let pid = self.spawn(
-            machine,
-            &Program {
-                path: GUEST_RUN.into(),
-                args: vec!["--list".into()],
-                env: Vec::new(),
-                capture_output: true,
-            },
-        )?;
-        let exit = self.wait(machine, pid, LIST_WAIT, &format!("{GUEST_RUN} --list"))?;
+        let pid = self.spawn(machine, &guest_run(&["--list"]))?;
+        let exit = self.wait(machine, pid, LIST_WAIT, "losos-guest-run --list")?;
         if !exit.success() {
             return Err(Error::Agent {
                 name: machine.into(),
                 reply: format!(
-                    "{GUEST_RUN} --list failed: {}",
+                    "losos-guest-run --list failed: {}",
                     String::from_utf8_lossy(&exit.stderr).trim()
                 ),
             });
@@ -76,19 +98,11 @@ impl Hypervisor {
             }
             std::thread::sleep(Duration::from_secs(1));
         }
-        let pid = self.spawn(
-            machine,
-            &Program {
-                path: GUEST_RUN.into(),
-                args: vec![app.into()],
-                env: Vec::new(),
-                capture_output: true,
-            },
-        )?;
+        let pid = self.spawn(machine, &guest_run(&[app]))?;
         // It returns as soon as the app's unit has started, so this is a
         // moment's wait, and it is how an app the guest lacks is told apart
         // from one that opened.
-        let exit = self.wait(machine, pid, LIST_WAIT, &format!("{GUEST_RUN} {app}"))?;
+        let exit = self.wait(machine, pid, LIST_WAIT, &format!("losos-guest-run {app}"))?;
         if exit.success() {
             Ok(())
         } else {
@@ -134,6 +148,32 @@ pub fn parse_apps(list: &str) -> impl Iterator<Item = GuestApp> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn looks_for_guest_run_in_the_template_then_the_tools_cds_place() {
+        let program = guest_run(&["org.derisk.files"]);
+        assert_eq!(program.path, "/bin/sh");
+        assert_eq!(program.args[0], "-c");
+        let script = &program.args[1];
+        let template = script.find(GUEST_RUN[0]).unwrap();
+        let tools = script.find(GUEST_RUN[1]).unwrap();
+        assert!(template < tools, "{script}");
+        assert!(script.contains("exit 127"), "{script}");
+        // $0, then the app, as "$@".
+        assert_eq!(program.args[2..], ["losos-guest-run", "org.derisk.files"]);
+    }
+
+    #[test]
+    fn a_guest_without_guest_run_is_told_how_to_get_it() {
+        let program = guest_run(&["--list"]);
+        let out = std::process::Command::new(&program.path)
+            .args(&program.args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(127));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("LosOS tools CD"), "{err}");
+    }
 
     #[test]
     fn lists_apps() {

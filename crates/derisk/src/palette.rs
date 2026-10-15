@@ -307,7 +307,18 @@ pub fn view(shell: &Shell, apps: &[App]) -> View {
             });
         }
         let window_menu = menu::window_menu();
+        // Keeping a window on top is refused for an untrusted machine's, so
+        // the palette does not offer it.
+        let untrusted = shell.is_untrusted(w);
         flatten(&window_menu.entries, "Window", &mut |id, path, shortcut| {
+            if untrusted
+                && matches!(
+                    menu::shell_action(id, w.get()),
+                    Some(Action::KeepOnTop { .. })
+                )
+            {
+                return;
+            }
             if let Some(action) = menu::shell_action(id, w.get()) {
                 menus.push(command(path, shortcut, true, action));
             }

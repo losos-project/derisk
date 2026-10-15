@@ -97,6 +97,14 @@ fn clause(text: &str) -> Result<Action, NotUnderstood> {
             }
             Action::Launch { app: app.join("-") }
         }
+        "keep" | "pin" if has("top") => Action::KeepOnTop {
+            window: None,
+            on: Some(true),
+        },
+        "unpin" => Action::KeepOnTop {
+            window: None,
+            on: Some(false),
+        },
         "close" | "quit" | "kill" => Action::Close { window: None },
         "minimize" | "minimise" | "hide" if !has("overview") => Action::Minimize { window: None },
         "maximize" | "maximise" | "fullscreen" => Action::ToggleMaximize { window: None },

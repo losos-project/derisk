@@ -1,8 +1,9 @@
 //! The session's side of virtual machines' windows (`derisk_machines::display`):
 //! a compositor socket and a waypipe client for each running machine, the
 //! vsock gate that hands each guest's connection to its machine's, opening
-//! apps in a machine when the settings say apps open there, and what the
-//! palette and the overview show of the machines.
+//! apps in a machine when the settings say apps open there, a machine's own
+//! screen in a window while it has one, and what the palette and the
+//! overview show of the machines.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -60,6 +61,9 @@ enum Order {
     Apps(String),
 }
 
+/// The URI virt-viewer reaches pm's machines at.
+const LIBVIRT_URI: &str = "qemu:///system";
+
 /// Machines and their windows' plumbing, for one session.
 pub struct MachineDisplays {
     sockets: Sockets,
@@ -82,6 +86,13 @@ pub struct MachineDisplays {
     /// until they stop: waypipe is missing, and saying so every second
     /// helps nobody.
     failed: HashSet<String>,
+    /// The virt-viewer showing the screen of each running machine that has
+    /// one (an installer's, or Windows' whole desktop).
+    viewers: HashMap<String, Child>,
+    /// Running machines whose screen is not shown: its window was closed,
+    /// or virt-viewer could not start. Shown again when the palette asks,
+    /// or the next time the machine starts.
+    hidden: HashSet<String>,
 }
 
 impl MachineDisplays {
@@ -149,6 +160,8 @@ impl MachineDisplays {
             asked: HashMap::new(),
             clients: HashMap::new(),
             failed: HashSet::new(),
+            viewers: HashMap::new(),
+            hidden: HashSet::new(),
         })
     }
 
@@ -172,11 +185,20 @@ impl MachineDisplays {
     }
 
     /// Carries out a pick from the palette's machine rows or a press on
-    /// the overview's machines card: `op` is `open` (with `app`), `start`
-    /// or `shut_down`. False when there is no such machine or `op`.
-    pub fn act(&self, op: &str, machine: &str, app: Option<&str>) -> bool {
-        if self.machine(machine).is_none() {
+    /// the overview's machines card: `op` is `open` (with `app`), `start`,
+    /// `shut_down` or `screen`. False when there is no such machine or `op`.
+    pub fn act(&mut self, op: &str, machine: &str, app: Option<&str>) -> bool {
+        let Some(found) = self.machine(machine) else {
             return false;
+        };
+        if op == "screen" {
+            // The next poll opens it, as it does for a machine that just
+            // started.
+            let shown = found.screen && found.state.is_active();
+            if shown {
+                self.hidden.remove(machine);
+            }
+            return shown;
         }
         let order = match (op, app) {
             ("open", Some(app)) => Order::Open {
@@ -236,6 +258,10 @@ impl MachineDisplays {
             }
             Err(_) => false,
         });
+        // Before the loop below opens new machines' sockets: a machine's
+        // screen is shown on its socket, so it waits for the poll after the
+        // compositor has made it.
+        self.show_screens();
         let wanted: Vec<&Machine> = self
             .machines
             .iter()
@@ -256,6 +282,14 @@ impl MachineDisplays {
             }
             let _ = std::fs::remove_file(self.sockets.waypipe(&name));
             commands.push(Command::CloseSandbox(self.sockets.wayland(&name)));
+            // Its viewer waits for it to start again (`--reconnect`), but
+            // shows nothing meanwhile; and a screen hidden while it ran is
+            // shown when it starts again.
+            if let Some(mut child) = self.viewers.remove(&name) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            self.hidden.remove(&name);
             info!(
                 machine = name,
                 "machine stopped; its windows' socket is closed"
@@ -300,6 +334,22 @@ impl MachineDisplays {
     }
 }
 
+/// virt-viewer on `machine`'s screen, a client of `socket`.
+fn viewer(machine: &str, socket: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("virt-viewer");
+    command
+        .args(["--connect", LIBVIRT_URI, "--attach", "--reconnect", "--"])
+        .arg(machine)
+        // An absolute WAYLAND_DISPLAY is used as the socket's path, and GTK
+        // would take an X display over it if it had one.
+        .env("WAYLAND_DISPLAY", socket)
+        .env("GDK_BACKEND", "wayland")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("DISPLAY")
+        .stdin(Stdio::null());
+    command
+}
+
 /// What [`MachineDisplays::palette`] says of `machines` and their `apps`.
 fn palette(machines: &[Machine], apps: &HashMap<String, Vec<GuestApp>>) -> Value {
     let machines: Vec<Value> = machines
@@ -315,6 +365,7 @@ fn palette(machines: &[Machine], apps: &HashMap<String, Vec<GuestApp>>) -> Value
                 "name": m.name,
                 "label": m.label.name(),
                 "running": m.state.is_active(),
+                "screen": m.screen,
                 "apps": apps,
             })
         })
@@ -358,8 +409,59 @@ fn card(machines: &[Machine]) -> Option<CustomWidget> {
 }
 
 impl MachineDisplays {
+    /// Opens a virt-viewer on the screen of each running machine that has
+    /// one, its socket open and its screen not hidden, and notes which
+    /// viewers were closed.
+    ///
+    /// virt-viewer is a client of the machine's own socket, not the
+    /// session's, so its window is framed in the machine's colour like the
+    /// machine's apps' windows are, and whatever the compositor holds back
+    /// from an untrusted machine it holds back from its screen too.
+    fn show_screens(&mut self) {
+        let mut closed = Vec::new();
+        self.viewers.retain(|name, child| match child.try_wait() {
+            Ok(None) => true,
+            _ => {
+                closed.push(name.clone());
+                false
+            }
+        });
+        for name in closed {
+            info!(machine = name, "machine's screen closed");
+            self.hidden.insert(name);
+        }
+        let screens: Vec<String> = self
+            .machines
+            .iter()
+            .filter(|m| m.screen && m.state.is_active() && display::has_display(m))
+            .map(|m| m.name.clone())
+            .collect();
+        for name in &screens {
+            let socket = self.sockets.wayland(name);
+            if self.viewers.contains_key(name)
+                || self.hidden.contains(name)
+                || !self.clients.contains_key(name)
+                || !socket.exists()
+            {
+                continue;
+            }
+            match viewer(name, &socket).spawn() {
+                Ok(child) => {
+                    info!(machine = name, "showing the machine's screen");
+                    self.viewers.insert(name.clone(), child);
+                }
+                Err(e) => {
+                    warn!(machine = name, error = %e, "cannot start virt-viewer");
+                    self.hidden.insert(name.clone());
+                }
+            }
+        }
+    }
+
     /// Forgets the apps of machines that stopped, and asks the running ones
-    /// that have not answered lately which apps they have.
+    /// that have not answered lately which apps they have. Windows machines
+    /// are not asked: their apps open through WinApps, not the guest
+    /// agent, which has no `losos-guest-run` to run there.
     fn ask_for_apps(&mut self) {
         let running: HashSet<&str> = self
             .machines
@@ -369,7 +471,11 @@ impl MachineDisplays {
             .collect();
         self.apps.retain(|name, _| running.contains(name.as_str()));
         self.asked.retain(|name, _| running.contains(name.as_str()));
-        for name in running {
+        for machine in &self.machines {
+            let name = machine.name.as_str();
+            if !running.contains(name) || machine.is_windows() {
+                continue;
+            }
             let wait = if self.apps.contains_key(name) {
                 APPS_FRESH
             } else {
@@ -433,6 +539,10 @@ fn carry_out(orders: &Receiver<Order>, listed: &Sender<(String, Vec<GuestApp>)>)
 
 impl Drop for MachineDisplays {
     fn drop(&mut self) {
+        for (_, mut child) in self.viewers.drain() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         for (name, mut child) in self.clients.drain() {
             let _ = child.kill();
             let _ = child.wait();
@@ -443,6 +553,8 @@ impl Drop for MachineDisplays {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use derisk_machines::{Label, State};
 
     use super::*;
@@ -453,6 +565,8 @@ mod tests {
             uuid: String::new(),
             label,
             template: None,
+            system: None,
+            screen: false,
             memory_mib: 2048,
             cpus: 2,
             state,
@@ -476,11 +590,35 @@ mod tests {
         assert_eq!(
             palette(&machines, &apps),
             json!({"machines": [
-                {"name": "work", "label": "blue", "running": true,
+                {"name": "work", "label": "blue", "running": true, "screen": false,
                  "apps": [{"id": "foot", "name": "Foot"}]},
-                {"name": "web", "label": "red", "running": false, "apps": []},
+                {"name": "web", "label": "red", "running": false, "screen": false,
+                 "apps": []},
             ]})
         );
+    }
+
+    #[test]
+    fn a_screen_is_shown_on_its_machines_socket_and_nowhere_else() {
+        let socket = std::path::Path::new("/run/user/1000/derisk/machines/win.wayland");
+        let command = viewer("win", socket);
+        assert_eq!(command.get_program(), "virt-viewer");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "--connect",
+                LIBVIRT_URI,
+                "--attach",
+                "--reconnect",
+                "--",
+                "win"
+            ]
+        );
+        let env: HashMap<&OsStr, Option<&OsStr>> = command.get_envs().collect();
+        assert_eq!(env[OsStr::new("WAYLAND_DISPLAY")], Some(socket.as_os_str()));
+        assert_eq!(env[OsStr::new("GDK_BACKEND")], Some(OsStr::new("wayland")));
+        assert_eq!(env[OsStr::new("DISPLAY")], None);
     }
 
     #[test]
