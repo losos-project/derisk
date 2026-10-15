@@ -27,6 +27,8 @@ const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "webm", "mkv", "mov", "gif"];
 #[derive(Debug, Default)]
 pub(crate) struct Drafts {
     path: String,
+    /// The lock screen's picture as typed.
+    lock_path: String,
     chords: Vec<String>,
     /// Files and folders offered for the current wallpaper kind.
     candidates: Option<(WallpaperKind, Vec<PathBuf>)>,
@@ -37,6 +39,7 @@ impl Drafts {
     pub(crate) fn new(settings: &Settings) -> Self {
         Self {
             path: settings.wallpaper.path.display().to_string(),
+            lock_path: settings.wallpaper.lock_screen.display().to_string(),
             chords: Shortcut::ALL
                 .iter()
                 .map(|s| chord_text(settings.shortcuts.get(*s)))
@@ -196,6 +199,49 @@ pub(crate) fn wallpaper(
             ui,
             theme,
             "Videos loop without sound. They are decoded by ffmpeg at up to 30 fps.",
+        );
+    }
+    lock_screen_rows(ui, w, drafts, theme);
+}
+
+/// The lock screen's picture: a path, or empty for derisk's gradient.
+fn lock_screen_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &Theme) {
+    ui.label("Lock screen");
+    ui.horizontal_wrapped(|ui| {
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut drafts.lock_path)
+                .hint_text("Empty for derisk's gradient")
+                .desired_width(ui.spacing().text_edit_width),
+        );
+        let typed = PathBuf::from(drafts.lock_path.trim());
+        if edit.changed() && (drafts.lock_path.trim().is_empty() || typed.is_absolute()) {
+            w.lock_screen = typed;
+        }
+        let desktop = w.kind == WallpaperKind::Image && !w.path.as_os_str().is_empty();
+        if desktop && w.lock_screen != w.path && ui.button("Use the background").clicked() {
+            w.lock_screen = w.path.clone();
+            drafts.lock_path = w.path.display().to_string();
+        }
+        if !w.lock_screen.as_os_str().is_empty() && ui.button("Gradient").clicked() {
+            w.lock_screen = PathBuf::new();
+            drafts.lock_path.clear();
+        }
+    });
+    ui.end_row();
+    let typed = drafts.lock_path.trim();
+    if !typed.is_empty() && !Path::new(typed).is_absolute() {
+        hint(ui, theme, "Type a full path, starting with /.");
+    } else if !w.lock_screen.as_os_str().is_empty() && !derisk_sys::fs::exists(&w.lock_screen) {
+        hint(
+            ui,
+            theme,
+            "Nothing is there yet; the gradient shows instead.",
+        );
+    } else {
+        hint(
+            ui,
+            theme,
+            "A picture fills the screen, darkened so the clock stays readable.",
         );
     }
 }

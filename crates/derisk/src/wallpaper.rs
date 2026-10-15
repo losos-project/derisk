@@ -371,6 +371,21 @@ enum Source {
     Failed,
 }
 
+/// What the lock screen shows: its own picture, filling the screen, or
+/// derisk's gradient when none is set. It is a second painter beside the
+/// desktop's, so locking never reloads the desktop's video or slideshow.
+pub fn lock_screen(c: &Wallpaper) -> Wallpaper {
+    if c.lock_screen.as_os_str().is_empty() {
+        return Wallpaper::default();
+    }
+    Wallpaper {
+        kind: WallpaperKind::Image,
+        path: c.lock_screen.clone(),
+        fit: Fit::Fill,
+        ..Wallpaper::default()
+    }
+}
+
 /// Paints the configured wallpaper.
 pub struct WallpaperPainter {
     config: Wallpaper,

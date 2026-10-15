@@ -268,3 +268,22 @@ fn control_socket_round_trip() {
     drop(control);
     assert_eq!(fs::read_dir(&client_dir).unwrap().count(), 0);
 }
+
+#[test]
+fn saved_networks_list_with_their_ids() {
+    let reply = "network id / ssid / bssid / flags\n\
+        0\thome\tany\t[CURRENT]\n\
+        1\tmy\\x20net\tany\t[DISABLED]\n\
+        2\tcafe\tany\t\n\
+        garbage\n";
+    let saved = network::parse_list_networks(reply);
+    let seen: Vec<_> = saved.iter().map(|s| (s.id, s.name(), s.current)).collect();
+    assert_eq!(
+        seen,
+        [
+            (0, "home".to_string(), true),
+            (1, "my net".to_string(), false),
+            (2, "cafe".to_string(), false)
+        ]
+    );
+}

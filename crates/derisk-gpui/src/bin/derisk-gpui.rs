@@ -7,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 /// `derisk-gpui` takes exactly one app ID, or `ask` and a question.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
 #[error(
-    "usage: derisk-gpui <app-id> | derisk-gpui ask --title <question> [--subtitle, --body, --grant, --deny, --app, --parent <value>]"
+    "usage: derisk-gpui <app-id> | derisk-gpui ask --title <question> [--subtitle, --body, --grant, --deny, --app, --parent <value>] | derisk-gpui pick color|area --image <png> [--app <name>]"
 )]
 #[diagnostic(code(derisk_gpui::usage))]
 struct Usage {
@@ -15,9 +15,9 @@ struct Usage {
     apps: String,
 }
 
-/// `derisk-gpui ask` was given options it cannot read.
+/// `derisk-gpui ask` or `pick` was given options it cannot read.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
-#[error("derisk-gpui ask: {0}")]
+#[error("derisk-gpui: {0}")]
 #[diagnostic(code(derisk_gpui::ask_usage))]
 struct AskUsage(String);
 
@@ -33,6 +33,18 @@ fn main() -> miette::Result<()> {
         } else {
             1
         });
+    }
+    if args.peek().map(String::as_str) == Some("pick") {
+        let pick = derisk_gpui::pick::Pick::from_args(args.skip(1)).map_err(AskUsage)?;
+        // The portal reads the answer from stdout and whether there is one
+        // from the exit status.
+        match derisk_gpui::pick::pick(pick) {
+            Some(answer) => {
+                println!("{answer}");
+                std::process::exit(0);
+            }
+            None => std::process::exit(1),
+        }
     }
     let id = match (args.next(), args.next()) {
         (Some(id), None) if !id.starts_with('-') => id,

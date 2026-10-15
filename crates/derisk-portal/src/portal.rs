@@ -35,7 +35,7 @@ use crate::{
     access::{self, Question},
     agent,
     appearance::{self, Appearance},
-    files,
+    files, pick,
 };
 
 /// The object path every portal interface lives at.
@@ -160,13 +160,30 @@ impl ScreenshotImpl for Screenshots {
         window_identifier: Option<WindowIdentifierType>,
         options: ScreenshotOptions,
     ) -> Result<Screenshot> {
+        let app = app_name(app_id.as_ref());
+        let interactive = options.interactive() == Some(true);
+        // An interactive screenshot is the person's to frame: derisk's
+        // picker shows the screen frozen and shares only what they drag
+        // over, or all of it on Enter, which is also their consent.
+        if interactive && let Some(program) = access::dialog_program() {
+            let capture = capture().await?;
+            let mut command = tokio::process::Command::new(&program);
+            command.args(pick::args("area", &capture, &app));
+            let Some(pick::Picked::Area(x, y, w, h)) = picked(&token, command).await? else {
+                return Err(PortalError::Cancelled("no area was picked".into()));
+            };
+            let area = capture.with_extension("area.png");
+            pick::crop(&capture, (x, y, w, h), &area).map_err(failed)?;
+            let kept = keep(&area);
+            let _ = std::fs::remove_file(&area);
+            return kept;
+        }
         // The frontend asks before a non-interactive screenshot and says so
         // in `permission_store_checked`. An interactive one is left to the
-        // backend, so ask here; there is no area or window picker yet, and
-        // the answer covers the whole screen.
+        // backend, so without the picker, ask here; the answer covers the
+        // whole screen.
         let asked = options.permission_store_checked() == Some(true);
-        if !asked && options.interactive() == Some(true) {
-            let app = app_name(app_id.as_ref());
+        if !asked && interactive {
             let parent = window_identifier.map(|w| w.to_string()).unwrap_or_default();
             let id = app_id.as_ref().map(ToString::to_string).unwrap_or_default();
             let granted = access::ask(
@@ -188,32 +205,65 @@ impl ScreenshotImpl for Screenshots {
                 return Err(PortalError::Cancelled("the screenshot was declined".into()));
             }
         }
-        let result = agent::call(json!({"method": "screenshot"}))
-            .await
-            .map_err(PortalError::Failed)?;
-        let capture = result["path"]
-            .as_str()
-            .ok_or_else(|| failed("the session returned no screenshot"))?;
-        let (home, config) = files::home_and_config().ok_or_else(|| failed("HOME is not set"))?;
-        let kept = files::keep_screenshot(Path::new(capture), &files::pictures_dir(&home, &config))
-            .map_err(failed)?;
-        let uri = Uri::parse(&files::uri_from_path(&kept)).map_err(failed)?;
-        Ok(Screenshot::new(uri))
+        keep(&capture().await?)
     }
 
     async fn pick_color(
         &self,
-        _token: HandleToken,
-        _app_id: Option<MaybeAppID>,
+        token: HandleToken,
+        app_id: Option<MaybeAppID>,
         _window_identifier: Option<WindowIdentifierType>,
         _options: ColorOptions,
     ) -> Result<Color> {
-        // Needs a pointer the person moves over the screen, which the
-        // compositor does not offer the portal yet.
-        Err(PortalError::NotAllowed(
-            "derisk cannot pick a color from the screen yet".into(),
-        ))
+        // The person points at the color on a frozen picture of the screen.
+        // Nothing else leaves: the app gets three numbers.
+        let program = access::dialog_program().ok_or_else(|| {
+            PortalError::NotAllowed("derisk-gpui, which picks colors, is not installed".into())
+        })?;
+        let capture = capture().await?;
+        let mut command = tokio::process::Command::new(&program);
+        command.args(pick::args("color", &capture, &app_name(app_id.as_ref())));
+        let Some(pick::Picked::Point(x, y)) = picked(&token, command).await? else {
+            return Err(PortalError::Cancelled("no color was picked".into()));
+        };
+        let [r, g, b] = pick::color_at(&capture, x, y).map_err(failed)?;
+        Ok(Color::new(r, g, b))
     }
+}
+
+/// A screenshot of the whole screen from the session, in the runtime
+/// directory where the session keeps its last few.
+async fn capture() -> Result<std::path::PathBuf> {
+    let result = agent::call(json!({"method": "screenshot"}))
+        .await
+        .map_err(PortalError::Failed)?;
+    result["path"]
+        .as_str()
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| failed("the session returned no screenshot"))
+}
+
+/// Copies a screenshot into the pictures folder, where the app is handed it.
+fn keep(capture: &Path) -> Result<Screenshot> {
+    let (home, config) = files::home_and_config().ok_or_else(|| failed("HOME is not set"))?;
+    let kept =
+        files::keep_screenshot(capture, &files::pictures_dir(&home, &config)).map_err(failed)?;
+    let uri = Uri::parse(&files::uri_from_path(&kept)).map_err(failed)?;
+    Ok(Screenshot::new(uri))
+}
+
+/// Runs the picker for the request `token`: what it picked, or `None` when
+/// the person cancelled or the app withdrew the request.
+async fn picked(
+    token: &HandleToken,
+    command: tokio::process::Command,
+) -> Result<Option<pick::Picked>> {
+    let ran = access::run_closable(&token.to_string(), command)
+        .await
+        .map_err(failed)?;
+    Ok(ran
+        .filter(|(ok, _)| *ok)
+        .and_then(|(_, line)| pick::parse(&line)))
 }
 
 /// `org.freedesktop.impl.portal.Wallpaper`: a picture as the desktop
@@ -240,12 +290,13 @@ impl WallpaperImpl for Wallpaper {
         uri: Uri,
         options: WallpaperOptions,
     ) -> Result<()> {
-        // The lock screen draws derisk's own gradient, never a picture.
-        if options.set_on() == Some(SetOn::Lockscreen) {
-            return Err(PortalError::NotAllowed(
-                "derisk's lock screen does not show a picture".into(),
-            ));
-        }
+        let set_on = options.set_on().unwrap_or(SetOn::Background);
+        let (desktop, lock) = (set_on != SetOn::Lockscreen, set_on != SetOn::Background);
+        let target = match set_on {
+            SetOn::Background => "the desktop background",
+            SetOn::Lockscreen => "the lock screen's picture",
+            SetOn::Both => "the desktop background and the lock screen's picture",
+        };
         let picture = files::path_from_uri(uri.as_str())
             .ok_or_else(|| PortalError::InvalidArgument(format!("not a local file: {uri}")))?;
         // Without a preview the frontend has already asked; with one, the
@@ -266,7 +317,7 @@ impl WallpaperImpl for Wallpaper {
                     app: &app,
                     parent_window: &parent,
                     title: "Change the background?",
-                    subtitle: &format!("{app} wants to set {name} as the desktop background."),
+                    subtitle: &format!("{app} wants to set {name} as {target}."),
                     body: "You can change it back in Settings, under Wallpaper.",
                     grant_label: "Set Background",
                 },
@@ -278,12 +329,21 @@ impl WallpaperImpl for Wallpaper {
             }
         }
         let data = files::data_home().ok_or_else(|| failed("HOME is not set"))?;
-        let installed = files::install_wallpaper(&picture, &data.join("derisk").join("wallpapers"))
-            .map_err(|e| PortalError::InvalidArgument(e.to_string()))?;
+        // Each gets its own folder: installing one removes the previous
+        // copy in its folder, which must not be the other's picture.
+        let install = |folder: &str| {
+            files::install_wallpaper(&picture, &data.join("derisk").join(folder))
+                .map_err(|e| PortalError::InvalidArgument(e.to_string()))
+        };
         let path = derisk_settings::default_path().ok_or_else(|| failed("HOME is not set"))?;
         let (mut settings, _warnings) = derisk_settings::Settings::load(&path).map_err(failed)?;
-        settings.wallpaper.kind = derisk_settings::WallpaperKind::Image;
-        settings.wallpaper.path = installed;
+        if desktop {
+            settings.wallpaper.kind = derisk_settings::WallpaperKind::Image;
+            settings.wallpaper.path = install("wallpapers")?;
+        }
+        if lock {
+            settings.wallpaper.lock_screen = install("lock-screen")?;
+        }
         // The session polls the file and repaints within a second.
         settings.save(&path).map_err(failed)
     }

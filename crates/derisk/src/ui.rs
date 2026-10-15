@@ -17,7 +17,7 @@
 
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use derisk_settings::BarPosition;
+use derisk_settings::{BarPosition, WallpaperKind};
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
     Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui,
@@ -45,6 +45,7 @@ use crate::{
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
     time::Clock,
+    wallpaper::{Visibility, WallpaperPainter},
     widgets::Board,
 };
 use derisk_plugin::widget::{Card, Emphasis, Inline, Part, Text, Tone};
@@ -3537,16 +3538,24 @@ pub fn paint_wallpaper(painter: &Painter, screen: Rect, theme: &Theme) {
     );
 }
 
-/// The lock screen and the greeter share one look: the wallpaper over the
-/// whole output, the clock, and a centered column below it that `add` fills.
-/// Everything is opaque, so nothing behind shows through.
-fn login_panel(ui: &mut Ui, screen: Rect, clock: &Clock, theme: &Theme, add: impl FnOnce(&mut Ui)) {
+/// The lock screen and the greeter share one look: a background over the
+/// whole output that `background` paints, the clock, and a centered column
+/// below it that `add` fills. Everything is opaque, so nothing behind shows
+/// through.
+fn login_panel(
+    ui: &mut Ui,
+    screen: Rect,
+    clock: &Clock,
+    theme: &Theme,
+    background: impl FnOnce(&Painter, Rect),
+    add: impl FnOnce(&mut Ui),
+) {
     let painter = ui.ctx().layer_painter(egui::LayerId::new(
         Order::Background,
         Id::new("derisk-lock-bg"),
     ));
     painter.rect_filled(screen, 0, theme.background);
-    paint_wallpaper(&painter, screen, theme);
+    background(&painter, screen);
     egui::Area::new(Id::new("derisk-lock"))
         .order(Order::Foreground)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
@@ -3607,30 +3616,46 @@ pub fn show_lock(
     shell: &Shell,
     theme: &Theme,
     user: &str,
+    picture: &mut WallpaperPainter,
 ) -> bool {
     let mut submit = false;
-    login_panel(ui, to_rect(shell.output()), &shell.clock, theme, |ui| {
-        ui.label(RichText::new(user).size(20.0).strong());
-        ui.add_space(8.0);
-        let login = &mut lock.login;
-        let editable = login.editable();
-        let hint = login.hint().to_owned();
-        match login.phase().clone() {
-            Phase::Prompt { secret, .. } => {
-                login_field(ui, &mut login.answer, true, secret, &hint);
-            }
-            // Stopped (PAM could not ask at all) or waiting: an empty field
-            // keeps the column still, and Enter on a stopped one starts over.
-            _ => {
-                let mut nothing = String::new();
-                login_field(ui, &mut nothing, false, true, &hint);
-            }
+    let background = |painter: &Painter, screen: Rect| {
+        picture.paint(painter, screen, theme, Visibility::default());
+        // A picture can be any brightness; darken it so the clock and the
+        // field read the same over it as over the gradient.
+        if picture.config().kind == WallpaperKind::Image {
+            painter.rect_filled(screen, 0, Color32::from_black_alpha(110));
         }
-        submit = editable && ui.input(|i| i.key_pressed(Key::Enter));
-        ui.add_space(8.0);
-        let (text, error) = lock.message();
-        login_status(ui, text, error, theme);
-    });
+    };
+    login_panel(
+        ui,
+        to_rect(shell.output()),
+        &shell.clock,
+        theme,
+        background,
+        |ui| {
+            ui.label(RichText::new(user).size(20.0).strong());
+            ui.add_space(8.0);
+            let login = &mut lock.login;
+            let editable = login.editable();
+            let hint = login.hint().to_owned();
+            match login.phase().clone() {
+                Phase::Prompt { secret, .. } => {
+                    login_field(ui, &mut login.answer, true, secret, &hint);
+                }
+                // Stopped (PAM could not ask at all) or waiting: an empty field
+                // keeps the column still, and Enter on a stopped one starts over.
+                _ => {
+                    let mut nothing = String::new();
+                    login_field(ui, &mut nothing, false, true, &hint);
+                }
+            }
+            submit = editable && ui.input(|i| i.key_pressed(Key::Enter));
+            ui.add_space(8.0);
+            let (text, error) = lock.message();
+            login_status(ui, text, error, theme);
+        },
+    );
     // Both conversations answer between frames, the reader's whenever a
     // finger lands, so keep looking for them while locked.
     ui.ctx()
@@ -3865,7 +3890,10 @@ pub fn show_greeter(
 ) -> (GreeterInput, Option<Rect>) {
     let mut input = GreeterInput::None;
     let mut field = None;
-    login_panel(ui, screen, clock, theme, |ui| {
+    // The greeter runs before anyone has logged in, so it has no one's
+    // settings to take a picture from.
+    let background = |painter: &Painter, screen: Rect| paint_wallpaper(painter, screen, theme);
+    login_panel(ui, screen, clock, theme, background, |ui| {
         let editable = login.editable();
         match login.phase().clone() {
             Phase::User => {
