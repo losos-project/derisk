@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use mcsapi_ui::{Theme, egui};
 
 use crate::{
-    model::{BarPosition, Fit, Rgb, Settings, TopBar, Wallpaper, WallpaperKind},
+    model::{
+        BarPosition, Fit, Rgb, Settings, TopBar, Wallpaper, WallpaperKind, web_background_url,
+    },
     shortcuts::{Chord, Shortcut, Shortcuts},
     thumbs::Thumbnails,
 };
@@ -27,6 +29,8 @@ const VIDEO_EXTENSIONS: [&str; 5] = ["mp4", "webm", "mkv", "mov", "gif"];
 #[derive(Debug, Default)]
 pub(crate) struct Drafts {
     path: String,
+    /// The web page's address as typed.
+    url: String,
     /// The lock screen's picture as typed.
     lock_path: String,
     chords: Vec<String>,
@@ -39,6 +43,7 @@ impl Drafts {
     pub(crate) fn new(settings: &Settings) -> Self {
         Self {
             path: settings.wallpaper.path.display().to_string(),
+            url: settings.wallpaper.url.clone(),
             lock_path: settings.wallpaper.lock_screen.display().to_string(),
             chords: Shortcut::ALL
                 .iter()
@@ -175,6 +180,7 @@ pub(crate) fn wallpaper(
                 color_row(ui, "Bars", &mut w.color);
             }
         }
+        WallpaperKind::Web => url_rows(ui, w, drafts, theme),
     }
     if w.kind == WallpaperKind::Slideshow {
         ui.label("Change every");
@@ -188,13 +194,15 @@ pub(crate) fn wallpaper(
         ui.checkbox(&mut w.shuffle, "Shuffle");
         ui.end_row();
     }
-    if w.kind == WallpaperKind::Video {
+    if matches!(w.kind, WallpaperKind::Video | WallpaperKind::Web) {
         ui.label("Pause");
         ui.vertical(|ui| {
             ui.checkbox(&mut w.pause_when_covered, "While a window fills the screen");
             ui.checkbox(&mut w.pause_in_low_power, "In low power mode");
         });
         ui.end_row();
+    }
+    if w.kind == WallpaperKind::Video {
         hint(
             ui,
             theme,
@@ -202,6 +210,39 @@ pub(crate) fn wallpaper(
         );
     }
     lock_screen_rows(ui, w, drafts, theme);
+}
+
+/// The web page's address: http(s), a file:/// URL, or a file's full path.
+fn url_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &Theme) {
+    ui.label("Address");
+    let edit = ui.add(
+        egui::TextEdit::singleline(&mut drafts.url)
+            .hint_text("https://example.org/ or /home/you/page/index.html")
+            .desired_width(ui.spacing().text_edit_width),
+    );
+    let typed = drafts.url.trim();
+    // A full path is a local page.
+    let url = if typed.starts_with('/') {
+        format!("file://{typed}")
+    } else {
+        typed.to_owned()
+    };
+    let valid = typed.is_empty() || web_background_url(&url);
+    if edit.changed() && valid {
+        w.url = url;
+    }
+    ui.end_row();
+    hint(
+        ui,
+        theme,
+        if !valid {
+            "Type an address starting with https:// or http://, or a full path."
+        } else {
+            "Danube draws the page behind every window, without sound, \
+             keyboard or pointer, and with nothing of your browser's. If it \
+             fails to load, the default shows instead."
+        },
+    );
 }
 
 /// The lock screen's picture: a path, or empty for derisk's gradient.
@@ -384,6 +425,10 @@ fn preview(
         WallpaperKind::Gradient => {
             gradient(w.color.color(), w.color2.color());
             None
+        }
+        WallpaperKind::Web => {
+            default();
+            Some("Web page")
         }
         WallpaperKind::Image | WallpaperKind::Slideshow | WallpaperKind::Video => {
             match thumbs.get(ui.ctx(), &w.path) {

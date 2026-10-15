@@ -311,17 +311,20 @@ pub enum WallpaperKind {
     Slideshow,
     /// A looping video, decoded by ffmpeg.
     Video,
+    /// A web page, drawn by Danube.
+    Web,
 }
 
 impl WallpaperKind {
     /// Every kind, in display order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Default,
         Self::Color,
         Self::Gradient,
         Self::Image,
         Self::Slideshow,
         Self::Video,
+        Self::Web,
     ];
 
     /// The kind's label in the Settings app.
@@ -333,8 +336,20 @@ impl WallpaperKind {
             Self::Image => "Picture",
             Self::Slideshow => "Slideshow",
             Self::Video => "Video",
+            Self::Web => "Web page",
         }
     }
+}
+
+/// Whether `url` can be a web page background: an http(s) address or a
+/// local file (`file:///…`). Nothing else: the settings file is plain
+/// text a program could write, and `javascript:` or `data:` make no
+/// background.
+pub fn web_background_url(url: &str) -> bool {
+    !url.chars().any(char::is_whitespace)
+        && ["https://", "http://", "file:///"]
+            .iter()
+            .any(|scheme| url.len() > scheme.len() && url.starts_with(scheme))
 }
 
 /// How a picture or video fills a screen of a different shape.
@@ -420,6 +435,8 @@ pub struct Wallpaper {
     pub kind: WallpaperKind,
     /// The picture or video file, or the slideshow's folder.
     pub path: PathBuf,
+    /// The web page's address (see [`web_background_url`]).
+    pub url: String,
     /// How pictures and videos fill the screen.
     pub fit: Fit,
     /// The color, the gradient's top, and the bars around a fitted picture.
@@ -430,9 +447,9 @@ pub struct Wallpaper {
     pub interval_min: u16,
     /// Show slideshow pictures in random order.
     pub shuffle: bool,
-    /// Stop a video while a window covers the whole screen.
+    /// Stop a video or web page while a window covers the whole screen.
     pub pause_when_covered: bool,
-    /// Stop a video in low power mode (on battery, by default).
+    /// Stop a video or web page in low power mode (on battery, by default).
     pub pause_in_low_power: bool,
     /// The lock screen's picture, filling the screen; empty for derisk's
     /// gradient. Apps set it through the Wallpaper portal.
@@ -444,6 +461,7 @@ impl Default for Wallpaper {
         Self {
             kind: WallpaperKind::Default,
             path: PathBuf::new(),
+            url: String::new(),
             fit: Fit::Fill,
             color: Rgb(17, 24, 39),
             color2: Rgb(30, 27, 75),
@@ -728,7 +746,7 @@ enum_text!(Vrr { Automatic => "auto", On => "on", Off => "off" });
 enum_text!(LowPower { Off => "off", OnBattery => "on_battery", On => "on" });
 enum_text!(Profile { Automatic => "automatic", Phone => "phone", Tablet => "tablet", Desktop => "desktop" });
 enum_text!(BarPosition { Top => "top", Bottom => "bottom" });
-enum_text!(WallpaperKind { Default => "default", Color => "color", Gradient => "gradient", Image => "image", Slideshow => "slideshow", Video => "video" });
+enum_text!(WallpaperKind { Default => "default", Color => "color", Gradient => "gradient", Image => "image", Slideshow => "slideshow", Video => "video", Web => "web" });
 enum_text!(Fit { Fill => "fill", Fit => "fit", Stretch => "stretch", Center => "center", Tile => "tile" });
 
 /// The line without its comment. `#` starts a comment at the start of a
@@ -855,6 +873,11 @@ impl Settings {
                 &mut w.path,
                 Some(PathBuf::from(value)).filter(|p| value.is_empty() || p.is_absolute()),
             ),
+            // Empty means none.
+            "wallpaper.url" => put(
+                &mut w.url,
+                Some(value.to_owned()).filter(|u| u.is_empty() || web_background_url(u)),
+            ),
             "wallpaper.fit" => put(&mut w.fit, Fit::parse(value)),
             "wallpaper.color" => put(&mut w.color, Rgb::parse(value)),
             "wallpaper.color2" => put(&mut w.color2, Rgb::parse(value)),
@@ -943,6 +966,7 @@ impl Settings {
              windows.shadows = {}\n\
              wallpaper.kind = {}\n\
              wallpaper.path = {}\n\
+             wallpaper.url = {}\n\
              wallpaper.fit = {}\n\
              wallpaper.color = {}\n\
              wallpaper.color2 = {}\n\
@@ -997,6 +1021,7 @@ impl Settings {
             win.shadows,
             w.kind.as_str(),
             w.path.display(),
+            w.url,
             w.fit.as_str(),
             w.color.to_hex(),
             w.color2.to_hex(),

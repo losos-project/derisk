@@ -3,8 +3,8 @@ use std::path::Path;
 use derisk::{
     geom::rect,
     wallpaper::{
-        VIDEO_FPS, covered, decode_size, ffmpeg_args, lock_screen, placement, shuffled,
-        slideshow_files, video_size,
+        VIDEO_FPS, covered, danube_args, decode_size, ffmpeg_args, lock_screen, placement,
+        shuffled, slideshow_files, video_size,
     },
 };
 use derisk_settings::{Fit, Rgb, Wallpaper, WallpaperKind};
@@ -139,4 +139,25 @@ fn the_lock_screen_shows_its_own_picture_or_the_gradient() {
     assert_eq!(lock.kind, WallpaperKind::Image);
     assert_eq!(lock.path, Path::new("/home/me/Pictures/lake.jpg"));
     assert_eq!(lock.fit, Fit::Fill);
+}
+
+#[test]
+fn a_web_page_is_drawn_at_the_screen_size_and_at_most_1440p() {
+    let args: Vec<String> = danube_args("https://example.org/", [1920, 1080], 1.0).collect();
+    assert_eq!(
+        args,
+        [
+            "--background",
+            "https://example.org/",
+            "--size",
+            "1920x1080",
+            "--scale",
+            "1.000"
+        ]
+    );
+    // A 4K screen at scale 2 is laid out at 1920x1080 and rendered at
+    // 2560x1440, not 3840x2160.
+    let args: Vec<String> = danube_args("https://example.org/", [1920, 1080], 2.0).collect();
+    assert_eq!(args[3], "1920x1080");
+    assert_eq!(args[5], "1.333");
 }

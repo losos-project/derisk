@@ -417,10 +417,16 @@ families (Super+digits, Super+arrows, Alt+Tab) stay fixed.
 Settings → Wallpaper picks derisk's gradient, one color, a two-color
 gradient, a PNG/JPEG/WebP picture (fill, fit, stretch, center or tile), a
 slideshow of a folder's pictures (every 1 to 1440 minutes, in order or
-shuffled), or a looping video. Videos play silently through an `ffmpeg`
-child process (`$DERISK_FFMPEG`, else `ffmpeg` on `PATH`) at 30 fps, at most
-1080p, and pause while a window fills the screen and in low power mode.
-Anything that fails to load falls back to the gradient and is logged.
+shuffled), a looping video, or a web page. Videos play silently through an
+`ffmpeg` child process (`$DERISK_FFMPEG`, else `ffmpeg` on `PATH`) at 30 fps,
+at most 1080p, and pause while a window fills the screen and in low power
+mode. A web page (an `http(s)://` address, or a local HTML file) is drawn
+by Danube, the LosOS browser (`$DERISK_DANUBE`, else `danube` on `PATH`),
+started as `danube --background URL --size WxH --scale S`: it sends each
+frame down a pipe as ffmpeg does, at most 1440p, makes no sound, takes no
+input, and pauses when the video would (derisk writes `hide` and `show` on
+its stdin). Anything that fails to load falls back to the gradient and is
+logged.
 The page previews the choice and shows thumbnails of what it finds in
 Pictures, Videos and the system backgrounds.
 
