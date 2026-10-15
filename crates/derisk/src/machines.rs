@@ -553,6 +553,8 @@ impl Drop for MachineDisplays {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use derisk_machines::{Label, State};
 
     use super::*;
@@ -613,10 +615,10 @@ mod tests {
                 "win"
             ]
         );
-        let env: HashMap<_, _> = command.get_envs().collect();
-        assert_eq!(env["WAYLAND_DISPLAY".as_ref()], Some(socket.as_os_str()));
-        assert_eq!(env["GDK_BACKEND".as_ref()], Some("wayland".as_ref()));
-        assert_eq!(env["DISPLAY".as_ref()], None);
+        let env: HashMap<&OsStr, Option<&OsStr>> = command.get_envs().collect();
+        assert_eq!(env[OsStr::new("WAYLAND_DISPLAY")], Some(socket.as_os_str()));
+        assert_eq!(env[OsStr::new("GDK_BACKEND")], Some(OsStr::new("wayland")));
+        assert_eq!(env[OsStr::new("DISPLAY")], None);
     }
 
     #[test]
