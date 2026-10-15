@@ -1423,3 +1423,96 @@ fn the_screen_shuts_into_a_line() {
         )
     );
 }
+
+/// Every shape one frame drew, decorations included, flattened.
+fn all_shapes(shell: &Shell) -> Vec<egui::Shape> {
+    fn flatten(shape: egui::Shape, out: &mut Vec<egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.into_iter().for_each(|s| flatten(s, out)),
+            shape => out.push(shape),
+        }
+    }
+    let mut ui = ShellUi::new(shell, true);
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(to_rect(shell.output())),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(input, |root| {
+        ui.paint_decorations(root.painter(), shell);
+        ui.show(root, shell, 5000);
+    });
+    out.textures_delta.clear();
+    let mut shapes = Vec::new();
+    for clipped in out.shapes {
+        flatten(clipped.shape, &mut shapes);
+    }
+    shapes
+}
+
+#[test]
+fn a_machines_window_wears_its_label() {
+    use derisk::shell::WindowMachine;
+    use derisk_machines::{Label, colour};
+
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    shell.map_window("files", "Files");
+    let (editor, _) = shell.map_window("editor", "notes.md");
+    let blue = colour(Label::Blue);
+    let before = all_shapes(&shell);
+    assert!(
+        !before
+            .iter()
+            .any(|s| matches!(s, egui::Shape::Rect(r) if r.fill == blue))
+    );
+
+    shell
+        .set_window_machine(
+            editor,
+            WindowMachine {
+                name: "work".into(),
+                label: Label::Blue,
+            },
+        )
+        .unwrap();
+    let shapes = all_shapes(&shell);
+    // The title bar is filled with the label, and the ring is drawn in it.
+    assert!(
+        shapes
+            .iter()
+            .any(|s| matches!(s, egui::Shape::Rect(r) if r.fill == blue))
+    );
+    assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Rect(r)
+        if r.stroke.color == blue && r.stroke.width == derisk::ui::FOCUS_RING)));
+    // Its name leads the title; the other window's title is unchanged.
+    let texts: Vec<String> = shapes
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t == "[work] notes.md"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Files"), "{texts:?}");
+}
+
+#[test]
+fn the_top_bar_shows_running_machines() {
+    use derisk::shell::WindowMachine;
+    use derisk_machines::{Label, colour};
+
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let purple = colour(Label::Purple);
+    let dots = |shell: &Shell| {
+        all_shapes(shell)
+            .into_iter()
+            .filter(|s| matches!(s, egui::Shape::Circle(c) if c.fill == purple))
+            .count()
+    };
+    assert_eq!(dots(&shell), 0);
+    shell.machines = vec![WindowMachine {
+        name: "banking".into(),
+        label: Label::Purple,
+    }];
+    assert_eq!(dots(&shell), 1);
+}

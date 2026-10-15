@@ -51,7 +51,7 @@ use derisk::{
     lock::LockScreen,
     overview::Battery,
     palette, privacy,
-    shell::{Mode, PointerOutcome, Shell},
+    shell::{Mode, PointerOutcome, Shell, WindowMachine},
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
@@ -67,7 +67,7 @@ use derisk_settings::{Power, Privacy, Shortcuts};
 use mcsapi::WindowId;
 use tracing::{info, warn};
 
-use crate::{pam, polkit_agent, unlock};
+use crate::{machines::MachineDisplays, pam, polkit_agent, unlock};
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, Motion, OutputTiming, Placement,
@@ -235,6 +235,8 @@ pub struct Session {
     /// Whether a screen locker other than derisk's own (swaylock, through
     /// `ext_session_lock_v1`) has the session locked.
     locked_elsewhere: bool,
+    /// Virtual machines and the sockets their windows come in through.
+    machines: Option<MachineDisplays>,
 }
 
 /// A choice waiting for the person: the screen to share, say.
@@ -409,6 +411,7 @@ impl Session {
             power: derisk_settings::Settings::default().power,
             idle_started: None,
             locked_elsewhere: false,
+            machines: MachineDisplays::start(),
         }
     }
 
@@ -1186,6 +1189,30 @@ impl compositor::Shell for Session {
         let _ = self.shell.unmap_window(window);
     }
 
+    /// A window that came in through a machine's socket wears that
+    /// machine's label. The socket is the machine's alone (see
+    /// [`derisk_machines::display`]), so this is where it came from,
+    /// whatever its client says about itself.
+    fn window_sandbox(&mut self, window: WindowId, sandbox: &compositor::Sandbox) {
+        if sandbox.engine.as_deref() != Some(derisk_machines::SANDBOX_ENGINE) {
+            return;
+        }
+        let Some(name) = sandbox.app_id.clone() else {
+            return;
+        };
+        // Gray if the machine is not in the last list yet: the colour can
+        // wait, the name in the title bar cannot.
+        let label = self
+            .machines
+            .as_ref()
+            .and_then(|m| m.machine(&name))
+            .map(|m| m.label)
+            .unwrap_or_default();
+        let _ = self
+            .shell
+            .set_window_machine(window, WindowMachine { name, label });
+    }
+
     fn set_output(&mut self, size: (i32, i32)) {
         self.output = size;
         self.apply_output();
@@ -1281,6 +1308,16 @@ impl compositor::Shell for Session {
             return;
         }
         self.last_tick = Some(Instant::now());
+        if let Some(machines) = &mut self.machines {
+            machines.poll(&mut self.commands);
+            self.shell.machines = machines
+                .running()
+                .map(|m| WindowMachine {
+                    name: m.name.clone(),
+                    label: m.label,
+                })
+                .collect();
+        }
         self.shell.clock = Clock::now_local();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
         if let Some(settings) = self.settings.poll() {

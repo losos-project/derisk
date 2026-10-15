@@ -13,7 +13,10 @@
 //! - [`Hypervisor`] (not on wasm32) is a connection to libvirt: it lists
 //!   machines, finds the one behind a vsock address, starts, shuts down and
 //!   forces off machines, and runs a program in one through the QEMU guest
-//!   agent. [`watch`] keeps a caller's copy of the list current.
+//!   agent. [`watch`] keeps a caller's copy of the list current, and
+//!   [`Hypervisor::open_app`] opens an app in a machine.
+//! - [`display`] (not on wasm32) brings a machine's windows to the desktop
+//!   and makes sure each one is known by the machine it came from.
 //! - [`MachinesApp`] is the Machines core app (`org.derisk.machines`): the
 //!   list, with buttons to make machines through `pm machine create`, start,
 //!   shut down, force off and remove them, and to set pm's libvirt plugin up.
@@ -32,6 +35,10 @@ mod machine;
 pub mod setup;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod display;
+#[cfg(not(target_arch = "wasm32"))]
+mod guest;
+#[cfg(not(target_arch = "wasm32"))]
 mod hypervisor;
 #[cfg(not(target_arch = "wasm32"))]
 mod worker;
@@ -40,6 +47,8 @@ pub use app::{APP_ID, MachinesApp, colour};
 pub use label::{Label, UnknownLabel};
 pub use machine::{Machine, State, TemplateRef};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use guest::{GUEST_RUN, GuestApp, parse_apps};
 #[cfg(not(target_arch = "wasm32"))]
 pub use hypervisor::{Exit, Hypervisor, Program, watch};
 
@@ -58,8 +67,8 @@ pub const METADATA_NAMESPACE: &str = "https://losos-project.github.io/xmlns/pm-m
 /// machine a window came from without asking the guest.
 pub const SANDBOX_ENGINE: &str = "org.libvirt";
 
-/// The vsock port the desktop listens on for guests' windows. A guest runs
-/// its apps under `waypipe --vsock -s 2:7350 server`; 2 is the host's
+/// The vsock port the desktop listens on for guests' windows. A guest's
+/// apps draw through `waypipe --vsock -s 2:7350 server`; 2 is the host's
 /// address.
 pub const DISPLAY_PORT: u32 = 7350;
 
