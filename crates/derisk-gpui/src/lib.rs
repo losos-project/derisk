@@ -15,7 +15,8 @@
 //! Ported so far: [`CALCULATOR`]. The others still run in-process with egui.
 //!
 //! [`ask`] is the portal's consent dialog, run as `derisk-gpui ask` so the
-//! portal can show it from its D-Bus service by spawning a process.
+//! portal can show it from its D-Bus service by spawning a process, and
+//! [`pick`] its color and area pickers, run as `derisk-gpui pick`.
 //!
 //! ```console
 //! $ cargo run -p derisk-gpui --features gpui -- org.derisk.calculator
@@ -33,6 +34,7 @@ use mcsapi_theme::{Library, Theme};
 pub mod ask;
 #[cfg(feature = "gpui")]
 pub mod calculator;
+pub mod pick;
 #[cfg(feature = "gpui")]
 mod run;
 
