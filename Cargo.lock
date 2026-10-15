@@ -1709,6 +1709,7 @@ dependencies = [
  "derisk-settings",
  "gpui",
  "gpui_platform",
+ "image",
  "mcsapi-components-gpui",
  "mcsapi-theme",
  "mcsapi-ui",
@@ -1797,6 +1798,7 @@ version = "0.1.0"
 dependencies = [
  "ashpd",
  "derisk-settings",
+ "image",
  "miette",
  "serde_json",
  "tokio",
@@ -1809,6 +1811,7 @@ name = "derisk-settings"
 version = "0.1.0"
 dependencies = [
  "derisk-icons",
+ "derisk-install",
  "derisk-sys",
  "hmac",
  "image",

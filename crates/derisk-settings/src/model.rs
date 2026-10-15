@@ -434,6 +434,9 @@ pub struct Wallpaper {
     pub pause_when_covered: bool,
     /// Stop a video in low power mode (on battery, by default).
     pub pause_in_low_power: bool,
+    /// The lock screen's picture, filling the screen; empty for derisk's
+    /// gradient. Apps set it through the Wallpaper portal.
+    pub lock_screen: PathBuf,
 }
 
 impl Default for Wallpaper {
@@ -448,6 +451,7 @@ impl Default for Wallpaper {
             shuffle: false,
             pause_when_covered: true,
             pause_in_low_power: true,
+            lock_screen: PathBuf::new(),
         }
     }
 }
@@ -836,6 +840,10 @@ impl Settings {
             "wallpaper.shuffle" => put(&mut w.shuffle, parse_bool(value)),
             "wallpaper.pause_when_covered" => put(&mut w.pause_when_covered, parse_bool(value)),
             "wallpaper.pause_in_low_power" => put(&mut w.pause_in_low_power, parse_bool(value)),
+            "wallpaper.lock_screen" => put(
+                &mut w.lock_screen,
+                Some(PathBuf::from(value)).filter(|p| value.is_empty() || p.is_absolute()),
+            ),
             "privacy.location" => put(&mut pv.location, parse_bool(value)),
             "privacy.camera" => put(&mut pv.camera, parse_bool(value)),
             "privacy.microphone" => put(&mut pv.microphone, parse_bool(value)),
@@ -916,6 +924,7 @@ impl Settings {
              wallpaper.shuffle = {}\n\
              wallpaper.pause_when_covered = {}\n\
              wallpaper.pause_in_low_power = {}\n\
+             wallpaper.lock_screen = {}\n\
              privacy.location = {}\n\
              privacy.camera = {}\n\
              privacy.microphone = {}\n\
@@ -968,6 +977,7 @@ impl Settings {
             w.shuffle,
             w.pause_when_covered,
             w.pause_in_low_power,
+            w.lock_screen.display(),
             self.privacy.location,
             self.privacy.camera,
             self.privacy.microphone,

@@ -224,10 +224,13 @@ fn settings_action(action: &str) -> Option<Box<dyn App>> {
         "desktop" => Page::Desktop,
         "input" => Page::Input,
         "shortcuts" => Page::Shortcuts,
+        "network" => Page::Network,
+        "bluetooth" => Page::Bluetooth,
         "privacy" => Page::Privacy,
         "notifications" => Page::Notifications,
         "power" => Page::Power,
         "default-apps" => Page::DefaultApps,
+        "system" => Page::System,
         "about" => Page::About,
         _ => return None,
     };

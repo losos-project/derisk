@@ -209,6 +209,31 @@ pub struct Choices {
     /// How often the system wants passwords changed
     /// ([`crate::password_age`]); the account is created under it.
     pub password_age: PasswordAge,
+    /// The groups beyond `wheel` the account joins: those of
+    /// [`DEVICE_GROUPS`] the system has ([`device_groups`]).
+    pub groups: Vec<String>,
+}
+
+/// Groups that let a session use a device, which the first account joins
+/// when the system has them. `wpa_supplicant` owns the control sockets that
+/// the Settings app's Network page joins Wi-Fi networks through; setup
+/// itself runs as root and needs no group for its own Network page.
+pub const DEVICE_GROUPS: &[&str] = &["wpa_supplicant"];
+
+/// Which of [`DEVICE_GROUPS`] `group_file` (`/etc/group`) lists. homectl
+/// refuses an account in a group that does not exist, so a system without
+/// Wi-Fi gets an account without that group.
+pub fn device_groups(group_file: &std::path::Path) -> Vec<String> {
+    let groups = std::fs::read_to_string(group_file).unwrap_or_default();
+    DEVICE_GROUPS
+        .iter()
+        .filter(|name| {
+            groups
+                .lines()
+                .any(|line| line.split(':').next() == Some(**name))
+        })
+        .map(|name| (*name).to_owned())
+        .collect()
 }
 
 /// A command the setup runs to save a choice.
@@ -228,7 +253,7 @@ pub struct Task {
 /// already saved when the person is sent back to fix it.
 ///
 /// The user joins `wheel`, which is how run0, polkit and Flatpak know who
-/// administers the machine. The password goes through `NEWPASSWORD`, which
+/// administers the machine, and [`Choices::groups`]. The password goes through `NEWPASSWORD`, which
 /// homectl reads instead of asking, so it never shows in `ps`.
 pub fn plan(choices: &Choices) -> Vec<Task> {
     let mut tasks = Vec::new();
@@ -261,7 +286,13 @@ pub fn plan(choices: &Choices) -> Vec<Task> {
             "create".into(),
             account.user_name.clone(),
             format!("--real-name={}", account.real_name.trim()),
-            "--member-of=wheel".into(),
+            format!(
+                "--member-of={}",
+                std::iter::once("wheel")
+                    .chain(choices.groups.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
             // No --language: systemd 261's homectl turns it into a record
             // with `"perMachine": null`, which it then refuses as "not an
             // array". The session takes its language from localed's

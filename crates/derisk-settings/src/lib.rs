@@ -17,13 +17,23 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod bluetooth;
 pub mod choice;
 pub mod flatpak;
 mod model;
+#[cfg(not(target_family = "wasm"))]
+pub mod network;
+// A browser page has no wpa_supplicant to talk to, and std there has no Unix
+// sockets to talk to it with.
+#[cfg(target_family = "wasm")]
+#[path = "network_demo.rs"]
+mod network;
 mod pages;
 mod privacy;
+pub mod profiles;
 mod shortcuts;
 mod signin;
+pub mod system;
 mod thumbs;
 mod totp;
 
@@ -59,35 +69,44 @@ pub enum Page {
     Input,
     /// Rebindable keyboard shortcuts.
     Shortcuts,
+    /// Wired ports and Wi-Fi networks.
+    Network,
+    /// The adapter and paired devices.
+    Bluetooth,
     /// Device access, history, trash, and Flatpak app permissions.
     Privacy,
     /// The password, fingerprints, verification codes and security keys.
     SignIn,
     /// Banners and sounds.
     Notifications,
-    /// Dimming, locking, suspend, and low power mode.
+    /// Dimming, locking, suspend, low power mode, and the power mode.
     Power,
     /// The browser and search engine choice screens; listed only while the
     /// policy turns one on ([`choice`]).
     DefaultApps,
+    /// The security report and the factory reset.
+    System,
     /// Version and file location.
     About,
 }
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 15] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
         Self::Desktop,
         Self::Input,
         Self::Shortcuts,
+        Self::Network,
+        Self::Bluetooth,
         Self::Privacy,
         Self::SignIn,
         Self::Notifications,
         Self::Power,
         Self::DefaultApps,
+        Self::System,
         Self::About,
     ];
 
@@ -98,6 +117,8 @@ impl Page {
             Self::Wallpaper => "Wallpaper",
             Self::TopBar => "Top bar",
             Self::Shortcuts => "Shortcuts",
+            Self::Network => "Network",
+            Self::Bluetooth => "Bluetooth",
             Self::Privacy => "Privacy",
             Self::SignIn => "Sign-in",
             Self::Desktop => "Desktop",
@@ -105,6 +126,7 @@ impl Page {
             Self::Notifications => "Notifications",
             Self::Power => "Power",
             Self::DefaultApps => "Default apps",
+            Self::System => "System",
             Self::About => "About",
         }
     }
@@ -125,6 +147,10 @@ pub struct SettingsApp {
     thumbs: thumbs::Thumbnails,
     privacy: privacy::PrivacyUi,
     signin: signin::SigninUi,
+    network: network::NetworkUi,
+    bluetooth: bluetooth::BluetoothUi,
+    profiles: profiles::ProfilesUi,
+    system: system::SystemUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
     /// Which choice screens are on, read once when opened.
@@ -200,6 +226,10 @@ impl SettingsApp {
             thumbs: thumbs::Thumbnails::default(),
             privacy: privacy::PrivacyUi::default(),
             signin: signin::SigninUi::default(),
+            network: network::NetworkUi::default(),
+            bluetooth: bluetooth::BluetoothUi::default(),
+            profiles: profiles::ProfilesUi::default(),
+            system: system::SystemUi::default(),
             saved,
             page: Page::default(),
             status: error.as_ref().map(ToString::to_string),
@@ -312,6 +342,15 @@ impl SettingsApp {
         if self.page == Page::SignIn {
             return signin::page(ui, &mut self.signin, theme);
         }
+        if self.page == Page::Network {
+            return network::page(ui, &mut self.network, theme);
+        }
+        if self.page == Page::Bluetooth {
+            return bluetooth::page(ui, &mut self.bluetooth, theme);
+        }
+        if self.page == Page::System {
+            return system::page(ui, &mut self.system, theme);
+        }
         if self.page == Page::DefaultApps {
             let state = self.choice.get_or_insert_with(choice::ChoiceUi::default);
             if self.policy.browser {
@@ -414,7 +453,12 @@ impl SettingsApp {
                     theme,
                 ),
                 Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
-                Page::Privacy | Page::SignIn | Page::DefaultApps => {}
+                Page::Privacy
+                | Page::SignIn
+                | Page::Network
+                | Page::Bluetooth
+                | Page::DefaultApps
+                | Page::System => {}
                 Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
                     let d = &mut s.desktop;
@@ -520,6 +564,7 @@ impl SettingsApp {
                         .color(theme.border),
                     );
                     ui.end_row();
+                    profiles::row(ui, &mut self.profiles, theme);
                 }
                 Page::About => {
                     ui.label("derisk Settings");

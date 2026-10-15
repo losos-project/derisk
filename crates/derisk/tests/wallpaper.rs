@@ -3,11 +3,11 @@ use std::path::Path;
 use derisk::{
     geom::rect,
     wallpaper::{
-        VIDEO_FPS, covered, decode_size, ffmpeg_args, placement, shuffled, slideshow_files,
-        video_size,
+        VIDEO_FPS, covered, decode_size, ffmpeg_args, lock_screen, placement, shuffled,
+        slideshow_files, video_size,
     },
 };
-use derisk_settings::{Fit, Rgb};
+use derisk_settings::{Fit, Rgb, Wallpaper, WallpaperKind};
 use mcsapi::toolkit::egui::{Rect, pos2, vec2};
 
 fn screen() -> Rect {
@@ -123,4 +123,20 @@ fn slideshows_take_pictures_only() {
         [dir.join("a.JPG"), dir.join("b.webp")]
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_lock_screen_shows_its_own_picture_or_the_gradient() {
+    let mut desktop = Wallpaper {
+        kind: WallpaperKind::Video,
+        path: "/home/me/Videos/loop.webm".into(),
+        fit: Fit::Center,
+        ..Wallpaper::default()
+    };
+    assert_eq!(lock_screen(&desktop), Wallpaper::default());
+    desktop.lock_screen = "/home/me/Pictures/lake.jpg".into();
+    let lock = lock_screen(&desktop);
+    assert_eq!(lock.kind, WallpaperKind::Image);
+    assert_eq!(lock.path, Path::new("/home/me/Pictures/lake.jpg"));
+    assert_eq!(lock.fit, Fit::Fill);
 }
