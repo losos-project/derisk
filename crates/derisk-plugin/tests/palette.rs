@@ -80,6 +80,7 @@ fn every_bundled_plugin_loads_with_a_manifest() {
             "session",
             "system",
             "browser",
+            "machines",
             "files",
             "assistant",
             "agent",

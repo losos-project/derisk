@@ -5538,6 +5538,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "palette-machines"
+version = "0.1.0"
+dependencies = [
+ "derisk-palette-sdk",
+]
+
+[[package]]
 name = "palette-menus"
 version = "0.1.0"
 dependencies = [

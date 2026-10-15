@@ -9,7 +9,8 @@
 //! - shell commands (overview, layouts, workspaces, moving windows),
 //! - session commands (lock, suspend, log out, ...), tray items and failed
 //!   user units,
-//! - a browser's tabs and extensions, files, and
+//! - a browser's tabs and extensions, virtual machines and the apps in
+//!   them, files, and
 //! - for the typed text itself, the assistant, Sonne's agent, an address to
 //!   open and a web search.
 //!

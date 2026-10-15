@@ -65,9 +65,12 @@ use derisk::{
 };
 use derisk_settings::{Power, Privacy, Shortcuts};
 use mcsapi::WindowId;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-use crate::{machines::MachineDisplays, pam, polkit_agent, unlock};
+use crate::{
+    machines::{self, MachineDisplays},
+    pam, polkit_agent, unlock,
+};
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, Motion, OutputTiming, Placement,
@@ -994,6 +997,23 @@ impl Session {
         self.commands.push(Command::Launch(app.to_owned()));
     }
 
+    /// A press on the overview's machines card: open the Machines app, or
+    /// start or shut down the machine the button names (`start:work`).
+    fn machines_pressed(&mut self, item: &str) {
+        if item == machines::MANAGE {
+            self.launch(derisk_machines::APP_ID);
+            return;
+        }
+        let acted = item.split_once(':').is_some_and(|(op, machine)| {
+            self.machines
+                .as_ref()
+                .is_some_and(|m| m.act(op, machine, None))
+        });
+        if !acted {
+            warn!(item, "no such machine or command");
+        }
+    }
+
     /// Shows the shell the output without the strips runtime panels cover.
     fn apply_output(&mut self) {
         let (w, h) = self.output;
@@ -1115,6 +1135,11 @@ impl Session {
                         None => info!("{}", serde_json::to_string(&effect).unwrap_or_default()),
                     }
                 }
+                Effect::WidgetActivated { id, item }
+                    if self.shell.widgets.recipient(id, item) == Some(SHELL) =>
+                {
+                    self.machines_pressed(item);
+                }
                 Effect::WidgetActivated { id, item } => {
                     match self
                         .shell
@@ -1126,6 +1151,19 @@ impl Session {
                             let _ = events.send(widgets::widget_event(id, item).to_string());
                         }
                         None => info!("{}", serde_json::to_string(&effect).unwrap_or_default()),
+                    }
+                }
+                Effect::PaletteCommand { source, command }
+                    if self.shell.palette_sources.recipient(source) == Some(SHELL) =>
+                {
+                    let text = |key: &str| command[key].as_str().unwrap_or_default();
+                    let app = command["app"].as_str();
+                    if !self
+                        .machines
+                        .as_ref()
+                        .is_some_and(|m| m.act(text("op"), text("machine"), app))
+                    {
+                        warn!(%command, "no such machine or command");
                     }
                 }
                 Effect::PaletteCommand { source, command } => {
@@ -1325,6 +1363,32 @@ impl compositor::Shell for Session {
                     label: m.label,
                 })
                 .collect();
+            // Registered again each tick; the palette and the overview ask
+            // their plugins again only when what they read has changed.
+            let shown = match machines.card() {
+                Some(card) => self
+                    .shell
+                    .widgets
+                    .register(card, Some(SHELL))
+                    .and_then(|()| {
+                        self.shell.palette_sources.register(
+                            machines::SOURCE.into(),
+                            machines.palette(),
+                            Some(SHELL),
+                        )
+                    }),
+                None => {
+                    let _ = self.shell.widgets.remove(machines::SOURCE, Some(SHELL));
+                    let _ = self
+                        .shell
+                        .palette_sources
+                        .remove(machines::SOURCE, Some(SHELL));
+                    Ok(())
+                }
+            };
+            if let Err(e) = shown {
+                debug!(error = e, "machines are not in the palette and overview");
+            }
         }
         self.shell.clock = Clock::now_local();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
@@ -2274,6 +2338,11 @@ fn agent_socket(path: Option<PathBuf>, remote: Remote<Session>) -> Result<Option
 /// Numbers agent connections, so registered trees and menus know their
 /// owner.
 static CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// The owner of what the session registers itself, such as its machines'
+/// palette rows and overview card. Counting from 0, no connection reaches
+/// it, so no program can replace them or hear what is picked in them.
+const SHELL: u64 = u64::MAX;
 
 fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
     let Ok(writer) = stream.try_clone() else {
