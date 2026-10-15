@@ -186,6 +186,7 @@ fn customization_round_trips() {
     settings.wallpaper.color = Rgb(0x12, 0xab, 0xef);
     settings.wallpaper.interval_min = 5;
     settings.wallpaper.pause_in_low_power = false;
+    settings.wallpaper.lock_screen = PathBuf::from("/home/me/Pictures/lake.jpg");
     settings
         .shortcuts
         .set(Shortcut::Palette, Chord::parse("Ctrl+Alt+P"));
@@ -205,6 +206,9 @@ fn wallpaper_paths_must_be_absolute() {
     assert!(!settings.set("wallpaper.path", "Pictures/a.png"));
     assert!(settings.set("wallpaper.path", "/a.png"));
     assert!(settings.set("wallpaper.path", ""));
+    assert!(!settings.set("wallpaper.lock_screen", "lake.jpg"));
+    assert!(settings.set("wallpaper.lock_screen", "/lake.jpg"));
+    assert!(settings.set("wallpaper.lock_screen", ""));
     assert!(!settings.set("wallpaper.color", "red"));
     assert!(!settings.set("wallpaper.color", "#12345"));
     assert!(!settings.set("windows.corner_radius", "21"));
