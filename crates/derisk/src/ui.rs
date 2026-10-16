@@ -11,6 +11,8 @@
 //!    [`crate::mobile`]). While the screen is locked, [`show_lock`] draws
 //!    the lock screen instead, over the whole output, and [`show_polkit`]
 //!    draws polkit's authentication dialog over everything else.
+//!    [`ShellUi::show_notifications`] draws apps' notifications as cards in
+//!    the top-right corner, above the bars and below the palette.
 //!
 //! Logical compositor pixels map 1:1 to egui points; set
 //! `pixels_per_point` to the output scale.
@@ -24,6 +26,9 @@ use egui::{
     UiBuilder, accesskit::Role, epaint::RectShape, pos2, vec2,
 };
 use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
+use mcsapi_components::{
+    Button as ComponentButton, ButtonSize, ButtonVariant, Card as ComponentCard, Progress, Tokens,
+};
 
 use crate::{
     action::Action,
@@ -40,6 +45,7 @@ use crate::{
     menu::{Menu, MenuEntry},
     mobile::{self, NavState},
     motion,
+    notification_stack::{DEFAULT_ACTION, Notification, Stack},
     overview::{Battery, OverviewLayout, fit, grid, miniature, row},
     palette::{self, Category, Entry, History},
     shell::{DropTarget, Shell, WindowPlacement},
@@ -221,6 +227,9 @@ pub struct WindowPictures {
 pub struct ShellUi {
     /// Shared colors (from mcsapi).
     pub theme: Theme,
+    /// The theme's component tokens, radius and destructive colour
+    /// included, for what the chrome draws with mcsapi's components.
+    pub tokens: Tokens,
     /// The startup animation.
     pub startup: StartupAnimation,
     /// What is typed in widgets' text fields, by plugin, card and field,
@@ -292,6 +301,9 @@ pub struct ShellUi {
     /// The window the focus ring is around and when its ring started
     /// tracing in; a newly focused window's ring traces itself in.
     ring: (Option<WindowId>, f64),
+    /// Where the notification cards were drawn last frame, for the host to
+    /// give them the pointer.
+    notification_rects: Vec<Rect>,
 }
 
 /// Pixels app icons are decoded at: crisp up to 32 points at 2x, the largest
@@ -456,6 +468,7 @@ impl ShellUi {
     pub fn new(shell: &Shell, reduced_motion: bool) -> Self {
         Self {
             theme: Theme::default(),
+            tokens: Tokens::default(),
             startup: StartupAnimation {
                 reduced_motion,
                 bar_height: shell.profile().top_bar as f32,
@@ -501,6 +514,7 @@ impl ShellUi {
                     .map(|p| p.window),
                 f64::NEG_INFINITY,
             ),
+            notification_rects: Vec::new(),
         }
     }
 
@@ -3032,6 +3046,216 @@ impl ShellUi {
     pub fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.palette.asks)
     }
+
+    /// Draws the notifications [`Stack::shown`] picks as a column of cards,
+    /// newest on top, in the output's top-right corner under the top bar
+    /// (at the very top when the bar runs along the bottom), and returns
+    /// what the person did to them. On a phone the cards span the screen
+    /// but for a margin. With `do_not_disturb`, only the persistent ones.
+    ///
+    /// A new card fades in from the screen's edge and the ones under it
+    /// glide down to make room; one an app replaces in place keeps its id,
+    /// and so its place, without arriving again. Reduced motion and the
+    /// Look setting turn both off ([`motion`]).
+    pub fn show_notifications(
+        &mut self,
+        ui: &mut Ui,
+        shell: &Shell,
+        stack: &Stack,
+        do_not_disturb: bool,
+    ) -> Vec<NotificationInput> {
+        self.notification_rects.clear();
+        let mut input = Vec::new();
+        let ctx = ui.ctx().clone();
+        // mcsapi's components read their colours from the context, which
+        // otherwise holds the default theme's; polkit's and the choice
+        // dialogs, drawn after these, follow the theme with them.
+        self.tokens.install(&ctx);
+        let output = to_rect(shell.output());
+        let bar = to_rect(shell.bar_area());
+        let top_bar = shell.is_phone() || shell.effects.top_bar.position == BarPosition::Top;
+        let mut y = if top_bar { bar.bottom() } else { output.top() } + NOTIFICATION_MARGIN;
+        let width = if shell.is_phone() {
+            output.width() - 2.0 * NOTIFICATION_MARGIN
+        } else {
+            NOTIFICATION_WIDTH.min(output.width() - 2.0 * NOTIFICATION_MARGIN)
+        };
+        let left = output.right() - NOTIFICATION_MARGIN - width;
+        let pointer = ctx.pointer_hover_pos();
+        for n in stack.shown(do_not_disturb) {
+            let id = Id::new(("derisk-notification", n.id));
+            let arrived = motion::appear(&ctx, id.with("arrive"), 0.0, f(16), ease::OUT);
+            let at = pos2(left, y);
+            let glide = motion::glide(&ctx, id.with("glide"), at, f(14), ease::GLIDE);
+            let slide = vec2((1.0 - arrived) * NOTIFICATION_SLIDE, 0.0);
+            let shown = egui::Area::new(id)
+                // Above the bars and windows' chrome, below the palette
+                // and dialogs, which are Foreground and over.
+                .order(Order::Middle)
+                .fixed_pos(at + glide + slide)
+                .constrain(false)
+                .show(&ctx, |ui| {
+                    ui.multiply_opacity(arrived);
+                    self.notification_card(ui, shell, n, width, &mut input);
+                });
+            let r = shown.response.rect;
+            if pointer.is_some_and(|p| r.contains(p)) {
+                input.push(NotificationInput::Hover(n.id));
+            }
+            self.notification_rects.push(r);
+            y = r.bottom() + NOTIFICATION_GAP;
+            // What would start below the screen waits until there is room.
+            if y >= output.bottom() {
+                break;
+            }
+        }
+        input
+    }
+
+    /// One notification's card: who sent it, the summary, the body cut to
+    /// a few lines, the `value` hint's progress bar, the actions as small
+    /// buttons and a × that dismisses it. Clicking anywhere else on the
+    /// card invokes the `default` action, when the app gave one.
+    fn notification_card(
+        &self,
+        ui: &mut Ui,
+        shell: &Shell,
+        n: &Notification,
+        width: f32,
+        input: &mut Vec<NotificationInput>,
+    ) {
+        let tokens = self.tokens;
+        // The card's own sense goes first, so the buttons drawn on it take
+        // their clicks rather than the card underneath.
+        let card = ui.scope_builder(UiBuilder::new().sense(Sense::click()), |ui| {
+            ComponentCard::new().show(ui, |ui| {
+                // Card's margin and border on either side.
+                ui.set_width(width - 34.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.horizontal(|ui| {
+                    let app = if n.app_name.is_empty() {
+                        n.hints
+                            .desktop_entry
+                            .as_deref()
+                            .map(|entry| shell.apps.look(entry).name.into_owned())
+                            .unwrap_or_default()
+                    } else {
+                        n.app_name.clone()
+                    };
+                    ui.label(
+                        RichText::new(app)
+                            .font(tokens.small_font())
+                            .color(tokens.muted_foreground),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let close = ui.add(
+                            icons::button(ui.ctx(), "window-close", 12.0, tokens.muted_foreground)
+                                .frame(false),
+                        );
+                        name(ui, &close, Role::Button, "Dismiss");
+                        if close.clicked() {
+                            input.push(NotificationInput::Dismiss(n.id));
+                        }
+                    });
+                });
+                if !n.summary.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&n.summary)
+                                .font(tokens.body_font())
+                                .strong()
+                                .color(tokens.foreground),
+                        )
+                        .wrap(),
+                    );
+                }
+                if !n.body.is_empty() {
+                    let mut job = egui::text::LayoutJob::simple(
+                        n.body.clone(),
+                        tokens.body_font(),
+                        tokens.foreground,
+                        ui.available_width(),
+                    );
+                    // A long body is cut with an ellipsis rather than
+                    // growing the card down the screen.
+                    job.wrap.max_rows = NOTIFICATION_BODY_ROWS;
+                    ui.add(egui::Label::new(job));
+                }
+                if let Some(value) = n.hints.value {
+                    ui.add_space(4.0);
+                    ui.add(Progress::new(f32::from(value) / 100.0));
+                }
+                if !n.actions.is_empty() {
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for action in &n.actions {
+                            let pressed = ui.add(
+                                ComponentButton::new(&action.label)
+                                    .variant(ButtonVariant::Outline)
+                                    .size(ButtonSize::Sm),
+                            );
+                            if pressed.clicked() {
+                                input.push(NotificationInput::Action(n.id, action.key.clone()));
+                            }
+                        }
+                    });
+                }
+            });
+        });
+        let response = card.response;
+        let label = if n.summary.is_empty() {
+            &n.body
+        } else {
+            &n.summary
+        };
+        name(
+            ui,
+            &response,
+            if n.default_action {
+                Role::Button
+            } else {
+                Role::Alert
+            },
+            label.clone(),
+        );
+        if n.default_action && response.clicked() {
+            input.push(NotificationInput::Action(n.id, DEFAULT_ACTION.to_owned()));
+        }
+    }
+
+    /// Where the notification cards were drawn by the last
+    /// [`ShellUi::show_notifications`]. Hosts give them the pointer, so a
+    /// click on a card never reaches the window under it.
+    pub fn notification_rects(&self) -> &[Rect] {
+        &self.notification_rects
+    }
+}
+
+/// How wide a notification card is off a phone.
+const NOTIFICATION_WIDTH: f32 = 360.0;
+
+/// The space between the cards and the screen's edges and bars.
+const NOTIFICATION_MARGIN: f32 = 12.0;
+
+/// The space between two cards.
+const NOTIFICATION_GAP: f32 = 8.0;
+
+/// How far right of its place a new card starts sliding in.
+const NOTIFICATION_SLIDE: f32 = 32.0;
+
+/// Lines of body a card shows before cutting it short.
+const NOTIFICATION_BODY_ROWS: usize = 4;
+
+/// What the person did to a notification card this frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotificationInput {
+    /// Pressed a button, or clicked the card for its `default` action: the
+    /// notification and the action's key.
+    Action(u32, String),
+    /// Pressed the card's ×.
+    Dismiss(u32),
+    /// The pointer rests on the card.
+    Hover(u32),
 }
 
 /// The focused window, when it has a frame to ring: not on a phone, and
