@@ -2423,7 +2423,13 @@ struct FacesWatch {
 impl FacesWatch {
     fn start() -> Option<Self> {
         let [program, command] = privacy_display::HELPER;
-        let mut child = ProcessCommand::new(program)
+        // Beside derisk's own executable first, as derisk-gpui is found, so
+        // a session started without the system's PATH still finds it.
+        let beside = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.with_file_name(program))
+            .filter(|path| path.is_file());
+        let mut child = ProcessCommand::new(beside.as_deref().unwrap_or(program.as_ref()))
             .arg(command)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
