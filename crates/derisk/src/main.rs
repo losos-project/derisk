@@ -12,6 +12,8 @@ mod computer;
 #[cfg(feature = "host")]
 mod dm;
 #[cfg(feature = "host")]
+mod first_login;
+#[cfg(feature = "host")]
 mod firstboot;
 #[cfg(feature = "host")]
 mod greeter;
@@ -309,26 +311,7 @@ fn session(_args: &[String]) -> Result {
 
 #[cfg(feature = "host")]
 fn greeter(args: &[String]) -> Result {
-    let mut options = greeter::Options::default();
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--user" => options.user = Some(it.next().ok_or("--user needs a name")?.clone()),
-            "--env" => {
-                let pair = it.next().ok_or("--env needs KEY=VALUE")?;
-                if !pair.contains('=') {
-                    return Err("--env needs KEY=VALUE".into());
-                }
-                options.env.push(pair.clone());
-            }
-            "--" => {
-                options.command = it.cloned().collect();
-                break;
-            }
-            other => return Err(usage(format!("unknown greeter option: {other}"))),
-        }
-    }
-    greeter::run(options)
+    greeter::run(greeter::Options::parse(args).map_err(usage)?)
 }
 
 #[cfg(not(feature = "host"))]

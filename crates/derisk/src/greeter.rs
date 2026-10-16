@@ -47,6 +47,41 @@ pub struct Options {
     pub env: Vec<String>,
 }
 
+impl Options {
+    /// Reads `derisk greeter`'s arguments (what follows `greeter`).
+    pub fn parse(args: &[String]) -> std::result::Result<Self, String> {
+        let mut options = Self::default();
+        let mut it = args.iter();
+        while let Some(arg) = it.next() {
+            match arg.as_str() {
+                "--user" => options.user = Some(it.next().ok_or("--user needs a name")?.clone()),
+                "--env" => {
+                    let pair = it.next().ok_or("--env needs KEY=VALUE")?;
+                    if !pair.contains('=') {
+                        return Err("--env needs KEY=VALUE".into());
+                    }
+                    options.env.push(pair.clone());
+                }
+                "--" => {
+                    options.command = it.cloned().collect();
+                    break;
+                }
+                other => return Err(format!("unknown greeter option: {other}")),
+            }
+        }
+        Ok(options)
+    }
+}
+
+/// The session a greeter run as `greeter` (its whole command line, `derisk
+/// greeter ... -- <session>`) would start, with its environment: what the
+/// display manager starts itself when it logs someone in without one.
+pub fn session_of(greeter: &[String]) -> Option<(Vec<String>, Vec<String>)> {
+    let at = greeter.iter().position(|arg| arg == "greeter")?;
+    let options = Options::parse(&greeter[at + 1..]).ok()?;
+    (!options.command.is_empty()).then(|| (options.command, session_env(options.env)))
+}
+
 /// The session's environment unless `--env` overrides a key: a Wayland
 /// session of the derisk desktop, for pam_systemd's session type and for
 /// portals and toolkits choosing a backend.
@@ -388,5 +423,19 @@ mod tests {
         assert!(env.contains(&"XDG_CURRENT_DESKTOP=other".to_owned()));
         assert!(!env.contains(&"XDG_CURRENT_DESKTOP=derisk".to_owned()));
         assert!(env.contains(&"XDG_SESSION_TYPE=wayland".to_owned()));
+    }
+
+    #[test]
+    fn the_display_manager_finds_the_session_in_the_greeters_command() {
+        let argv = |s: &str| s.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        let (cmd, env) = session_of(&argv(
+            "/bin/derisk greeter --env XDG_CURRENT_DESKTOP=x -- /bin/derisk session --execute",
+        ))
+        .unwrap();
+        assert_eq!(cmd, ["/bin/derisk", "session", "--execute"]);
+        assert!(env.contains(&"XDG_CURRENT_DESKTOP=x".to_owned()));
+        assert!(env.contains(&"XDG_SESSION_TYPE=wayland".to_owned()));
+        assert!(session_of(&argv("/bin/derisk greeter")).is_none());
+        assert!(session_of(&argv("/bin/other -- session")).is_none());
     }
 }
