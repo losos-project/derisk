@@ -68,8 +68,11 @@ fn signal(dbm: i32) -> &'static str {
     }
 }
 
-fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
-    ui.label(egui::RichText::new(text).small().color(theme.border));
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(crate::layout::note(
+        &mcsapi_components::Tokens::current(ui.ctx()),
+        text,
+    ));
 }
 
 pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
@@ -89,7 +92,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
         if port.state == WiredState::Online {
             ui.label(line);
         } else {
-            hint(ui, theme, &line);
+            hint(ui, &line);
         }
     }
     ui.add_space(8.0);
@@ -99,7 +102,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
     }
 
     if status.interface.is_none() {
-        hint(ui, theme, "No Wi-Fi adapter was found.");
+        hint(ui, "No Wi-Fi adapter was found.");
         return;
     }
     if !status.wifi_ready {
@@ -135,7 +138,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
         }
     });
     if status.networks.is_empty() && !status.scanning {
-        hint(ui, theme, "No networks in range.");
+        hint(ui, "No networks in range.");
     }
     for network in &status.networks {
         let selected = picked.as_ref().is_some_and(|p| p.ssid == network.ssid);

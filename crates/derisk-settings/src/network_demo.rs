@@ -9,9 +9,9 @@ pub(crate) struct NetworkUi {
     _demo: (),
 }
 
-pub(crate) fn page(ui: &mut egui::Ui, _: &mut NetworkUi, theme: &Theme) {
+pub(crate) fn page(ui: &mut egui::Ui, _: &mut NetworkUi, _: &Theme) {
     ui.label(
         egui::RichText::new("Wired ports and Wi-Fi networks are listed here on a real machine.")
-            .color(theme.border),
+            .color(mcsapi_components::Tokens::current(ui.ctx()).muted_foreground),
     );
 }

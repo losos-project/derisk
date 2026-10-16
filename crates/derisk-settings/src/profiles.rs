@@ -13,7 +13,7 @@ use std::{
     sync::mpsc,
 };
 
-use mcsapi_ui::{Theme, egui};
+use mcsapi_ui::egui;
 
 /// The profiles power-profiles-daemon offers, in its order, and the active
 /// one.
@@ -99,7 +99,7 @@ impl ProfilesUi {
 }
 
 /// The power mode row, in the Power page's grid.
-pub(crate) fn row(ui: &mut egui::Ui, state: &mut ProfilesUi, theme: &Theme) {
+pub(crate) fn row(ui: &mut egui::Ui, state: &mut ProfilesUi) {
     if state.read.is_none() && state.pending.is_none() {
         state.start(None);
     }
@@ -134,11 +134,10 @@ pub(crate) fn row(ui: &mut egui::Ui, state: &mut ProfilesUi, theme: &Theme) {
     });
     ui.end_row();
     ui.label("");
-    ui.label(
-        egui::RichText::new("Applies at once, to the whole machine.")
-            .small()
-            .color(theme.border),
-    );
+    ui.label(crate::layout::note(
+        &mcsapi_components::Tokens::current(ui.ctx()),
+        "Applies at once, to the whole machine.",
+    ));
     ui.end_row();
     if pick.is_some() {
         state.start(pick);
