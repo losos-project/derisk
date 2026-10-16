@@ -31,6 +31,7 @@
 //! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
 //!   `derisk greeter` holds with `derisk display-manager` (or greetd);
 //!   [`polkit`]: the dialog the session's polkit agent shows.
+//! - [`backlight`]: turning the backlight down while a password is typed.
 //! - [`idle`]: dimming, locking and suspending when nobody uses the
 //!   session, through swayidle.
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
@@ -66,6 +67,7 @@ pub mod action;
 pub mod adaptive;
 pub mod animation;
 pub mod assistant;
+pub mod backlight;
 pub mod conversation;
 pub mod effects;
 pub mod icons;

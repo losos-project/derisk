@@ -24,6 +24,7 @@ use std::{
 
 use derisk::{
     animation::LoginAnimation,
+    backlight::{self, PasswordDim},
     greetd::{self, Login, Phase, Request, Response},
     time::Clock,
     ui::{GreeterInput, paint_login, paint_startup, paint_wallpaper, show_greeter},
@@ -110,6 +111,8 @@ struct Greeter {
     /// animation runs from then, and the greeter quits at its end.
     leaving: Option<u32>,
     commands: Vec<Command>,
+    /// The backlight, turned down while a password is typed.
+    password_dim: PasswordDim,
 }
 
 impl Greeter {
@@ -151,6 +154,18 @@ impl Greeter {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return self.lost("worker stopped"),
             }
+        }
+        let phase = self.login.phase();
+        let field = backlight::Field {
+            shown: !matches!(phase, Phase::Starting | Phase::Started),
+            typed: matches!(phase, Phase::Prompt { secret: true, .. })
+                && !self.login.answer.is_empty(),
+            checking: *phase == Phase::Waiting,
+        };
+        if let Some((name, level)) = self.password_dim.update(field, Instant::now())
+            && let Err(e) = backlight::set(&name, level)
+        {
+            error!("cannot set the backlight: {e}");
         }
         if *self.login.phase() == Phase::Started && self.leaving.is_none() {
             // The display manager logs the session; logind records whose it is.
@@ -398,6 +413,7 @@ pub fn run(options: Options) -> Result {
         quit: false,
         leaving: None,
         commands: Vec::new(),
+        password_dim: PasswordDim::system(),
     };
     Compositor::new(greeter).title("derisk greeter").run()?;
     Ok(())

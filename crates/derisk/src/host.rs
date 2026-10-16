@@ -41,11 +41,12 @@ use std::{
 
 use derisk::{
     action::{Action, Effect},
+    backlight::{self, PasswordDim},
     conversation::Source,
     desktop::{self, DesktopEntry},
     effects::{Effects, SettingsWatch},
     geom::{inset, rect},
-    greetd::{Login, Request},
+    greetd::{Login, Phase, Request},
     idle::{self, Event as IdleEvent},
     ipc::{self, LiveRequest},
     keyboard::{Output as Typed, Predictor},
@@ -195,6 +196,9 @@ pub struct Session {
     /// has not seen the tour starts it.
     tutorial_mark: Option<PathBuf>,
     tutorial_checked: bool,
+    /// The backlight, turned down while the lock screen or a polkit dialog
+    /// has a password typed into it.
+    password_dim: PasswordDim,
     /// Whether a focused text field brought the on-screen keyboard up, so
     /// leaving the field takes it down again; one the person opened stays.
     keyboard_for_field: bool,
@@ -406,6 +410,7 @@ impl Session {
             words,
             tutorial_mark: tutorial::mark_path(),
             tutorial_checked: false,
+            password_dim: PasswordDim::system(),
             words_saved: Instant::now(),
             keyboard_for_field: false,
             shortcuts: Shortcuts::default(),
@@ -582,6 +587,29 @@ impl Session {
         // The keyboard learns no words typed here, and comes up on a
         // touchscreen as it does for any password field.
         compositor::Shell::text_input(self, Some(TextField { password: true }));
+    }
+
+    /// Turns the backlight down while a password is typed into the lock
+    /// screen or a polkit dialog, and back up once it is not.
+    fn dim_for_password(&mut self) {
+        let login = &self.lock.login;
+        let locked = self.lock.is_locked();
+        let secret = matches!(login.phase(), Phase::Prompt { secret: true, .. });
+        let dialogs = self.polkit.iter().map(|p| &p.dialog);
+        let field = backlight::Field {
+            shown: locked || !self.polkit.is_empty(),
+            typed: (locked && secret && !login.answer.is_empty())
+                || dialogs
+                    .clone()
+                    .any(|d| d.secret() && d.editable() && !d.answer.is_empty()),
+            checking: (locked && *login.phase() == Phase::Waiting)
+                || dialogs.clone().any(|d| d.ask().is_some() && !d.editable()),
+        };
+        if let Some((name, level)) = self.password_dim.update(field, Instant::now())
+            && let Err(error) = backlight::set(&name, level)
+        {
+            warn!(%error, "cannot set the backlight");
+        }
     }
 
     fn polkit_dialog(&mut self, cookie: &str) -> Option<&mut derisk::polkit::AuthDialog> {
@@ -1412,6 +1440,7 @@ impl compositor::Shell for Session {
     /// minute.
     fn tick(&mut self) {
         self.poll_idle();
+        self.dim_for_password();
         if !self.tutorial_checked && self.startup_done() && !self.lock.is_locked() {
             self.tutorial_checked = true;
             if self.tutorial_mark.as_ref().is_some_and(|m| !m.exists()) {
