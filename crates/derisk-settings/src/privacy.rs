@@ -139,8 +139,10 @@ fn privacy_display(ui: &mut egui::Ui, d: &mut PrivacyDisplay, new_app: &mut Stri
                 let id = new_app.trim().to_owned();
                 let ok = !id.is_empty() && !id.contains([',', '/']) && !d.apps.contains(&id);
                 let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (ui.add_enabled(ok, egui::Button::new("Add")).clicked() || (entered && ok)) && ok
-                {
+                // The button is added every frame, Enter or not, so it never
+                // blinks out of the row.
+                let added = ui.add_enabled(ok, egui::Button::new("Add")).clicked();
+                if ok && (added || entered) {
                     d.apps.push(id);
                     new_app.clear();
                 }
