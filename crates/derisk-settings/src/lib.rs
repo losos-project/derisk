@@ -51,7 +51,7 @@ pub use model::{
     machine_name, web_background_url,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
-pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};
+pub use shortcuts::{Chord, Group, KeyName, Keys, Resolved, Shortcut, Shortcuts};
 pub use thumbs::thumbnail;
 
 /// A page of the Settings app.

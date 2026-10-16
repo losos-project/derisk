@@ -86,16 +86,19 @@ pub fn window_menu() -> Menu {
                 entries: vec![
                     MenuEntry::item("derisk.snap.left", "Left Half").with_shortcut("Super+←"),
                     MenuEntry::item("derisk.snap.right", "Right Half").with_shortcut("Super+→"),
-                    MenuEntry::item("derisk.snap.top_left", "Top Left"),
-                    MenuEntry::item("derisk.snap.top_right", "Top Right"),
-                    MenuEntry::item("derisk.snap.bottom_left", "Bottom Left"),
-                    MenuEntry::item("derisk.snap.bottom_right", "Bottom Right"),
+                    MenuEntry::item("derisk.snap.top_left", "Top Left").with_shortcut("Super+W Q"),
+                    MenuEntry::item("derisk.snap.top_right", "Top Right")
+                        .with_shortcut("Super+W E"),
+                    MenuEntry::item("derisk.snap.bottom_left", "Bottom Left")
+                        .with_shortcut("Super+W Z"),
+                    MenuEntry::item("derisk.snap.bottom_right", "Bottom Right")
+                        .with_shortcut("Super+W C"),
                 ],
             },
-            MenuEntry::item("derisk.tile", "Tile"),
-            MenuEntry::item("derisk.float", "Float"),
-            MenuEntry::item("derisk.promote", "Make Main Window"),
-            MenuEntry::item("derisk.keep_on_top", "Keep on Top"),
+            MenuEntry::item("derisk.tile", "Tile").with_shortcut("Super+T"),
+            MenuEntry::item("derisk.float", "Float").with_shortcut("Super+F"),
+            MenuEntry::item("derisk.promote", "Make Main Window").with_shortcut("Super+Enter"),
+            MenuEntry::item("derisk.keep_on_top", "Keep on Top").with_shortcut("Super+Shift+T"),
             MenuEntry::Separator,
             MenuEntry::item("derisk.overview", "Overview").with_shortcut("Super"),
             MenuEntry::item("derisk.close", "Close").with_shortcut("Alt+F4"),

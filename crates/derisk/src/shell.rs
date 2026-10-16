@@ -340,6 +340,14 @@ pub struct Shell {
     agent_depth: u32,
     /// A destructive session operation waiting for the person to confirm.
     confirmation: Option<SessionOp>,
+    /// Whether an agent or injected input asked for [`Shell::confirmation`],
+    /// rather than the person's own keys.
+    confirmation_from_agent: bool,
+    /// Whether the list of keyboard shortcuts is showing.
+    shortcut_help: bool,
+    /// The windows [`Action::ShowDesktop`] minimized, to bring back when it
+    /// is pressed again; emptied once any of them is restored another way.
+    desktop_shown: Vec<WindowId>,
     /// Names and icons for app IDs, set by the host from `.desktop` files.
     pub apps: Apps,
     /// Whether the screen is dimmed because nobody used it for a while,
@@ -456,6 +464,9 @@ impl Shell {
             clicks: ClickTracker::default(),
             overview: false,
             palette: false,
+            confirmation_from_agent: false,
+            shortcut_help: false,
+            desktop_shown: Vec::new(),
             snap_assist: None,
             pending: Vec::new(),
             conversation: Conversation::default(),
@@ -518,6 +529,11 @@ impl Shell {
     /// for, waiting for [`Action::Confirm`] from real input.
     pub fn pending_confirmation(&self) -> Option<SessionOp> {
         self.confirmation
+    }
+
+    /// Whether an agent asked for the pending confirmation, not the person.
+    pub fn confirmation_from_agent(&self) -> bool {
+        self.confirmation_from_agent
     }
 
     /// Updates the output (resolution change, rotation, dock/undock).
@@ -660,6 +676,46 @@ impl Shell {
         });
     }
 
+    /// Minimizes every visible window on the active workspace, or brings
+    /// back the ones it minimized last time if they are all still hidden,
+    /// as Windows' Super+D does.
+    fn show_desktop(&mut self) {
+        let members: Vec<WindowId> = self.desktop.active().windows().collect();
+        let hidden = !self.desktop_shown.is_empty()
+            && self
+                .desktop_shown
+                .iter()
+                .all(|w| members.contains(w) && self.is_minimized(*w))
+            && members.iter().all(|w| self.is_minimized(*w));
+        if hidden {
+            for w in std::mem::take(&mut self.desktop_shown) {
+                if let Some(info) = self.windows.get_mut(&w) {
+                    info.minimized = false;
+                }
+            }
+            // The window on top before gets the keyboard back.
+            if let Some(&top) = self
+                .stack
+                .iter()
+                .rev()
+                .find(|w| members.contains(w) && !self.is_minimized(**w))
+            {
+                let _ = self.focus(top);
+            }
+            return;
+        }
+        self.desktop_shown = members
+            .into_iter()
+            .filter(|w| !self.is_minimized(*w))
+            .collect();
+        for w in &self.desktop_shown {
+            if let Some(info) = self.windows.get_mut(w) {
+                info.minimized = true;
+            }
+        }
+        self.focus_visible(true);
+    }
+
     /// Whether the overview is showing.
     pub fn overview_visible(&self) -> bool {
         self.overview
@@ -668,6 +724,11 @@ impl Shell {
     /// Whether the command palette is showing.
     pub fn palette_visible(&self) -> bool {
         self.palette
+    }
+
+    /// Whether the list of keyboard shortcuts is showing.
+    pub fn shortcut_help_visible(&self) -> bool {
+        self.shortcut_help
     }
 
     /// Whether the on-screen keyboard is showing.
@@ -1318,6 +1379,38 @@ impl Shell {
             Action::Keyboard { visible } => {
                 self.keyboard = visible.unwrap_or(!self.keyboard);
             }
+            Action::ShortcutHelp { visible } => {
+                self.shortcut_help = visible.unwrap_or(!self.shortcut_help);
+            }
+            Action::ShowDesktop => self.show_desktop(),
+            Action::StepWorkspace { by, carry_window } => {
+                let n = self
+                    .active_workspace()
+                    .saturating_add_signed(by)
+                    .clamp(1, self.open.len() as u64 + 1);
+                if carry_window {
+                    let w = self.target(None)?;
+                    let ws = self.workspace(n)?;
+                    self.desktop.move_window(w, ws)?;
+                    self.desktop.switch_to(ws)?;
+                    self.focus(w)?;
+                } else {
+                    // Past the last workspace only a window may open a new
+                    // one: an empty one would close again at once.
+                    let n = n.min(self.open.len() as u64);
+                    let ws = self.workspace(n)?;
+                    self.desktop.switch_to(ws)?;
+                }
+            }
+            Action::Screenshot => return Ok(vec![Effect::Screenshot]),
+            Action::ConfirmSession { op } => {
+                if op.is_destructive() {
+                    self.confirmation = Some(op);
+                    self.confirmation_from_agent = self.untrusted();
+                } else {
+                    return Ok(vec![Effect::Session { op }]);
+                }
+            }
             Action::Open { path } => {
                 if !openable(Path::new(&path)) {
                     return Err(Error::NotOpenable(path));
@@ -1369,6 +1462,7 @@ impl Shell {
                 // page title can talk an agent into anything. Ask on screen.
                 if op.is_destructive() && self.untrusted() {
                     self.confirmation = Some(op);
+                    self.confirmation_from_agent = true;
                     return Err(Error::ConfirmOnScreen(op));
                 }
                 return Ok(vec![Effect::Session { op }]);

@@ -171,7 +171,7 @@ fn low_power_follows_the_battery_only_when_asked() {
 
 #[test]
 fn customization_round_trips() {
-    use derisk_settings::{BarPosition, Chord, Fit, Rgb, Shortcut, WallpaperKind};
+    use derisk_settings::{BarPosition, Fit, Keys, Rgb, Shortcut, WallpaperKind};
     let mut settings = Settings::default();
     settings.top_bar.position = BarPosition::Bottom;
     settings.top_bar.autohide = true;
@@ -189,12 +189,19 @@ fn customization_round_trips() {
     settings.wallpaper.lock_screen = PathBuf::from("/home/me/Pictures/lake.jpg");
     settings
         .shortcuts
-        .set(Shortcut::Palette, Chord::parse("Ctrl+Alt+P"));
+        .set(Shortcut::Palette, Keys::parse("Ctrl+Alt+P"));
+    settings
+        .shortcuts
+        .set(Shortcut::SnapLeft, Keys::parse("Ctrl+K Left"));
     settings.shortcuts.set(Shortcut::Close, None);
     let text = settings.to_text();
     assert!(text.contains("wallpaper.color = #12abef\n"), "{text}");
     assert!(text.contains("shortcut.palette = Ctrl+Alt+P\n"), "{text}");
     assert!(text.contains("shortcut.close = none\n"), "{text}");
+    assert!(
+        text.contains("shortcut.snap_left = Ctrl+K Left\n"),
+        "{text}"
+    );
     let (parsed, warnings) = Settings::parse(&text);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(parsed, settings);
@@ -221,7 +228,7 @@ fn wallpaper_paths_must_be_absolute() {
 
 #[test]
 fn chords_parse_and_clash() {
-    use derisk_settings::{Chord, KeyName, Shortcut, Shortcuts};
+    use derisk_settings::{Chord, KeyName, Keys, Shortcut, Shortcuts};
     let chord = Chord::parse("shift + SUPER + m").unwrap();
     assert!(chord.logo && chord.shift && !chord.ctrl);
     assert_eq!(chord.key, KeyName::Letter('m'));
@@ -232,7 +239,7 @@ fn chords_parse_and_clash() {
     assert_eq!(Chord::parse("Super+F13"), None);
     let mut shortcuts = Shortcuts::default();
     assert!(shortcuts.clashes().is_empty());
-    shortcuts.set(Shortcut::Close, Chord::parse("Super+F"));
+    shortcuts.set(Shortcut::Close, Keys::parse("Super+F"));
     assert_eq!(shortcuts.clashes(), [Shortcut::Close, Shortcut::Float]);
     // The first in the list keeps the chord until the clash is fixed.
     assert_eq!(

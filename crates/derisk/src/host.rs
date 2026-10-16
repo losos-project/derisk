@@ -50,7 +50,7 @@ use derisk::{
     idle::{self, Event as IdleEvent},
     ipc::{self, LiveRequest},
     keyboard::{Output as Typed, Predictor},
-    keys::{self, Key, Mods, SuperTap},
+    keys::{Key, Mods, Sequence, Step, SuperTap},
     lock::LockScreen,
     overview::Battery,
     palette, privacy,
@@ -59,14 +59,14 @@ use derisk::{
     systemd::{self, SessionOp},
     time::Clock,
     ui::{
-        ChoiceInput, PolkitInput, ShellUi, WindowPictures, set_touch_style, show_choice, show_lock,
-        show_polkit,
+        ChoiceInput, KeyHint, PolkitInput, ShellUi, WindowPictures, set_touch_style, show_choice,
+        show_lock, show_polkit,
     },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
     window_motion::{Shown, WindowMotion},
 };
-use derisk_settings::{Power, Privacy, Shortcuts};
+use derisk_settings::{KeyName, Power, Privacy, Shortcuts};
 use mcsapi::WindowId;
 use tracing::{debug, info, warn};
 
@@ -161,6 +161,11 @@ pub struct Session {
     launches: u64,
     commands: Vec<Command>,
     super_tap: SuperTap,
+    /// A multi-key shortcut typed so far (`Super+W`, waiting for `Left`).
+    sequence: Sequence,
+    /// Keys whose press the shell took for a shortcut: their releases are
+    /// the shell's too, so a window never sees a release without a press.
+    swallowed: Vec<Keysym>,
     start: Instant,
     /// A power off, reboot or log out waiting for the screen to shut, and
     /// when it was carried out.
@@ -200,6 +205,12 @@ pub struct Session {
     trees: HashMap<u64, (mpsc::Sender<String>, TreeQuery)>,
     /// Agents waiting for a screenshot, and whether they want it inline.
     shots: HashMap<u64, (mpsc::Sender<String>, bool)>,
+    /// Captures the person asked for with Print, and the pictures being
+    /// saved from them: where each landed, or why not.
+    pictures: (
+        Vec<u64>,
+        Vec<mpsc::Receiver<std::result::Result<PathBuf, String>>>,
+    ),
     /// Accessibility nodes programs registered for their windows, with
     /// the agent connection that owns them.
     registered: HashMap<WindowId, (u64, Subtree)>,
@@ -375,6 +386,8 @@ impl Session {
             launches: 0,
             commands: Vec::new(),
             super_tap: SuperTap::default(),
+            sequence: Sequence::default(),
+            swallowed: Vec::new(),
             start: Instant::now(),
             ending: Vec::new(),
             ended: None,
@@ -400,6 +413,7 @@ impl Session {
             requests: 0,
             trees: HashMap::new(),
             shots: HashMap::new(),
+            pictures: (Vec::new(), Vec::new()),
             registered: HashMap::new(),
             listeners: HashMap::new(),
             theme_env: Vec::new(),
@@ -945,6 +959,58 @@ impl Session {
         self.palette_opened();
     }
 
+    /// Tells the person where each screenshot they took landed.
+    fn poll_pictures(&mut self) {
+        let mut saved = Vec::new();
+        self.pictures.1.retain(|rx| match rx.try_recv() {
+            Ok(result) => {
+                saved.push(result);
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        });
+        for result in saved {
+            let (summary, body) = match result {
+                Ok(path) => (
+                    "Screenshot saved",
+                    path.file_name()
+                        .map(|n| format!("In Pictures/Screenshots as {}", n.to_string_lossy()))
+                        .unwrap_or_default(),
+                ),
+                Err(e) => ("Couldn't save the screenshot", e),
+            };
+            self.notifications
+                .notify_local(summary, &body, Instant::now());
+        }
+    }
+
+    /// Forgets a multi-key shortcut typed so far, and its hint.
+    fn cancel_sequence(&mut self) {
+        self.sequence.cancel();
+        self.show_sequence();
+    }
+
+    /// Shows what may follow the chords typed so far, or nothing.
+    fn show_sequence(&mut self) {
+        let typed = self.sequence.typed();
+        self.ui.key_hint = (!typed.is_empty()).then(|| KeyHint {
+            typed: typed
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
+            next: self
+                .shortcuts
+                .continuations(typed)
+                .map(|(shortcut, rest)| {
+                    let keys = rest.iter().map(ToString::to_string).collect::<Vec<_>>();
+                    (keys.join(" "), shortcut.label())
+                })
+                .collect(),
+        });
+    }
+
     /// Re-indexes home on a background thread each time the palette opens,
     /// so file results stay fresh without stalling a frame.
     fn palette_opened(&mut self) {
@@ -1125,6 +1191,11 @@ impl Session {
                             serde_json::to_string(&effect).unwrap_or_default()
                         );
                     }
+                }
+                Effect::Screenshot => {
+                    self.requests += 1;
+                    self.pictures.0.push(self.requests);
+                    self.commands.push(Command::Capture(self.requests));
                 }
                 Effect::Open { path } => {
                     if self.execute {
@@ -1363,6 +1434,7 @@ impl compositor::Shell for Session {
         // Every frame, so a banner goes when its time is up rather than
         // up to a second later.
         self.notifications.expire(Instant::now());
+        self.poll_pictures();
         // Every frame, before the host asks where the windows are.
         self.move_windows();
         if !self.ending.is_empty() && self.ui.has_shut() {
@@ -1427,6 +1499,7 @@ impl compositor::Shell for Session {
         if let Some(settings) = self.settings.poll() {
             self.shell.effects = Effects::from_settings(&settings);
             self.shortcuts = settings.shortcuts;
+            self.ui.shortcuts = settings.shortcuts;
             self.power = settings.power;
             self.wallpaper.configure(&settings.wallpaper);
             self.lock_wallpaper
@@ -1543,10 +1616,22 @@ impl compositor::Shell for Session {
         }
         let is_super = matches!(key.sym, Keysym::Super_L | Keysym::Super_R);
         if self.super_tap.key(is_super, key.pressed) {
-            self.dispatch(vec![Action::Overview { visible: None }]);
+            // A tap while a sequence waits takes it back, rather than
+            // opening the overview over a half-typed shortcut.
+            if self.sequence.is_pending() {
+                self.cancel_sequence();
+            } else {
+                self.dispatch(vec![Action::Overview { visible: None }]);
+            }
             return KeyRoute::Consume;
         }
         if is_super {
+            return KeyRoute::Consume;
+        }
+        if !key.pressed
+            && let Some(i) = self.swallowed.iter().position(|s| *s == key.sym)
+        {
+            self.swallowed.swap_remove(i);
             return KeyRoute::Consume;
         }
         // The confirmation dialog takes every key until it is answered.
@@ -1565,19 +1650,45 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Consume;
         }
-        let mods = Mods {
-            logo: key.mods.logo,
-            shift: key.mods.shift,
-            ctrl: key.mods.ctrl,
-            alt: key.mods.alt,
-        };
-        if let Some(action) =
-            layout_key(key.sym).and_then(|k| keys::binding_with(&self.shortcuts, mods, k))
-        {
-            if key.pressed {
-                self.dispatch(vec![action]);
+        if key.pressed {
+            let mods = Mods {
+                logo: key.mods.logo,
+                shift: key.mods.shift,
+                ctrl: key.mods.ctrl,
+                alt: key.mods.alt,
+            };
+            let step = match layout_key(key.sym) {
+                Some(k) => self.sequence.press(&self.shortcuts, mods, k),
+                // Shift, Ctrl and the like between two chords of a sequence
+                // are how the next chord is typed, not the end of it.
+                None if self.sequence.is_pending() => return KeyRoute::Consume,
+                None => Step::Unbound,
+            };
+            if step != Step::Unbound {
+                // A release lost to a focus change must not pile up.
+                if self.swallowed.len() >= 8 {
+                    self.swallowed.remove(0);
+                }
+                self.swallowed.push(key.sym);
+                self.show_sequence();
             }
-            return KeyRoute::Consume;
+            match step {
+                Step::Action(action) => {
+                    self.dispatch(vec![action]);
+                    return KeyRoute::Consume;
+                }
+                Step::Pending | Step::Cancelled => return KeyRoute::Consume,
+                Step::Unbound => {}
+            }
+        }
+        if self.shell.shortcut_help_visible() {
+            if key.pressed && key.sym == Keysym::Escape {
+                self.dispatch(vec![Action::ShortcutHelp {
+                    visible: Some(false),
+                }]);
+                return KeyRoute::Consume;
+            }
+            return KeyRoute::Chrome;
         }
         if self.shell.palette_visible() {
             if key.pressed && key.sym == Keysym::Escape {
@@ -1854,6 +1965,27 @@ impl compositor::Shell for Session {
     }
 
     fn captured(&mut self, request: u64, frame: std::result::Result<Capture, String>) {
+        if let Some(i) = self.pictures.0.iter().position(|r| *r == request) {
+            self.pictures.0.swap_remove(i);
+            let clock = Clock::now_local();
+            let stamp = format!(
+                "{}-{:02}-{:02} {:02}-{:02}",
+                clock.year, clock.month, clock.day, clock.hour, clock.minute
+            );
+            let (tx, rx) = mpsc::channel();
+            self.pictures.1.push(rx);
+            // Encoding takes a while; keep it off the compositor thread.
+            std::thread::spawn(move || {
+                let saved = frame.and_then(|capture| {
+                    let png = computer::png(&capture)?;
+                    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+                    let dir = PathBuf::from(home).join("Pictures").join("Screenshots");
+                    computer::save_picture(&dir, &stamp, &png).map_err(|e| e.to_string())
+                });
+                let _ = tx.send(saved);
+            });
+            return;
+        }
         let Some((reply, inline)) = self.shots.remove(&request) else {
             return;
         };
@@ -2459,6 +2591,7 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
 
 /// Layout-independent key for shortcuts, from the unmodified keysym.
 fn layout_key(sym: Keysym) -> Option<Key> {
+    let other = Key::Other;
     Some(match sym {
         Keysym::Left => Key::Arrow(Direction::Left),
         Keysym::Right => Key::Arrow(Direction::Right),
@@ -2468,11 +2601,28 @@ fn layout_key(sym: Keysym) -> Option<Key> {
         Keysym::Tab | Keysym::ISO_Left_Tab => Key::Tab,
         Keysym::Escape => Key::Escape,
         Keysym::space => Key::Space,
+        Keysym::BackSpace => other(KeyName::Backspace),
+        Keysym::Delete | Keysym::KP_Delete => other(KeyName::Delete),
+        Keysym::Home => other(KeyName::Home),
+        Keysym::End => other(KeyName::End),
+        Keysym::Prior => other(KeyName::PageUp),
+        Keysym::Next => other(KeyName::PageDown),
+        Keysym::Print | Keysym::Sys_Req => other(KeyName::Print),
+        _ if (Keysym::F1.raw()..=Keysym::F12.raw()).contains(&sym.raw()) => {
+            other(KeyName::Function((sym.raw() - Keysym::F1.raw() + 1) as u8))
+        }
         _ => {
             let c = sym.key_char()?.to_ascii_lowercase();
             match c {
                 '0'..='9' => Key::Digit(c as u8 - b'0'),
                 'a'..='z' => Key::Letter(c),
+                // Shifted, these are `?`, `<`, `>`, `_` and `+` on US
+                // layouts; the chord names the key, so map them back.
+                '/' | '?' => other(KeyName::Slash),
+                ',' | '<' => other(KeyName::Comma),
+                '.' | '>' => other(KeyName::Period),
+                '-' | '_' => other(KeyName::Minus),
+                '=' | '+' => other(KeyName::Equal),
                 _ => return None,
             }
         }

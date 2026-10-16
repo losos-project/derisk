@@ -9,7 +9,7 @@ use crate::{
     model::{
         BarPosition, Fit, Rgb, Settings, TopBar, Wallpaper, WallpaperKind, web_background_url,
     },
-    shortcuts::{Chord, Shortcut, Shortcuts},
+    shortcuts::{Group, Keys, Shortcut, Shortcuts},
     thumbs::Thumbnails,
 };
 
@@ -54,8 +54,8 @@ impl Drafts {
     }
 }
 
-fn chord_text(chord: Option<Chord>) -> String {
-    chord.map_or_else(|| "none".to_owned(), |c| c.to_string())
+fn chord_text(keys: Option<Keys>) -> String {
+    keys.map_or_else(|| "none".to_owned(), |k| k.to_string())
 }
 
 /// Where pictures and videos usually live: the user's Pictures and Videos
@@ -539,39 +539,48 @@ pub(crate) fn top_bar(ui: &mut egui::Ui, b: &mut TopBar, theme: &Theme) {
 
 pub(crate) fn shortcuts(ui: &mut egui::Ui, s: &mut Shortcuts, drafts: &mut Drafts, theme: &Theme) {
     let clashes = s.clashes();
-    for (i, shortcut) in Shortcut::ALL.into_iter().enumerate() {
-        ui.label(shortcut.label());
-        ui.horizontal(|ui| {
-            let text = &mut drafts.chords[i];
-            let edit = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
-            let parsed = if text.trim().eq_ignore_ascii_case("none") {
-                Some(None)
-            } else {
-                Chord::parse(text).map(Some)
-            };
-            match parsed {
-                Some(chord) if edit.changed() => s.set(shortcut, chord),
-                None => {
-                    ui.label(egui::RichText::new("Not a shortcut").color(theme.accent));
-                }
-                _ => {}
-            }
-            if clashes.contains(&shortcut) {
-                ui.label(egui::RichText::new("Used twice").color(theme.accent));
-            }
-            if s.get(shortcut) != Some(shortcut.default_chord())
-                && ui.small_button("Reset").clicked()
-            {
-                s.set(shortcut, Some(shortcut.default_chord()));
-                *text = chord_text(s.get(shortcut));
-            }
-        });
+    for group in Group::ALL {
+        ui.label(egui::RichText::new(group.label()).strong());
         ui.end_row();
+        for (i, shortcut) in Shortcut::ALL.into_iter().enumerate() {
+            if shortcut.group() != group {
+                continue;
+            }
+            ui.label(shortcut.label());
+            ui.horizontal(|ui| {
+                let text = &mut drafts.chords[i];
+                let edit = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
+                let parsed = if text.trim().eq_ignore_ascii_case("none") {
+                    Some(None)
+                } else {
+                    Keys::parse(text).map(Some)
+                };
+                match parsed {
+                    Some(keys) if edit.changed() => s.set(shortcut, keys),
+                    None => {
+                        ui.label(egui::RichText::new("Not a shortcut").color(theme.accent));
+                    }
+                    _ => {}
+                }
+                if clashes.contains(&shortcut) {
+                    ui.label(egui::RichText::new("Clashes").color(theme.accent));
+                }
+                if s.get(shortcut) != Some(shortcut.default_keys())
+                    && ui.small_button("Reset").clicked()
+                {
+                    s.set(shortcut, Some(shortcut.default_keys()));
+                    *text = chord_text(s.get(shortcut));
+                }
+            });
+            ui.end_row();
+        }
     }
     hint(
         ui,
         theme,
-        "Write chords like Super+Shift+M; \"none\" turns one off. Each needs Super, Ctrl or Alt. \
-         Super+1…9, Super+arrows and Alt+Tab are fixed.",
+        "Write a chord like Super+Shift+M, or a sequence like Super+W Left: press the first \
+         chord, then the next key. \"none\" turns one off. The first chord needs Super, Ctrl or \
+         Alt, unless it is Print or F1…F12. Super+1…9, Super+arrows, Super+Ctrl+arrows, Alt+Tab \
+         and Alt+F4 are fixed.",
     );
 }

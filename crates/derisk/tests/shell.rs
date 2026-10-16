@@ -677,3 +677,68 @@ fn an_untrusted_machines_window_cannot_be_kept_on_top() {
         .unwrap();
     assert!(!shell.is_on_top(other));
 }
+
+#[test]
+fn show_desktop_hides_every_window_and_brings_them_back() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    shell.apply(Action::ShowDesktop).unwrap();
+    assert!(shell.is_minimized(a) && shell.is_minimized(b));
+    assert_eq!(shell.focused(), None);
+    shell.apply(Action::ShowDesktop).unwrap();
+    assert!(!shell.is_minimized(a) && !shell.is_minimized(b));
+    assert_eq!(shell.focused(), Some(b));
+}
+
+#[test]
+fn stepping_workspaces_and_carrying_a_window_along() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    // Nothing past the last workspace without a window to take there.
+    shell
+        .apply(Action::StepWorkspace {
+            by: 1,
+            carry_window: false,
+        })
+        .unwrap();
+    assert_eq!(shell.active_workspace(), 1);
+    shell
+        .apply(Action::StepWorkspace {
+            by: 1,
+            carry_window: true,
+        })
+        .unwrap();
+    assert_eq!(shell.active_workspace(), 2);
+    assert_eq!(shell.focused(), Some(b));
+    shell
+        .apply(Action::StepWorkspace {
+            by: -1,
+            carry_window: false,
+        })
+        .unwrap();
+    assert_eq!(shell.active_workspace(), 1);
+    assert_eq!(shell.focused(), Some(a));
+}
+
+#[test]
+fn session_keys_ask_on_screen_as_the_person() {
+    let mut shell = desktop();
+    assert_eq!(
+        shell
+            .apply(Action::ConfirmSession {
+                op: SessionOp::PowerOff
+            })
+            .unwrap(),
+        []
+    );
+    assert_eq!(shell.pending_confirmation(), Some(SessionOp::PowerOff));
+    assert!(!shell.confirmation_from_agent());
+    assert_eq!(
+        shell.apply(Action::Confirm { accept: true }).unwrap(),
+        [Effect::Session {
+            op: SessionOp::PowerOff
+        }]
+    );
+}

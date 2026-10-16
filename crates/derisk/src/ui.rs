@@ -19,7 +19,7 @@
 
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use derisk_settings::{BarPosition, WallpaperKind};
+use derisk_settings::{BarPosition, Group, Shortcuts, WallpaperKind};
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
     Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui,
@@ -213,6 +213,48 @@ fn card<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// The keys that may follow a multi-key shortcut's first chords, in a card
+/// at the bottom of the screen, as Emacs' which-key and Zed show them.
+fn key_hint(ui: &Ui, theme: &Theme, shell: &Shell, hint: &KeyHint) {
+    let output = to_rect(shell.output());
+    let muted = theme.foreground.gamma_multiply(0.6);
+    egui::Area::new(Id::new("derisk-key-hint"))
+        .order(Order::Tooltip)
+        .interactable(false)
+        .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(output.height() * 0.08)))
+        .show(ui.ctx(), |ui| {
+            ui.set_max_width(320.0);
+            card(ui, theme, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&hint.typed).monospace().strong());
+                    ui.label(RichText::new("then").color(muted));
+                });
+                ui.add_space(4.0);
+                for (keys, label) in &hint.next {
+                    key_row(ui, theme, 96.0, keys, label);
+                }
+                ui.add_space(4.0);
+                ui.label(RichText::new("Esc to cancel").small().color(muted));
+            });
+        });
+}
+
+/// One shortcut in a list: its keys in a column of `width`, then what
+/// they do.
+fn key_row(ui: &mut Ui, theme: &Theme, width: f32, keys: &str, label: &str) {
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            vec2(width, 18.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_width(width);
+                ui.label(RichText::new(keys).monospace().color(theme.accent));
+            },
+        );
+        ui.label(label);
+    });
+}
+
 /// What every window on screen shows, for the overview's cards to draw
 /// instead of an icon. The compositor host hands it over each frame the
 /// overview is open (mcsapi-compositor's `WindowPictures`).
@@ -221,6 +263,15 @@ pub struct WindowPictures {
     pub texture: TextureId,
     /// Where an area of the screen (logical) lies in the texture.
     pub uv: Box<dyn Fn(Rect) -> Rect>,
+}
+
+/// What may follow the chords of a multi-key shortcut typed so far.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyHint {
+    /// The chords pressed so far, as written in Settings.
+    pub typed: String,
+    /// Each way to go on: the keys left to press, and what they do.
+    pub next: Vec<(String, &'static str)>,
 }
 
 /// Persistent UI state for the shell chrome.
@@ -258,6 +309,10 @@ pub struct ShellUi {
     shut: bool,
     /// What the windows show, while the host provides it.
     pub window_pictures: Option<WindowPictures>,
+    /// A multi-key shortcut under way, set by the host.
+    pub key_hint: Option<KeyHint>,
+    /// The shortcuts as bound, for the list Super+/ shows; set by the host.
+    pub shortcuts: Shortcuts,
     /// Window being dragged in the overview, toward a workspace.
     overview_drag: Option<WindowId>,
     tray: Option<(u64, Vec<TextureHandle>)>,
@@ -485,6 +540,8 @@ impl ShellUi {
             shutting: None,
             shut: false,
             window_pictures: None,
+            key_hint: None,
+            shortcuts: Shortcuts::default(),
             overview_drag: None,
             tray: None,
             palette: PaletteUi::default(),
@@ -988,6 +1045,12 @@ impl ShellUi {
             self.palette(ui, shell, &mut actions);
         }
         self.palette.open = shell.palette_visible();
+        if shell.shortcut_help_visible() {
+            self.shortcut_help(ui, shell, &mut actions);
+        }
+        if let Some(hint) = &self.key_hint {
+            key_hint(ui, &self.theme, shell, hint);
+        }
         if let Some(op) = shell.pending_confirmation() {
             self.confirmation(ui, shell, op, &mut actions);
         }
@@ -1121,7 +1184,11 @@ impl ShellUi {
             .show(ui.ctx(), |ui| {
                 card(ui, &self.theme, |ui| {
                     ui.set_max_width(420.0);
-                    let title = format!("An agent asked to {verb}");
+                    let title = if shell.confirmation_from_agent() {
+                        format!("An agent asked to {verb}")
+                    } else {
+                        format!("Do you want to {verb}?")
+                    };
                     ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
                         node.set_role(Role::AlertDialog);
                         node.set_label(title.clone());
@@ -1155,6 +1222,88 @@ impl ShellUi {
                     });
                 });
             });
+    }
+
+    /// Every shortcut as bound, grouped, over a dimmed screen (Super+/).
+    /// Escape or a click outside closes it.
+    fn shortcut_help(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        let screen = to_rect(shell.output());
+        let dim = ui.interact(screen, Id::new("derisk-shortcut-help-dim"), Sense::click());
+        ui.ctx()
+            .layer_painter(egui::LayerId::new(
+                Order::Foreground,
+                Id::new("derisk-shortcut-help-dim"),
+            ))
+            .rect_filled(screen, 0, Color32::from_black_alpha(120));
+        let mut close = dim.clicked();
+        let columns = if screen.width() < 900.0 { 1 } else { 2 };
+        let width = (screen.width() - 48.0).min(if columns == 1 { 460.0 } else { 860.0 });
+        let fixed = [
+            ("Super+1…9", "Go to a workspace"),
+            ("Super+Shift+1…9", "Move the window to a workspace"),
+            ("Super+Ctrl+Left / Right", "Previous or next workspace"),
+            ("Super+Ctrl+Shift+Left / Right", "Take the window along"),
+            ("Super+arrows", "Snap, maximize or minimize"),
+            ("Alt+Tab", "Switch windows"),
+            ("Alt+F4", "Close window"),
+            ("Super+B", "Move into the top bar"),
+        ];
+        egui::Area::new(Id::new("derisk-shortcut-help"))
+            .order(Order::Tooltip)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ui.ctx(), |ui| {
+                card(ui, &self.theme, |ui| {
+                    ui.set_width(width);
+                    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                        node.set_role(Role::Dialog);
+                        node.set_label("Keyboard shortcuts");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Keyboard shortcuts").size(18.0).strong());
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            close |= ui.button("Close").clicked();
+                        });
+                    });
+                    ui.label(
+                        RichText::new(
+                            "Keys separated by a space are pressed one after the other. \
+                             Change them in Settings, Shortcuts.",
+                        )
+                        .color(self.theme.foreground.gamma_multiply(0.6)),
+                    );
+                    ui.add_space(8.0);
+                    let theme = self.theme;
+                    let row = |ui: &mut Ui, keys: &str, label: &str| {
+                        key_row(ui, &theme, 200.0, keys, label);
+                    };
+                    egui::ScrollArea::vertical()
+                        .max_height(screen.height() - 160.0)
+                        .show(ui, |ui| {
+                            ui.columns(columns, |cols| {
+                                for (i, group) in Group::ALL.into_iter().enumerate() {
+                                    let ui = &mut cols[i * columns / Group::ALL.len()];
+                                    ui.label(RichText::new(group.label()).strong());
+                                    for (shortcut, keys) in self.shortcuts.bound() {
+                                        if shortcut.group() == group {
+                                            row(ui, &keys.to_string(), shortcut.label());
+                                        }
+                                    }
+                                    if group == Group::Windows {
+                                        for (keys, label) in fixed {
+                                            row(ui, keys, label);
+                                        }
+                                    }
+                                    ui.add_space(10.0);
+                                }
+                            });
+                        });
+                });
+            });
+        if close {
+            actions.push(Action::ShortcutHelp {
+                visible: Some(false),
+            });
+        }
     }
 
     fn drag_preview(&self, ui: &Ui, shell: &Shell) {

@@ -198,7 +198,8 @@ pub fn effect_argv(
         | Effect::MenuActivated { .. }
         | Effect::TrayActivated { .. }
         | Effect::WidgetActivated { .. }
-        | Effect::PaletteCommand { .. } => None,
+        | Effect::PaletteCommand { .. }
+        | Effect::Screenshot => None,
     }
 }
 

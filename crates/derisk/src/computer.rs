@@ -471,6 +471,34 @@ pub fn save_screenshot(dir: &Path, n: u64, png: &[u8]) -> std::io::Result<PathBu
     Ok(path)
 }
 
+/// Saves a screenshot the person took (Print) in `dir`, normally
+/// `~/Pictures/Screenshots`, as `Screenshot <stamp>.png`, numbering it when
+/// two land in the same minute. Unlike an agent's screenshots these are the
+/// person's own pictures, kept until they delete them.
+pub fn save_picture(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    for n in 1u32.. {
+        let name = match n {
+            1 => format!("Screenshot {stamp}.png"),
+            n => format!("Screenshot {stamp} ({n}).png"),
+        };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(png)?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("some number is free")
+}
+
 /// Screenshots kept on disk; older ones are removed.
 const KEEP_SCREENSHOTS: u64 = 8;
 
