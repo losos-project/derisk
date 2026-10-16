@@ -1,0 +1,120 @@
+        Flags             : 
+Streaming Parameters Video Output:
+974 ffmpeg -loglevel error -re -loop 1 -i /nix/store/1f6861y8x7b0dzg0f539vp7fbwada0n8-two.png -vf scale=320:240,format=yuyv422 -r 10 -f v4l2 /dev/video0
+camera none
+
+machine: must succeed: timeout 90 derisk-faces watch | head -n 4
+machine: (finished: must succeed: timeout 90 derisk-faces watch | head -n 4, in 50.95 seconds)
+faces 2
+faces 2
+faces 2
+faces 2
+
+machine: must succeed: pkill ffmpeg; sleep 1
+machine: (finished: must succeed: pkill ffmpeg; sleep 1, in 5.02 seconds)
+machine: must succeed: ffmpeg -loglevel error -re -loop 1 -i /nix/store/aznknlygkab1fjbbzhdz7nwhfqhh3hwa-one.png -vf scale=320:240,format=yuyv422 -r 10 -f v4l2 /dev/video0 >/tmp/ffmpeg.log 2>&1 &
+machine: (finished: must succeed: ffmpeg -loglevel error -re -loop 1 -i /nix/store/aznknlygkab1fjbbzhdz7nwhfqhh3hwa-one.png -vf scale=320:240,format=yuyv422 -r 10 -f v4l2 /dev/video0 >/tmp/ffmpeg.log 2>&1 &, in 0.58 seconds)
+machine: must succeed: sleep 3.0
+machine: (finished: must succeed: sleep 3.0, in 4.32 seconds)
+machine: must succeed: v4l2-ctl --all -d /dev/video0 2>&1 | head -30; pgrep -a ffmpeg; cat /tmp/ffmpeg.log; derisk-faces watch --device /dev/video0 2>&1 | head -2 || true
+machine: (finished: must succeed: v4l2-ctl --all -d /dev/video0 2>&1 | head -30; pgrep -a ffmpeg; cat /tmp/ffmpeg.log; derisk-faces watch --device /dev/video0 2>&1 | head -2 || true, in 35.04 seconds)
+Driver Info:
+        Driver name      : v4l2 loopback
+        Card type        : Camera
+        Bus info         : platform:v4l2loopback-000
+        Driver version   : 6.18.55
+        Capabilities     : 0x85200001
+                Video Capture
+                Read/Write
+                Streaming
+                Extended Pix Format
+                Device Capabilities
+        Device Caps      : 0x05200001
+                Video Capture
+                Read/Write
+                Streaming
+                Extended Pix Format
+Priority: 2
+Video input : 0 (loopback: ok)
+Format Video Capture:
+        Width/Height      : 320/240
+        Pixel Format      : 'YUYV' (YUYV 4:2:2)
+        Field             : None
+        Bytes per Line    : 640
+        Size Image        : 153600
+        Colorspace        : sRGB
+        Transfer Function : Default (maps to sRGB)
+        YCbCr/HSV Encoding: Default (maps to ITU-R 601)
+        Quantization      : Default (maps to Limited Range)
+        Flags             : 
+Streaming Parameters Video Capture:
+1208 ffmpeg -loglevel error -re -loop 1 -i /nix/store/aznknlygkab1fjbbzhdz7nwhfqhh3hwa-one.png -vf scale=320:240,format=yuyv422 -r 10 -f v4l2 /dev/video0
+faces 1
+faces 1
+
+machine: must succeed: timeout 90 derisk-faces watch | head -n 4
+machine: (finished: must succeed: timeout 90 derisk-faces watch | head -n 4, in 56.90 seconds)
+faces 1
+faces 1
+faces 1
+faces 1
+
+machine: must succeed: pkill ffmpeg; sleep 1
+machine: (finished: must succeed: pkill ffmpeg; sleep 1, in 6.57 seconds)
+machine: must succeed: ffmpeg -loglevel error -re -loop 1 -i /nix/store/qcc8x2qxpsfxrh0lh6f4nv83adcds36n-none.png -vf scale=320:240,format=yuyv422 -r 10 -f v4l2 /dev/video0 >/tmp/ffmpeg.log 2>&1 &
+machine: (finished: must succeed: ffmpeg -loglevel error -re -loop 1 -i /nix/store/qcc8x2qxpsfxrh0lh6f4nv83adcds36n-none.png -vf scale=320:240,format=yuyv422 -r 10 -f v4l2 /dev/video0 >/tmp/ffmpeg.log 2>&1 &, in 0.92 seconds)
+machine: must succeed: sleep 3.0
+machine: (finished: must succeed: sleep 3.0, in 4.88 seconds)
+machine: must succeed: v4l2-ctl --all -d /dev/video0 2>&1 | head -30; pgrep -a ffmpeg; cat /tmp/ffmpeg.log; derisk-faces watch --device /dev/video0 2>&1 | head -2 || true
+machine: (finished: must succeed: v4l2-ctl --all -d /dev/video0 2>&1 | head -30; pgrep -a ffmpeg; cat /tmp/ffmpeg.log; derisk-faces watch --device /dev/video0 2>&1 | head -2 || true, in 41.49 seconds)
+Driver Info:
+        Driver name      : v4l2 loopback
+        Card type        : Camera
+        Bus info         : platform:v4l2loopback-000
+        Driver version   : 6.18.55
+        Capabilities     : 0x85200001
+                Video Capture
+                Read/Write
+                Streaming
+                Extended Pix Format
+                Device Capabilities
+        Device Caps      : 0x05200001
+                Video Capture
+                Read/Write
+                Streaming
+                Extended Pix Format
+Priority: 2
+Video input : 0 (loopback: ok)
+Format Video Capture:
+        Width/Height      : 320/240
+        Pixel Format      : 'YUYV' (YUYV 4:2:2)
+        Field             : None
+        Bytes per Line    : 640
+        Size Image        : 153600
+        Colorspace        : sRGB
+        Transfer Function : Default (maps to sRGB)
+        YCbCr/HSV Encoding: Default (maps to ITU-R 601)
+        Quantization      : Default (maps to Limited Range)
+        Flags             : 
+Streaming Parameters Video Capture:
+1465 ffmpeg -loglevel error -re -loop 1 -i /nix/store/qcc8x2qxpsfxrh0lh6f4nv83adcds36n-none.png -vf scale=320:240,format=yuyv422 -r 10 -f v4l2 /dev/video0
+faces 0
+faces 0
+
+machine: must succeed: timeout 90 derisk-faces watch | head -n 4
+machine: (finished: must succeed: timeout 90 derisk-faces watch | head -n 4, in 46.40 seconds)
+faces 0
+faces 0
+faces 0
+faces 0
+
+machine: must succeed: pkill ffmpeg; sleep 1
+machine: (finished: must succeed: pkill ffmpeg; sleep 1, in 1.98 seconds)
+(finished: run the VM test script, in 462.49 seconds)
+test script finished in 463.33s
+cleanup
+kill QemuMachine (pid 45)
+machine # qemu-system-x86_64: terminating on signal 15 from pid 39 (/nix/store/lb41b0anx1f98y9y5s9mdv97gjgsq740-python3-3.14.7/bin/python3.14)
+(finished: cleanup, in 0.11 seconds)
+/nix/store/58y5an2gyl2p0i23lsdjlyabjz4l5rcz-vm-test-run-derisk-faces-v4l2
+exit 0
