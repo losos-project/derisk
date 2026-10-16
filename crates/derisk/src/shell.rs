@@ -346,6 +346,8 @@ pub struct Shell {
     confirmation_from_agent: bool,
     /// Whether the list of keyboard shortcuts is showing.
     shortcut_help: bool,
+    /// The tour of the desktop is showing.
+    tutorial: bool,
     /// The windows [`Action::ShowDesktop`] minimized, to bring back when it
     /// is pressed again; emptied once any of them is restored another way.
     desktop_shown: Vec<WindowId>,
@@ -467,6 +469,7 @@ impl Shell {
             palette: false,
             confirmation_from_agent: false,
             shortcut_help: false,
+            tutorial: false,
             desktop_shown: Vec::new(),
             snap_assist: None,
             pending: Vec::new(),
@@ -730,6 +733,11 @@ impl Shell {
     /// Whether the list of keyboard shortcuts is showing.
     pub fn shortcut_help_visible(&self) -> bool {
         self.shortcut_help
+    }
+
+    /// Whether the tour of the desktop is showing.
+    pub fn tutorial_visible(&self) -> bool {
+        self.tutorial
     }
 
     /// Whether the on-screen keyboard is showing.
@@ -1382,6 +1390,25 @@ impl Shell {
             }
             Action::ShortcutHelp { visible } => {
                 self.shortcut_help = visible.unwrap_or(!self.shortcut_help);
+            }
+            Action::Tutorial { visible } => {
+                let show = visible.unwrap_or(!self.tutorial);
+                if show == self.tutorial {
+                    return Ok(Vec::new());
+                }
+                self.tutorial = show;
+                if show {
+                    // The tour points at the desktop itself, so nothing
+                    // else covers it.
+                    self.palette = false;
+                    self.overview = false;
+                    self.shortcut_help = false;
+                    if self.is_phone() {
+                        self.keyboard = false;
+                    }
+                } else {
+                    return Ok(vec![Effect::TutorialSeen]);
+                }
             }
             Action::ShowDesktop => self.show_desktop(),
             Action::StepWorkspace { by, carry_window } => {

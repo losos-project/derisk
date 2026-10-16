@@ -199,7 +199,8 @@ pub fn effect_argv(
         | Effect::TrayActivated { .. }
         | Effect::WidgetActivated { .. }
         | Effect::PaletteCommand { .. }
-        | Effect::Screenshot => None,
+        | Effect::Screenshot
+        | Effect::TutorialSeen => None,
     }
 }
 

@@ -27,6 +27,7 @@
 //! - [`notification_stack`]: the notifications apps send the session over
 //!   D-Bus, and which of them are on screen.
 //! - [`keys`]: keyboard shortcuts.
+//! - [`tutorial`]: the tour of the desktop the first login starts with.
 //! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
 //!   `derisk greeter` holds with `derisk display-manager` (or greetd);
 //!   [`polkit`]: the dialog the session's polkit agent shows.
@@ -88,6 +89,7 @@ pub mod systemd;
 pub mod theme;
 pub mod time;
 pub mod tray;
+pub mod tutorial;
 pub mod ui;
 pub mod wallpaper;
 pub mod widgets;

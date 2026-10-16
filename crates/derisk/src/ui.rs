@@ -52,6 +52,7 @@ use crate::{
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
     time::Clock,
+    tutorial,
     wallpaper::{Visibility, WallpaperPainter},
     widgets::Board,
 };
@@ -373,6 +374,14 @@ pub struct ShellUi {
     title_drags: Vec<TitleDrag>,
     /// Where the top bar's search field was drawn last frame.
     search_rect: Option<Rect>,
+    /// Where the top bar's overview button and the focused window's
+    /// buttons and title were drawn last frame, for the tour to point at.
+    overview_rect: Option<Rect>,
+    controls_rect: Option<Rect>,
+    /// The tour's card on screen, and whether the tour showed last frame
+    /// (opening it again starts from the first card).
+    tutorial_step: usize,
+    tutorial_open: bool,
     /// Move keyboard focus into the top bar next frame (Super+B).
     focus_bar: bool,
     /// Decoded app icons by theme name or path, `None` when the theme has
@@ -590,6 +599,10 @@ impl ShellUi {
             title_drags: Vec::new(),
             focus_bar: false,
             search_rect: None,
+            overview_rect: None,
+            controls_rect: None,
+            tutorial_step: 0,
+            tutorial_open: false,
             icons: RefCell::default(),
             relay: None,
             // What is focused already is ringed from the start.
@@ -1014,6 +1027,13 @@ impl ShellUi {
         if shell.shortcut_help_visible() {
             self.shortcut_help(ui, shell, &mut actions);
         }
+        if shell.tutorial_visible() && frame.done {
+            if !self.tutorial_open {
+                self.tutorial_step = 0;
+            }
+            self.tutorial(ui, shell, &mut actions);
+        }
+        self.tutorial_open = shell.tutorial_visible();
         if let Some(hint) = &self.key_hint {
             key_hint(ui, &self.theme, shell, hint);
         }
@@ -1272,6 +1292,142 @@ impl ShellUi {
         }
     }
 
+    /// The tour of the desktop: one card at a time, pointing at the part of
+    /// the desktop it is about with a ring, over a dimmed screen. The arrow
+    /// keys and Enter step through it; Escape or Skip ends it.
+    fn tutorial(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        let steps = tutorial::steps(shell.is_phone());
+        self.tutorial_step = self.tutorial_step.min(steps.len() - 1);
+        let step = steps[self.tutorial_step];
+        let screen = to_rect(shell.output());
+        let nav = {
+            let area = to_rect(shell.work_area());
+            Rect::from_x_y_ranges(screen.x_range(), area.bottom()..=screen.bottom())
+        };
+        let target = match step.target {
+            tutorial::Target::Nothing => None,
+            tutorial::Target::TopBar => self.bar_rect,
+            tutorial::Target::WindowControls => self.controls_rect.or(self.bar_rect),
+            tutorial::Target::Search => self.search_rect.or(self.bar_rect),
+            tutorial::Target::Overview => self.overview_rect.or(self.bar_rect),
+            tutorial::Target::NavBar => Some(nav).filter(|r| r.height() > 0.0),
+        }
+        .map(|r| r.expand(4.0).intersect(screen));
+
+        // The screen dims around what the card is about, and a click
+        // anywhere but the card does nothing: the tour has the pointer.
+        let _ = ui.interact(screen, Id::new("derisk-tutorial-dim"), Sense::click());
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            Order::Foreground,
+            Id::new("derisk-tutorial-dim"),
+        ));
+        let shade = Color32::from_black_alpha(150);
+        match target {
+            Some(t) => {
+                for r in [
+                    Rect::from_x_y_ranges(screen.x_range(), screen.top()..=t.top()),
+                    Rect::from_x_y_ranges(screen.x_range(), t.bottom()..=screen.bottom()),
+                    Rect::from_x_y_ranges(screen.left()..=t.left(), t.y_range()),
+                    Rect::from_x_y_ranges(t.right()..=screen.right(), t.y_range()),
+                ] {
+                    painter.rect_filled(r, 0, shade);
+                }
+                painter.rect_stroke(
+                    t,
+                    6,
+                    Stroke::new(FOCUS_RING, self.theme.accent),
+                    StrokeKind::Outside,
+                );
+            }
+            None => {
+                painter.rect_filled(screen, 0, shade);
+            }
+        }
+
+        // The card sits below what it points at, or above a target at the
+        // bottom edge, or in the middle when it points at nothing.
+        let width = (screen.width() - 32.0).min(380.0);
+        let (anchor, offset) = match target {
+            Some(t) if t.center().y < screen.center().y => {
+                let x = t.center().x.clamp(
+                    screen.left() + 16.0 + width / 2.0,
+                    screen.right() - 16.0 - width / 2.0,
+                );
+                (
+                    Align2::CENTER_TOP,
+                    vec2(x - screen.center().x, t.bottom() + 16.0),
+                )
+            }
+            Some(t) => (
+                Align2::CENTER_BOTTOM,
+                vec2(0.0, t.top() - 16.0 - screen.bottom()),
+            ),
+            None => (Align2::CENTER_CENTER, vec2(0.0, 0.0)),
+        };
+        let last = self.tutorial_step + 1 == steps.len();
+        let (mut back, mut next, mut skip) = (false, false, false);
+        egui::Area::new(Id::new("derisk-tutorial"))
+            .order(Order::Tooltip)
+            .anchor(anchor, offset)
+            .show(ui.ctx(), |ui| {
+                // Before the card, which takes all the width it is given.
+                ui.set_max_width(width);
+                card(ui, &self.theme, |ui| {
+                    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                        node.set_role(Role::Dialog);
+                        node.set_label(step.title);
+                    });
+                    ui.label(
+                        RichText::new(format!("{} of {}", self.tutorial_step + 1, steps.len()))
+                            .small()
+                            .color(self.theme.foreground.gamma_multiply(0.6)),
+                    );
+                    ui.label(RichText::new(step.title).size(18.0).strong());
+                    ui.add_space(4.0);
+                    ui.label(step.body);
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if !last {
+                            skip = ui.button("Skip tour").clicked();
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let label = if last { "Done" } else { "Next" };
+                            let primary = ui.add(
+                                egui::Button::new(
+                                    RichText::new(label).color(on(self.theme.accent)),
+                                )
+                                .fill(self.theme.accent),
+                            );
+                            next = primary.clicked();
+                            if self.tutorial_step > 0 {
+                                back = ui.button("Back").clicked();
+                            }
+                        });
+                    });
+                });
+            });
+        let (forward, backward) = ui.ctx().input(|i| {
+            (
+                i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::Enter),
+                i.key_pressed(Key::ArrowLeft),
+            )
+        });
+        if next || forward {
+            if last {
+                skip = true;
+            } else {
+                self.tutorial_step += 1;
+            }
+        } else if (back || backward) && self.tutorial_step > 0 {
+            self.tutorial_step -= 1;
+        }
+        if skip {
+            actions.push(Action::Tutorial {
+                visible: Some(false),
+            });
+        }
+    }
+
     fn drag_preview(&self, ui: &Ui, shell: &Shell) {
         let preview = match shell.drag_target() {
             Some(DropTarget::Snap { preview, .. } | DropTarget::Tile { preview, .. }) => preview,
@@ -1370,6 +1526,8 @@ impl ShellUi {
         if self.bar_shown != target {
             ui.ctx().request_repaint();
         }
+        self.overview_rect = None;
+        self.controls_rect = None;
         if self.bar_shown <= 0.0 {
             self.bar_rect = None;
             return;
@@ -1420,6 +1578,7 @@ impl ShellUi {
                     .add(icons::button(ui.ctx(), "view-app-grid", 16.0, ink).frame(false))
                     .on_hover_text("Overview");
                 name(ui, &overview, Role::Button, "Overview");
+                self.overview_rect = Some(overview.rect);
                 if std::mem::take(&mut self.focus_bar) {
                     overview.request_focus();
                 }
@@ -1522,6 +1681,7 @@ impl ShellUi {
         actions: &mut Vec<Action>,
     ) {
         let height = ui.available_height();
+        let controls_left = ui.cursor().left();
         ui.spacing_mut().item_spacing.x = 4.0;
         for button in Button::ORDER {
             let (icon, label, shortcut) = match button {
@@ -1574,6 +1734,10 @@ impl ShellUi {
         // The icon, the title and the bar's height above and below them are
         // the handle, so it is not a thin strip of text to aim at.
         let handle = Rect::from_x_y_ranges(start..=text.rect.right(), ui.max_rect().y_range());
+        self.controls_rect = Some(Rect::from_x_y_ranges(
+            controls_left..=handle.right(),
+            handle.y_range(),
+        ));
         let grip = ui
             .interact(
                 handle,

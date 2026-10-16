@@ -476,7 +476,7 @@ pub fn tools() -> Value {
             {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "switch_workspace"}, "workspace": workspace}},
             {"type": "object", "required": ["action", "workspace"], "properties": {"action": {"const": "move_to_workspace"}, "window": window, "workspace": workspace}},
             {"type": "object", "required": ["action", "layout"], "properties": {"action": {"const": "set_layout"}, "layout": {"enum": ["tall", "monocle"]}}},
-            {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["overview", "palette", "shortcut_help"]}, "visible": {"type": "boolean"}}},
+            {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["overview", "palette", "shortcut_help", "tutorial"]}, "visible": {"type": "boolean"}}},
             {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["show_desktop", "screenshot"]}}},
             {"type": "object", "required": ["action", "by"], "properties": {"action": {"const": "step_workspace"}, "by": {"type": "integer", "description": "Workspaces along; negative goes back"}, "carry_window": {"type": "boolean"}}},
             {"type": "object", "required": ["action", "path"], "properties": {"action": {"const": "open"}, "path": {"type": "string", "description": "Absolute path to an existing file or folder; executables and .desktop files are refused"}}},

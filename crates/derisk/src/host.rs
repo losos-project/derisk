@@ -57,6 +57,7 @@ use derisk::{
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
+    tutorial,
     ui::{
         ChoiceInput, KeyHint, PolkitInput, ShellUi, TitleDragPhase, WindowPictures,
         set_touch_style, show_choice, show_lock, show_polkit,
@@ -189,6 +190,11 @@ pub struct Session {
     /// last wrote them.
     words: Option<PathBuf>,
     words_saved: Instant,
+    /// Where finishing the tour is remembered, and whether this login has
+    /// looked for that yet: once the startup animation ends, a login that
+    /// has not seen the tour starts it.
+    tutorial_mark: Option<PathBuf>,
+    tutorial_checked: bool,
     /// Whether a focused text field brought the on-screen keyboard up, so
     /// leaving the field takes it down again; one the person opened stays.
     keyboard_for_field: bool,
@@ -398,6 +404,8 @@ impl Session {
             settings: SettingsWatch::new(derisk_settings::default_path()),
             phone,
             words,
+            tutorial_mark: tutorial::mark_path(),
+            tutorial_checked: false,
             words_saved: Instant::now(),
             keyboard_for_field: false,
             shortcuts: Shortcuts::default(),
@@ -1154,6 +1162,17 @@ impl Session {
                         );
                     }
                 }
+                Effect::TutorialSeen => {
+                    if let Some(mark) = &self.tutorial_mark {
+                        let written = mark
+                            .parent()
+                            .map_or(Ok(()), std::fs::create_dir_all)
+                            .and_then(|()| std::fs::write(mark, ""));
+                        if let Err(e) = written {
+                            warn!(path = %mark.display(), error = %e, "cannot remember the tour was seen");
+                        }
+                    }
+                }
                 Effect::Screenshot => {
                     self.requests += 1;
                     self.pictures.0.push(self.requests);
@@ -1393,6 +1412,14 @@ impl compositor::Shell for Session {
     /// minute.
     fn tick(&mut self) {
         self.poll_idle();
+        if !self.tutorial_checked && self.startup_done() && !self.lock.is_locked() {
+            self.tutorial_checked = true;
+            if self.tutorial_mark.as_ref().is_some_and(|m| !m.exists()) {
+                self.dispatch(vec![Action::Tutorial {
+                    visible: Some(true),
+                }]);
+            }
+        }
         // Every frame, so a banner goes when its time is up rather than
         // up to a second later.
         self.notifications.expire(Instant::now());
@@ -1511,6 +1538,7 @@ impl compositor::Shell for Session {
             || self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
+            || self.shell.tutorial_visible()
             || self
                 .ui
                 .bar_rect()
@@ -1647,6 +1675,16 @@ impl compositor::Shell for Session {
                 Step::Pending | Step::Cancelled => return KeyRoute::Consume,
                 Step::Unbound => {}
             }
+        }
+        // The tour takes the keys: arrows and Enter step through it.
+        if self.shell.tutorial_visible() {
+            if key.pressed && key.sym == Keysym::Escape {
+                self.dispatch(vec![Action::Tutorial {
+                    visible: Some(false),
+                }]);
+                return KeyRoute::Consume;
+            }
+            return KeyRoute::Chrome;
         }
         if self.shell.shortcut_help_visible() {
             if key.pressed && key.sym == Keysym::Escape {

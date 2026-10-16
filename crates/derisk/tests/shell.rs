@@ -770,3 +770,43 @@ fn session_keys_ask_on_screen_as_the_person() {
         }]
     );
 }
+
+#[test]
+fn the_tour_covers_the_desktop_and_is_remembered_when_it_ends() {
+    let mut shell = desktop();
+    shell
+        .apply(Action::Palette {
+            visible: Some(true),
+        })
+        .unwrap();
+    assert_eq!(
+        shell
+            .apply(Action::Tutorial {
+                visible: Some(true)
+            })
+            .unwrap(),
+        vec![]
+    );
+    assert!(shell.tutorial_visible());
+    assert!(
+        !shell.palette_visible(),
+        "nothing covers what the tour shows"
+    );
+    assert_eq!(
+        shell
+            .apply(Action::Tutorial {
+                visible: Some(false)
+            })
+            .unwrap(),
+        vec![Effect::TutorialSeen]
+    );
+    // Closing it again remembers nothing new.
+    assert_eq!(
+        shell
+            .apply(Action::Tutorial {
+                visible: Some(false)
+            })
+            .unwrap(),
+        vec![]
+    );
+}

@@ -146,6 +146,13 @@ pub enum Action {
         #[serde(default)]
         visible: Option<bool>,
     },
+    /// Show, hide (`Some`) or toggle (`None`) the tour of the desktop that
+    /// the first login starts with.
+    Tutorial {
+        /// Desired visibility.
+        #[serde(default)]
+        visible: Option<bool>,
+    },
     /// Minimize every window on the workspace to show the desktop, or,
     /// when the desktop is showing that way, bring those windows back.
     ShowDesktop,
@@ -324,6 +331,7 @@ impl Action {
             Self::Palette { .. } => "Toggle the command palette".into(),
             Self::ShortcutHelp { .. } => "Show the keyboard shortcuts".into(),
             Self::ShowDesktop => "Show the desktop".into(),
+            Self::Tutorial { .. } => "Take the tour of the desktop".into(),
             Self::StepWorkspace { by, carry_window } => format!(
                 "{} {} workspace",
                 if *carry_window {
@@ -400,6 +408,9 @@ pub enum Effect {
     },
     /// Capture the screen and save it as a picture.
     Screenshot,
+    /// The tour was finished or skipped: remember it, so the next login
+    /// goes straight to the desktop.
+    TutorialSeen,
     /// Tell the program that registered `source` that one of its palette
     /// rows was picked.
     PaletteCommand {
