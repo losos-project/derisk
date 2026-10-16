@@ -1,0 +1,113 @@
+{
+ "label": "f-before-300",
+ "cap_us_per_ms": 300,
+ "cpus": "0,1",
+ "low_power": "on",
+ "phases": [
+  {
+   "phase": "desktop, two windows, pointer moving",
+   "summaries": [
+    {
+     "fps": "5.7",
+     "target_fps": "30.0",
+     "period_p50_ms": "173.3",
+     "period_p99_ms": "193.2",
+     "period_max_ms": "193.2",
+     "draw_p50_ms": "139.0",
+     "draw_p99_ms": "159.8",
+     "draw_max_ms": "159.8",
+     "late": "29",
+     "skipped": "0"
+    },
+    {
+     "fps": "5.7",
+     "target_fps": "30.0",
+     "period_p50_ms": "174.8",
+     "period_p99_ms": "205.5",
+     "period_max_ms": "205.5",
+     "draw_p50_ms": "141.4",
+     "draw_p99_ms": "172.1",
+     "draw_max_ms": "172.1",
+     "late": "29",
+     "skipped": "0"
+    }
+   ],
+   "seconds": 15.043238639831543,
+   "cpu_ms": {
+    "main_thread": 700.0,
+    "session_threads": 710.0,
+    "llvmpipe": 22390.0
+   }
+  },
+  {
+   "phase": "overview open, pointer moving",
+   "summaries": [
+    {
+     "fps": "4.9",
+     "target_fps": "30.0",
+     "period_p50_ms": "203.2",
+     "period_p99_ms": "219.8",
+     "period_max_ms": "219.8",
+     "draw_p50_ms": "169.7",
+     "draw_p99_ms": "197.8",
+     "draw_max_ms": "197.8",
+     "late": "25",
+     "skipped": "0"
+    },
+    {
+     "fps": "4.8",
+     "target_fps": "30.0",
+     "period_p50_ms": "209.3",
+     "period_p99_ms": "232.9",
+     "period_max_ms": "232.9",
+     "draw_p50_ms": "175.9",
+     "draw_p99_ms": "199.5",
+     "draw_max_ms": "199.5",
+     "late": "24",
+     "skipped": "0"
+    }
+   ],
+   "seconds": 15.077556610107422,
+   "cpu_ms": {
+    "main_thread": 760.0,
+    "session_threads": 760.0,
+    "llvmpipe": 23270.0
+   }
+  },
+  {
+   "phase": "palette open, typing",
+   "summaries": [
+    {
+     "fps": "5.3",
+     "target_fps": "30.0",
+     "period_p50_ms": "190.0",
+     "period_p99_ms": "219.4",
+     "period_max_ms": "219.4",
+     "draw_p50_ms": "156.5",
+     "draw_p99_ms": "185.9",
+     "draw_max_ms": "185.9",
+     "late": "27",
+     "skipped": "0"
+    },
+    {
+     "fps": "5.4",
+     "target_fps": "30.0",
+     "period_p50_ms": "186.3",
+     "period_p99_ms": "201.4",
+     "period_max_ms": "201.4",
+     "draw_p50_ms": "152.8",
+     "draw_p99_ms": "168.0",
+     "draw_max_ms": "168.0",
+     "late": "27",
+     "skipped": "0"
+    }
+   ],
+   "seconds": 15.01400375366211,
+   "cpu_ms": {
+    "main_thread": 650.0,
+    "session_threads": 650.0,
+    "llvmpipe": 22900.0
+   }
+  }
+ ]
+}

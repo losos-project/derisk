@@ -1,0 +1,89 @@
+{
+ "label": "f-before-tiny",
+ "cap_us_per_ms": 300,
+ "cpus": "0,1",
+ "low_power": "on",
+ "phases": [
+  {
+   "phase": "desktop, two windows, pointer moving",
+   "summaries": [
+    {
+     "fps": "14.7",
+     "target_fps": "30.0",
+     "period_p50_ms": "67.6",
+     "period_p99_ms": "75.6",
+     "period_max_ms": "78.6",
+     "draw_p50_ms": "34.2",
+     "draw_p99_ms": "42.1",
+     "draw_max_ms": "45.1",
+     "late": "74",
+     "skipped": "0"
+    }
+   ],
+   "seconds": 12.031980991363525,
+   "cpu_ms": {
+    "main_thread": 740.0,
+    "session_threads": 750.0,
+    "llvmpipe": 10380.0
+   }
+  },
+  {
+   "phase": "overview open, pointer moving",
+   "summaries": [
+    {
+     "fps": "13.1",
+     "target_fps": "30.0",
+     "period_p50_ms": "75.4",
+     "period_p99_ms": "87.9",
+     "period_max_ms": "88.5",
+     "draw_p50_ms": "41.9",
+     "draw_p99_ms": "54.5",
+     "draw_max_ms": "55.1",
+     "late": "66",
+     "skipped": "0"
+    },
+    {
+     "fps": "13.0",
+     "target_fps": "30.0",
+     "period_p50_ms": "76.4",
+     "period_p99_ms": "86.0",
+     "period_max_ms": "86.6",
+     "draw_p50_ms": "43.0",
+     "draw_p99_ms": "52.6",
+     "draw_max_ms": "53.0",
+     "late": "66",
+     "skipped": "0"
+    }
+   ],
+   "seconds": 12.070111274719238,
+   "cpu_ms": {
+    "main_thread": 970.0,
+    "session_threads": 980.0,
+    "llvmpipe": 11240.0
+   }
+  },
+  {
+   "phase": "palette open, typing",
+   "summaries": [
+    {
+     "fps": "13.0",
+     "target_fps": "30.0",
+     "period_p50_ms": "76.2",
+     "period_p99_ms": "97.7",
+     "period_max_ms": "102.2",
+     "draw_p50_ms": "42.6",
+     "draw_p99_ms": "51.4",
+     "draw_max_ms": "68.8",
+     "late": "65",
+     "skipped": "0"
+    }
+   ],
+   "seconds": 12.042910814285278,
+   "cpu_ms": {
+    "main_thread": 1000.0,
+    "session_threads": 1010.0,
+    "llvmpipe": 10940.0
+   }
+  }
+ ]
+}
