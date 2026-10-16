@@ -255,6 +255,9 @@ fn pm(args: &[String], events: &Sender<Event>) -> Result<(), String> {
         // whose environment says otherwise from making machines the
         // desktop cannot see.
         .env("LIBVIRT_DEFAULT_URI", URI)
+        // Its lines are shown as they are, in the app rather than a
+        // terminal: without this its log lines carry colour escapes.
+        .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
