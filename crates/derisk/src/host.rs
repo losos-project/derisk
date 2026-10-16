@@ -72,7 +72,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     machines::{self, MachineDisplays},
-    notifications, pam, polkit_agent, unlock,
+    notifications, pam, polkit_agent, power, unlock,
 };
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
@@ -243,6 +243,8 @@ pub struct Session {
     locked_elsewhere: bool,
     /// Virtual machines and the sockets their windows come in through.
     machines: Option<MachineDisplays>,
+    /// power-profiles-daemon's profiles, offered in the palette.
+    power_modes: power::PowerModes,
     /// Apps' notifications, which `crate::notifications` fills.
     notifications: notifications::Center,
 }
@@ -420,6 +422,7 @@ impl Session {
             idle_started: None,
             locked_elsewhere: false,
             machines: MachineDisplays::start(),
+            power_modes: power::PowerModes::default(),
             notifications: notifications::Center::default(),
         }
     }
@@ -946,10 +949,12 @@ impl Session {
     }
 
     /// Re-indexes home on a background thread each time the palette opens,
-    /// so file results stay fresh without stalling a frame.
+    /// so file results stay fresh without stalling a frame, and reads the
+    /// power modes the same way.
     fn palette_opened(&mut self) {
         let open = self.shell.palette_visible();
         if open && !self.palette_open {
+            self.power_modes.start(None);
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
                 let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -971,6 +976,24 @@ impl Session {
             self.shell.apps = app_index(&self.core_apps, &installed);
             self.installed = installed;
             self.index = None;
+        }
+        if let Some(read) = self.power_modes.poll() {
+            // Without power-profiles-daemon there is nothing to switch, so
+            // there are no rows rather than dead ones.
+            let shown = match read {
+                Some(profiles) => self.shell.palette_sources.register(
+                    power::SOURCE.into(),
+                    power::palette(&profiles),
+                    Some(SHELL),
+                ),
+                None => self
+                    .shell
+                    .palette_sources
+                    .remove(power::SOURCE, Some(SHELL)),
+            };
+            if let Err(e) = shown {
+                debug!(error = e, "power modes are not in the palette");
+            }
         }
     }
 
@@ -1180,6 +1203,15 @@ impl Session {
                             let _ = events.send(widgets::widget_event(id, item).to_string());
                         }
                         None => info!("{}", serde_json::to_string(&effect).unwrap_or_default()),
+                    }
+                }
+                Effect::PaletteCommand { source, command }
+                    if self.shell.palette_sources.recipient(source) == Some(SHELL)
+                        && source == power::SOURCE =>
+                {
+                    match power::picked(command) {
+                        Some(profile) => self.power_modes.start(Some(profile.to_owned())),
+                        None => warn!(%command, "no such power mode"),
                     }
                 }
                 Effect::PaletteCommand { source, command }
