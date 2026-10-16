@@ -5636,6 +5636,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "palette-power"
+version = "0.1.0"
+dependencies = [
+ "derisk-palette-sdk",
+]
+
+[[package]]
 name = "palette-session"
 version = "0.1.0"
 dependencies = [
