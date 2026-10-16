@@ -397,6 +397,8 @@ pub struct ShellUi {
     /// Where the notification cards were drawn last frame, for the host to
     /// give them the pointer.
     notification_rects: Vec<Rect>,
+    /// "Show anyway" was pressed on the cover, for the host to take.
+    show_anyway: bool,
 }
 
 /// Pixels app icons are decoded at: crisp up to 32 points at 2x, the largest
@@ -615,6 +617,7 @@ impl ShellUi {
                 f64::NEG_INFINITY,
             ),
             notification_rects: Vec::new(),
+            show_anyway: false,
         }
     }
 
@@ -3618,6 +3621,102 @@ impl ShellUi {
     /// click on a card never reaches the window under it.
     pub fn notification_rects(&self) -> &[Rect] {
         &self.notification_rects
+    }
+
+    /// Whether "Show anyway" was pressed on the cover since the last call.
+    pub fn take_show_anyway(&mut self) -> bool {
+        std::mem::take(&mut self.show_anyway)
+    }
+
+    /// Draws the privacy display's cover over what [`Shell::privacy_cover`]
+    /// says someone else may be looking at: the whole screen, under a card
+    /// saying why with a way past it, or each notification pop-up alone.
+    /// The sheet is the theme's background and opaque: frosted glass still
+    /// lets light text through to a second pair of eyes, which is what the
+    /// cover is for. Above everything else the shell draws, the lock screen
+    /// included.
+    pub fn show_privacy_cover(&mut self, ui: &mut Ui, shell: &Shell) {
+        let Some(area) = shell.privacy_cover else {
+            return;
+        };
+        let ctx = ui.ctx().clone();
+        let shown = motion::appear(&ctx, Id::new("derisk-privacy-cover"), 0.0, f(8), ease::OUT);
+        let sheet = self.theme.background.to_opaque().gamma_multiply(shown);
+        let muted = self.theme.foreground.gamma_multiply(0.7);
+        let screen = to_rect(shell.output());
+        // One area for the sheet and the card on it, so the card is always
+        // drawn over its sheet.
+        egui::Area::new(Id::new("derisk-privacy-cover"))
+            .order(Order::Debug)
+            .fixed_pos(screen.min)
+            .constrain(false)
+            .interactable(area == crate::privacy_display::Area::Screen)
+            .show(&ctx, |ui| match area {
+                crate::privacy_display::Area::Screen => {
+                    // Nothing under the sheet takes a click while it shows.
+                    let _ = ui.interact(screen, Id::new("derisk-privacy-sheet"), Sense::click());
+                    ui.painter().rect_filled(screen, 0, sheet);
+                    let width = (screen.width() - 32.0).min(360.0);
+                    let at = Rect::from_center_size(screen.center(), vec2(width, 0.0));
+                    ui.scope_builder(
+                        UiBuilder::new().max_rect(Rect::from_x_y_ranges(
+                            at.x_range(),
+                            at.top() - 80.0..=screen.bottom(),
+                        )),
+                        |ui| {
+                            ui.multiply_opacity(shown);
+                            card(ui, &self.theme, |ui| {
+                                ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                                    node.set_role(Role::Alert);
+                                    node.set_label("Someone else may be looking");
+                                });
+                                ui.label(
+                                    RichText::new("Someone else may be looking")
+                                        .size(18.0)
+                                        .strong(),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(
+                                        "The camera sees a second face, so the screen is \
+                                         covered until they look away.",
+                                    )
+                                    .color(muted),
+                                );
+                                ui.add_space(12.0);
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if ui.button("Show anyway").clicked() {
+                                            self.show_anyway = true;
+                                        }
+                                    });
+                                });
+                            });
+                        },
+                    );
+                }
+                crate::privacy_display::Area::Notifications => {
+                    // Each pop-up's card, at its corners; the rest of the
+                    // screen stays as it is.
+                    let radius = self.tokens.radius;
+                    for &rect in &self.notification_rects {
+                        ui.painter().rect_filled(rect, radius, sheet);
+                        ui.painter().rect_stroke(
+                            rect,
+                            radius,
+                            Stroke::new(1.0, self.theme.border.gamma_multiply(shown)),
+                            StrokeKind::Inside,
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "Hidden while someone else may be looking",
+                            egui::FontId::proportional(13.0),
+                            muted.gamma_multiply(shown),
+                        );
+                    }
+                }
+            });
     }
 }
 

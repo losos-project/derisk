@@ -1,5 +1,5 @@
-//! The Privacy page: device access for every app, history and trash, and
-//! each Flatpak app's permissions.
+//! The Privacy page: the privacy display, device access for every app,
+//! history and trash, and each Flatpak app's permissions.
 //!
 //! The switches at the top are settings and apply on Save; a switched-off
 //! device is then denied to every Flatpak app in the portal permission
@@ -13,7 +13,7 @@ use mcsapi_ui::{Theme, egui};
 
 use crate::{
     flatpak::{self, App, Context, Dirs, Grant, PERMISSIONS, Portal},
-    model::Privacy,
+    model::{Privacy, PrivacyDisplay},
 };
 
 /// An app's portal permissions, or why they can't be read, by app ID.
@@ -30,6 +30,8 @@ pub(crate) struct PrivacyUi {
     /// The selected app's portal permissions, or why they can't be read.
     portals: Option<PortalState>,
     status: Option<String>,
+    /// The app ID being typed for the privacy display's list.
+    new_app: String,
 }
 
 impl PrivacyUi {
@@ -95,11 +97,71 @@ fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
     ui.label(egui::RichText::new(text).small().color(theme.border));
 }
 
-pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, theme: &Theme) {
+/// The privacy display's switch, its conditions and its apps.
+fn privacy_display(ui: &mut egui::Ui, d: &mut PrivacyDisplay, new_app: &mut String, theme: &Theme) {
+    ui.label("Privacy display");
+    ui.vertical(|ui| {
+        ui.checkbox(
+            &mut d.enabled,
+            "Cover the screen when someone else is looking",
+        );
+        hint(
+            ui,
+            theme,
+            "While one of the conditions below holds, the camera looks for a second face. \
+             Pictures stay in memory and are never saved or sent anywhere.",
+        );
+        ui.add_enabled_ui(d.enabled, |ui| {
+            ui.add_space(4.0);
+            ui.checkbox(&mut d.passwords, "When a password is asked for");
+            ui.checkbox(&mut d.notifications, "Over notification pop-ups");
+            ui.checkbox(&mut d.maximum, "Maximum protection: also dim the screen");
+            ui.add_space(4.0);
+            ui.label("When one of these apps is in use:");
+            let mut remove = None;
+            for (i, id) in d.apps.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(id);
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                d.apps.remove(i);
+            }
+            ui.horizontal(|ui| {
+                let field = ui.add(
+                    egui::TextEdit::singleline(new_app)
+                        .hint_text("App ID, such as org.mozilla.firefox")
+                        .desired_width(260.0),
+                );
+                let id = new_app.trim().to_owned();
+                let ok = !id.is_empty() && !id.contains([',', '/']) && !d.apps.contains(&id);
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.add_enabled(ok, egui::Button::new("Add")).clicked() || (entered && ok)) && ok
+                {
+                    d.apps.push(id);
+                    new_app.clear();
+                }
+            });
+        });
+    });
+    ui.end_row();
+}
+
+pub(crate) fn page(
+    ui: &mut egui::Ui,
+    p: &mut Privacy,
+    display: &mut PrivacyDisplay,
+    state: &mut PrivacyUi,
+    theme: &Theme,
+) {
     egui::Grid::new("privacy-global")
         .num_columns(2)
         .spacing([24.0, 10.0])
         .show(ui, |ui| {
+            privacy_display(ui, display, &mut state.new_app, theme);
             ui.label("Devices");
             ui.vertical(|ui| {
                 ui.checkbox(&mut p.location, "Location services");

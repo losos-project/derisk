@@ -36,6 +36,10 @@ fn text_round_trips_every_field() {
     settings.appearance.panels.snap_assist = 20;
     settings.power.low_power = LowPower::On;
     settings.privacy.usage_ping = false;
+    settings.privacy_display.enabled = true;
+    settings.privacy_display.notifications = false;
+    settings.privacy_display.maximum = true;
+    settings.privacy_display.apps = vec!["org.derisk.files".into(), "org.mozilla.firefox".into()];
     settings.defaults.browser = "org.mozilla.firefox.desktop".into();
     settings.defaults.search = Some(SearchEngine::Ecosia);
     let (parsed, warnings) = Settings::parse(&settings.to_text());
@@ -562,4 +566,18 @@ fn a_web_background_is_an_http_address_or_a_local_file() {
         Settings::parse("wallpaper.kind = web\nwallpaper.url = javascript:alert(1)\n");
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(parsed.wallpaper.url.is_empty());
+}
+
+#[test]
+fn the_privacy_display_is_off_until_turned_on() {
+    let defaults = Settings::default().privacy_display;
+    assert!(!defaults.enabled);
+    assert!(defaults.passwords && defaults.notifications && !defaults.maximum);
+    assert!(defaults.apps.is_empty());
+    let mut settings = Settings::default();
+    assert!(settings.set("privacy_display.apps", "a.desktop, b"));
+    assert_eq!(settings.privacy_display.apps, ["a.desktop", "b"]);
+    assert!(settings.set("privacy_display.apps", ""));
+    assert!(settings.privacy_display.apps.is_empty());
+    assert!(!settings.set("privacy_display.apps", "ok,../bad/path"));
 }

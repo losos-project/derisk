@@ -54,6 +54,7 @@ use derisk::{
     lock::LockScreen,
     overview::Battery,
     palette, privacy,
+    privacy_display::{self, Area as CoverArea, PrivacyDisplay, Report as FacesReport},
     shell::{Mode, PointerOutcome, Shell, WindowMachine},
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
@@ -197,8 +198,13 @@ pub struct Session {
     tutorial_mark: Option<PathBuf>,
     tutorial_checked: bool,
     /// The backlight, turned down while the lock screen or a polkit dialog
-    /// has a password typed into it.
+    /// has a password typed into it, and while the privacy display covers
+    /// the screen at maximum protection.
     password_dim: PasswordDim,
+    /// The privacy display, and the face counter it runs while one of its
+    /// conditions holds.
+    privacy_display: PrivacyDisplay,
+    faces: Option<FacesWatch>,
     /// Whether a focused text field brought the on-screen keyboard up, so
     /// leaving the field takes it down again; one the person opened stays.
     keyboard_for_field: bool,
@@ -411,6 +417,8 @@ impl Session {
             tutorial_mark: tutorial::mark_path(),
             tutorial_checked: false,
             password_dim: PasswordDim::system(),
+            privacy_display: PrivacyDisplay::default(),
+            faces: None,
             words_saved: Instant::now(),
             keyboard_for_field: false,
             shortcuts: Shortcuts::default(),
@@ -592,13 +600,15 @@ impl Session {
     /// Turns the backlight down while a password is typed into the lock
     /// screen or a polkit dialog, and back up once it is not.
     fn dim_for_password(&mut self) {
+        let covered_dim = self.watch_privacy();
         let login = &self.lock.login;
         let locked = self.lock.is_locked();
         let secret = matches!(login.phase(), Phase::Prompt { secret: true, .. });
         let dialogs = self.polkit.iter().map(|p| &p.dialog);
         let field = backlight::Field {
-            shown: locked || !self.polkit.is_empty(),
-            typed: (locked && secret && !login.answer.is_empty())
+            shown: locked || !self.polkit.is_empty() || covered_dim,
+            typed: covered_dim
+                || (locked && secret && !login.answer.is_empty())
                 || dialogs
                     .clone()
                     .any(|d| d.secret() && d.editable() && !d.answer.is_empty()),
@@ -610,6 +620,60 @@ impl Session {
         {
             warn!(%error, "cannot set the backlight");
         }
+    }
+
+    /// Runs the privacy display for this frame: starts or stops the face
+    /// counter with its conditions, takes its counts, and sets what the
+    /// shell covers. Returns whether maximum protection wants the
+    /// backlight down.
+    fn watch_privacy(&mut self) -> bool {
+        let now = Instant::now();
+        if let Some(watch) = self.faces.as_mut() {
+            for report in watch.reports.try_iter() {
+                self.privacy_display.report(report, now);
+            }
+            if !watch.running() {
+                self.privacy_display.camera_stopped();
+                self.faces = None;
+            }
+        }
+        if self.ui.take_show_anyway() {
+            self.privacy_display.show_anyway();
+        }
+        let locked = self.lock.is_locked();
+        let focused = self
+            .shell
+            .focused()
+            .and_then(|w| self.shell.window_label(w))
+            .map(|(app, _)| app);
+        let situation = privacy_display::Situation {
+            password: locked || !self.polkit.is_empty(),
+            // Locked, no app is on screen whatever had the focus.
+            focused_app: focused.filter(|_| !locked),
+            // From the stack rather than what was drawn, which is a frame
+            // behind: a pop-up's first frame is already covered.
+            notifications: self
+                .notifications
+                .stack()
+                .shown(self.settings.current().notifications.do_not_disturb)
+                .next()
+                .is_some(),
+        };
+        let frame =
+            self.privacy_display
+                .update(&self.settings.current().privacy_display, &situation, now);
+        match (frame.camera, self.faces.is_some()) {
+            (true, false) => {
+                self.faces = FacesWatch::start();
+                if self.faces.is_none() {
+                    self.privacy_display.camera_stopped();
+                }
+            }
+            (false, true) => self.faces = None,
+            _ => {}
+        }
+        self.shell.privacy_cover = frame.cover;
+        frame.dim
     }
 
     fn polkit_dialog(&mut self, cookie: &str) -> Option<&mut derisk::polkit::AuthDialog> {
@@ -1568,6 +1632,7 @@ impl compositor::Shell for Session {
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
             || self.shell.tutorial_visible()
+            || self.shell.privacy_cover == Some(CoverArea::Screen)
             || self
                 .ui
                 .bar_rect()
@@ -1833,6 +1898,7 @@ impl compositor::Shell for Session {
             {
                 self.send_auth(request);
             }
+            self.ui.show_privacy_cover(ui, &self.shell);
             return;
         }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
@@ -1857,6 +1923,7 @@ impl compositor::Shell for Session {
         if self.polkit.is_empty() {
             self.show_choice(ui);
         }
+        self.ui.show_privacy_cover(ui, &self.shell);
         // What the on-screen keyboard typed for windows goes to the focused
         // one. It goes through the same synthetic-input path agents use, so
         // the keyboard can't confirm what only a direct tap may (the
@@ -2344,6 +2411,55 @@ fn sleep_unless_stopped(delay: Duration, stopping: &AtomicBool) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     !stopping.load(Ordering::SeqCst)
+}
+
+/// `derisk-faces watch` running for the privacy display, its counts read on
+/// a thread of their own into `reports`.
+struct FacesWatch {
+    child: Child,
+    reports: mpsc::Receiver<FacesReport>,
+}
+
+impl FacesWatch {
+    fn start() -> Option<Self> {
+        let [program, command] = privacy_display::HELPER;
+        let mut child = ProcessCommand::new(program)
+            .arg(command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .inspect_err(|e| warn!("{program}: {e}: the privacy display cannot see"))
+            .ok()?;
+        let stdout = child.stdout.take()?;
+        // A few counts a second; when the session has not taken the last
+        // ones, a newer count replaces nothing and is dropped rather than
+        // holding the camera's reader up.
+        let (send, reports) = mpsc::sync_channel(8);
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if let Some(report) = FacesReport::parse(&line)
+                    && let Err(mpsc::TrySendError::Disconnected(_)) = send.try_send(report)
+                {
+                    return;
+                }
+            }
+        });
+        Some(Self { child, reports })
+    }
+
+    fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+impl Drop for FacesWatch {
+    /// Stopping the helper closes the camera; the reader thread ends at the
+    /// end of its output.
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// swayidle running for the session, its lines read on a thread of their

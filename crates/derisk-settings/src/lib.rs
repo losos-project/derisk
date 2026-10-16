@@ -46,9 +46,9 @@ use mcsapi_ui::{
 };
 pub use model::{
     Accent, Appearance, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit, Input, Layout,
-    LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings,
-    ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
-    machine_name, web_background_url,
+    LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy, PrivacyDisplay, Profile,
+    Rgb, Settings, ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle,
+    default_path, machine_name, web_background_url,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, Group, KeyName, Keys, Resolved, Shortcut, Shortcuts};
@@ -338,7 +338,13 @@ impl SettingsApp {
         ui.spacing_mut().slider_width = control - 64.0;
         ui.spacing_mut().text_edit_width = control;
         if self.page == Page::Privacy {
-            return privacy::page(ui, &mut s.privacy, &mut self.privacy, theme);
+            return privacy::page(
+                ui,
+                &mut s.privacy,
+                &mut s.privacy_display,
+                &mut self.privacy,
+                theme,
+            );
         }
         if self.page == Page::SignIn {
             return signin::page(ui, &mut self.signin, theme);

@@ -38,6 +38,8 @@
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
 //! - [`privacy`]: forgetting recent files and emptying old trash.
+//! - [`privacy_display`]: covering the screen while someone else looks at
+//!   it, Samsung's privacy display in software.
 //! - [`wallpaper`]: the desktop background, from a color to a looping video.
 //! - [`wizard`], [`setup`], [`install`], [`locale`] and [`network`]: the
 //!   installer (`derisk installer`) and first-boot setup (`derisk setup`),
@@ -85,6 +87,7 @@ pub mod palette;
 pub mod password_age;
 pub mod plugins;
 pub mod privacy;
+pub mod privacy_display;
 pub mod setup;
 pub mod shell;
 pub mod systemd;

@@ -493,6 +493,42 @@ pub struct Privacy {
     pub usage_ping: bool,
 }
 
+/// The privacy display: Samsung's of the same name, in software. While one
+/// of its conditions holds, the camera looks for a second face, and when it
+/// finds one the protected part of the screen is covered (and, at maximum
+/// protection, the backlight turned down). Off unless the user turns it on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrivacyDisplay {
+    /// Whether it is on at all.
+    pub enabled: bool,
+    /// While a password is asked for: the lock screen, a polkit dialog.
+    pub passwords: bool,
+    /// Over notification pop-ups alone, while one is on screen.
+    pub notifications: bool,
+    /// While one of these apps (by app ID) has the focus.
+    pub apps: Vec<String>,
+    /// Also turn the backlight down while covered.
+    pub maximum: bool,
+}
+
+impl Default for PrivacyDisplay {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            passwords: true,
+            notifications: true,
+            apps: Vec::new(),
+            maximum: false,
+        }
+    }
+}
+
+/// Whether `id` can be an app ID in the comma-separated list: a desktop file
+/// ID or Wayland app ID, never empty, with no separator in it.
+fn app_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains([',', '\n', '/']) && id.trim() == id
+}
+
 /// The apps and services chosen on the choice screens ([`crate::choice`]).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Defaults {
@@ -626,6 +662,8 @@ pub struct Settings {
     pub shortcuts: Shortcuts,
     /// Device access, history and trash.
     pub privacy: Privacy,
+    /// The privacy display.
+    pub privacy_display: PrivacyDisplay,
     /// The default browser and search engine.
     pub defaults: Defaults,
     /// Window management.
@@ -679,6 +717,7 @@ impl Default for Settings {
                 empty_trash_days: 30,
                 usage_ping: true,
             },
+            privacy_display: PrivacyDisplay::default(),
             defaults: Defaults::default(),
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
@@ -895,6 +934,24 @@ impl Settings {
             "privacy.remember_recent" => put(&mut pv.remember_recent, parse_bool(value)),
             "privacy.empty_trash_days" => put(&mut pv.empty_trash_days, parse_in(value, 0, 365)),
             "privacy.usage_ping" => put(&mut pv.usage_ping, parse_bool(value)),
+            "privacy_display.enabled" => put(&mut self.privacy_display.enabled, parse_bool(value)),
+            "privacy_display.passwords" => {
+                put(&mut self.privacy_display.passwords, parse_bool(value))
+            }
+            "privacy_display.notifications" => {
+                put(&mut self.privacy_display.notifications, parse_bool(value))
+            }
+            "privacy_display.maximum" => put(&mut self.privacy_display.maximum, parse_bool(value)),
+            // Comma-separated app IDs; empty means none.
+            "privacy_display.apps" => put(
+                &mut self.privacy_display.apps,
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(|id| app_id(id).then(|| id.to_owned()))
+                    .collect::<Option<Vec<_>>>(),
+            ),
             // A desktop file ID, which is a file name: never a path.
             "defaults.browser" => put(
                 &mut self.defaults.browser,
@@ -981,6 +1038,11 @@ impl Settings {
              privacy.remember_recent = {}\n\
              privacy.empty_trash_days = {}\n\
              privacy.usage_ping = {}\n\
+             privacy_display.enabled = {}\n\
+             privacy_display.passwords = {}\n\
+             privacy_display.notifications = {}\n\
+             privacy_display.apps = {}\n\
+             privacy_display.maximum = {}\n\
              defaults.browser = {}\n\
              defaults.search = {}\n\
              machines.open_apps_in = {}\n\
@@ -1036,6 +1098,11 @@ impl Settings {
             self.privacy.remember_recent,
             self.privacy.empty_trash_days,
             self.privacy.usage_ping,
+            self.privacy_display.enabled,
+            self.privacy_display.passwords,
+            self.privacy_display.notifications,
+            self.privacy_display.apps.join(","),
+            self.privacy_display.maximum,
             self.defaults.browser,
             self.defaults.search.map_or("", |e| e.as_str()),
             self.machines.open_apps_in,

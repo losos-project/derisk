@@ -356,6 +356,9 @@ pub struct Shell {
     /// Whether the screen is dimmed because nobody used it for a while,
     /// set by the host (see [`crate::idle`]).
     pub dimmed: bool,
+    /// What the privacy display covers because someone else is looking,
+    /// set by the host (see [`crate::privacy_display`]).
+    pub privacy_cover: Option<crate::privacy_display::Area>,
     /// Whether a visible app keeps the session from going idle (a playing
     /// video), set by the host.
     pub kept_awake: bool,
@@ -491,6 +494,7 @@ impl Shell {
             confirmation: None,
             apps: Apps::default(),
             dimmed: false,
+            privacy_cover: None,
             kept_awake: false,
         };
         shell.apply_profile_layout();
