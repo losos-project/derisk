@@ -6,7 +6,8 @@
 //!
 //! - [`shell`]: tiling plus floating, snapped and minimized windows, and
 //!   Windows-style dragging with edge/corner snapping and Snap Assist.
-//! - [`decorations`]: server-side title bars with the buttons on the left.
+//! - [`decorations`]: the window buttons the top bar shows for the
+//!   focused window.
 //! - [`adaptive`]: phone/tablet/desktop profiles and learned app suggestions.
 //! - [`mobile`]: the touch navigation bar and edge swipes on phones.
 //! - [`keyboard`]: the on-screen keyboard and its word prediction.

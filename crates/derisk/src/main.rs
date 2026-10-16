@@ -590,12 +590,17 @@ fn demo() -> Result {
         .find(|p| p.window == browser)
         .ok_or("browser not visible")?
         .frame;
-    let grab = (frame.loc.x + frame.size.w / 2, frame.loc.y + 10);
+    let grab = (
+        frame.loc.x + frame.size.w / 2,
+        frame.loc.y + frame.size.h / 2,
+    );
+    shell.set_move_modifier(true);
     shell.pointer_down(grab, 0)?;
     shell.pointer_motion((grab.0 - 100, grab.1 + 40));
     let target = shell.pointer_motion((2, 500));
-    println!("\ndragging the browser title bar to the left edge -> {target:?}");
+    println!("\nSuper+dragging the browser to the left edge -> {target:?}");
     shell.pointer_up();
+    shell.set_move_modifier(false);
     print_placements(&shell);
     if let Some(assist) = shell.snap_assist() {
         println!(
@@ -657,7 +662,7 @@ fn demo() -> Result {
         ui.show(root, &shell, 5_000);
     });
     println!(
-        "\nrendered left-button title bars, top bar and overview widgets: {} shapes",
+        "\nrendered window borders, top bar and overview widgets: {} shapes",
         output.shapes.len()
     );
     // Headless: there is no renderer to upload the tray textures to.

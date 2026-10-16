@@ -16,7 +16,6 @@ use crate::{
     apps::Apps,
     assistant,
     conversation::{Conversation, Source, StepRef, StepStatus},
-    decorations::{Button, ClickTracker, Hit},
     effects::{Effects, Look},
     geom::{Point, Rect, centered, contains, inset, rect},
     keyboard,
@@ -48,7 +47,8 @@ struct Pending {
 /// Maximum number of workspaces.
 pub const MAX_WORKSPACES: u64 = 9;
 
-/// Pointer travel, in logical pixels, before a title bar press becomes a drag.
+/// Pointer travel, in logical pixels, before a press that moves a window
+/// (Super held, or on its title in the top bar) becomes a drag.
 pub const DRAG_THRESHOLD: i32 = 6;
 
 /// Widest the on-screen keyboard gets on a desktop, in logical pixels: keys
@@ -215,7 +215,7 @@ pub struct WindowMachine {
 pub struct WindowPlacement {
     /// The window.
     pub window: WindowId,
-    /// Full frame including the server-side title bar.
+    /// Full frame. Windows have no title bar, so it is also the client's.
     pub frame: Geometry,
     /// Area for the client surface; configure the toplevel to this size.
     pub client: Geometry,
@@ -296,7 +296,8 @@ pub struct Shell {
     output: Geometry,
     profile: Profile,
     drag: Option<Drag>,
-    clicks: ClickTracker,
+    /// Super is held: a press anywhere on a window moves it.
+    move_modifier: bool,
     overview: bool,
     palette: bool,
     snap_assist: Option<SnapAssist>,
@@ -461,7 +462,7 @@ impl Shell {
             output,
             profile: Profile::detect(output.size.w, output.size.h, touch),
             drag: None,
-            clicks: ClickTracker::default(),
+            move_modifier: false,
             overview: false,
             palette: false,
             confirmation_from_agent: false,
@@ -1625,10 +1626,9 @@ impl Shell {
     pub fn placements(&self) -> Vec<WindowPlacement> {
         let mut out = self.arranged();
         if let Some(keyboard) = self.keyboard_area() {
-            let title = self.profile.title_bar;
             for p in out.iter_mut().filter(|p| p.focused) {
                 p.frame = clear_of_keyboard(p.frame, keyboard, self.work_area());
-                p.client = title.client(p.frame);
+                p.client = p.frame;
             }
         }
         out
@@ -1659,12 +1659,12 @@ impl Shell {
         let members: BTreeSet<WindowId> = ws.windows().collect();
         let area = self.work_area();
         let gap = self.profile.gap;
-        let title = self.profile.title_bar;
         let visible = |w: &WindowId| !self.is_minimized(*w);
+        // No title bar: the client has the whole frame.
         let place = |window: WindowId, frame: Geometry| WindowPlacement {
             window,
             frame,
-            client: title.client(frame),
+            client: frame,
             mode: self.windows[&window].mode,
             focused: focused == Some(window),
         };
@@ -1731,9 +1731,10 @@ impl Shell {
 
     /// Handles a primary-button press at `point` (logical, output-relative).
     ///
-    /// Focuses the window, runs title bar buttons, toggles maximize on double
-    /// click, and arms a drag on the title area.
-    pub fn pointer_down(&mut self, point: Point, time_ms: u64) -> Result<PointerOutcome, Error> {
+    /// Focuses the window under it. With Super held (see
+    /// [`Shell::set_move_modifier`]) the press arms a drag wherever it
+    /// lands on the window; otherwise it belongs to the client.
+    pub fn pointer_down(&mut self, point: Point, _time_ms: u64) -> Result<PointerOutcome, Error> {
         let Some(hit) = self.window_at(point) else {
             self.snap_assist = None;
             return Ok(PointerOutcome::Desktop);
@@ -1746,49 +1747,57 @@ impl Shell {
                 effects: Vec::new(),
             });
         }
-        match self.profile.title_bar.hit(hit.frame, point) {
-            Some(Hit::Button(button)) => {
-                let window = Some(window.get());
-                let action = match button {
-                    Button::Close => Action::Close { window },
-                    Button::Minimize => Action::Minimize { window },
-                    Button::Maximize => Action::ToggleMaximize { window },
-                };
-                Ok(PointerOutcome::Handled {
-                    effects: self.apply(action)?,
-                })
-            }
-            Some(Hit::Title) => {
-                if self.clicks.click(window.get(), time_ms) {
-                    self.drag = None;
-                    let effects = self.apply(Action::ToggleMaximize {
-                        window: Some(window.get()),
-                    })?;
-                    return Ok(PointerOutcome::Handled { effects });
-                }
-                self.drag = Some(Drag {
-                    window,
-                    origin: point,
-                    grab: (point.0 - hit.frame.loc.x, point.1 - hit.frame.loc.y),
-                    started: false,
-                    target: DropTarget::Float,
-                });
-                Ok(PointerOutcome::Handled {
-                    effects: Vec::new(),
-                })
-            }
-            Some(Hit::Client) | None => Ok(PointerOutcome::Client {
-                window,
-                local: (point.0 - hit.client.loc.x, point.1 - hit.client.loc.y),
-            }),
+        // A phone's one window fills the screen: there is nowhere to move
+        // it to.
+        if self.move_modifier && !self.is_phone() {
+            self.arm_drag(window, hit.frame, point);
+            return Ok(PointerOutcome::Handled {
+                effects: Vec::new(),
+            });
         }
+        Ok(PointerOutcome::Client {
+            window,
+            local: (point.0 - hit.client.loc.x, point.1 - hit.client.loc.y),
+        })
+    }
+
+    /// Whether Super is held, which turns a press on a window into a move.
+    pub fn set_move_modifier(&mut self, held: bool) {
+        self.move_modifier = held;
+    }
+
+    /// Arms a drag of the focused window from its title in the top bar at
+    /// `point`, which then moves with [`Shell::pointer_motion`] as dragging
+    /// its title bar did.
+    pub fn grab_title(&mut self, point: Point) {
+        if self.is_phone() {
+            return;
+        }
+        if let Some(window) = self.focused()
+            && let Some(frame) = self.frame_of(window)
+        {
+            self.arm_drag(window, frame, point);
+        }
+    }
+
+    /// Arms a drag of `window` from `point`, which keeps its offset from
+    /// the frame's corner as the window moves; a point above the frame (on
+    /// the top bar) keeps the window hanging below the pointer.
+    fn arm_drag(&mut self, window: WindowId, frame: Geometry, point: Point) {
+        self.drag = Some(Drag {
+            window,
+            origin: point,
+            grab: (point.0 - frame.loc.x, point.1 - frame.loc.y),
+            started: false,
+            target: DropTarget::Float,
+        });
     }
 
     /// Moves an armed or active drag. Returns the drop target for previewing.
     ///
     /// Like Windows, a snapped, maximized or tiled window detaches into its
     /// restore size on the first real movement, keeping the pointer at the same
-    /// relative position along the title bar.
+    /// relative position across the window.
     pub fn pointer_motion(&mut self, point: Point) -> Option<DropTarget> {
         let mut drag = self.drag?;
         if !drag.started {
@@ -1802,9 +1811,25 @@ impl Shell {
             let info = &self.windows[&drag.window];
             if !matches!(info.mode, Mode::Floating { .. }) {
                 let restore = info.restore.unwrap_or_else(|| self.default_float());
-                let ratio = f64::from(drag.grab.0) / f64::from(frame.size.w.max(1));
-                let gx = (ratio * f64::from(restore.size.w)) as i32;
-                let gy = drag.grab.1.min(self.profile.title_bar.height / 2);
+                let scale = |grab: i32, from: i32, to: i32| {
+                    let ratio = f64::from(grab) / f64::from(from.max(1));
+                    (ratio * f64::from(to)) as i32
+                };
+                // A title grabbed in the top bar can be off to one side of
+                // its window: the window then comes out centred on the
+                // pointer.
+                let gx = if (0..frame.size.w).contains(&drag.grab.0) {
+                    scale(drag.grab.0, frame.size.w, restore.size.w)
+                } else {
+                    restore.size.w / 2
+                };
+                // From the top bar the pointer is above the window, and
+                // stays the same distance above it.
+                let gy = if drag.grab.1 < 0 {
+                    drag.grab.1
+                } else {
+                    scale(drag.grab.1, frame.size.h, restore.size.h)
+                };
                 drag.grab = (gx, gy);
             }
         }
@@ -1817,7 +1842,11 @@ impl Shell {
                 (restore.size.w, restore.size.h)
             }
         };
-        let frame = rect(point.0 - drag.grab.0, point.1 - drag.grab.1, size.0, size.1);
+        // Its top stays below the top bar: with no title bar to hold, a
+        // window pushed up past it by Super+drag would hide its top edge.
+        let area = self.work_area();
+        let top = (point.1 - drag.grab.1).max(area.loc.y);
+        let frame = rect(point.0 - drag.grab.0, top, size.0, size.1);
         let info = self.windows.get_mut(&drag.window)?;
         info.mode = Mode::Floating {
             frame: frame.into(),
@@ -1825,7 +1854,6 @@ impl Shell {
         info.before_maximize = None;
         self.raise(drag.window);
 
-        let area = self.work_area();
         drag.target =
             if let Some(zone) = zone_at(point, area, self.profile.snap) {
                 DropTarget::Snap {

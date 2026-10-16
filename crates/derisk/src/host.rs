@@ -42,7 +42,6 @@ use std::{
 use derisk::{
     action::{Action, Effect},
     conversation::Source,
-    decorations::Button,
     desktop::{self, DesktopEntry},
     effects::{Effects, SettingsWatch},
     geom::{inset, rect},
@@ -59,8 +58,8 @@ use derisk::{
     systemd::{self, SessionOp},
     time::Clock,
     ui::{
-        ChoiceInput, KeyHint, PolkitInput, ShellUi, WindowPictures, set_touch_style, show_choice,
-        show_lock, show_polkit,
+        ChoiceInput, KeyHint, PolkitInput, ShellUi, TitleDragPhase, WindowPictures,
+        set_touch_style, show_choice, show_lock, show_polkit,
     },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
@@ -78,7 +77,7 @@ use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, Motion, OutputTiming, Placement,
     Press, Remote, Reserved, Role, RuntimeClient, TextField, Theme, WindowHint, WorkspaceInfo,
-    a11y::{Origin, Snapshot, Subtree},
+    a11y::{Snapshot, Subtree},
     accesskit::{self, NodeId},
     egui,
 };
@@ -279,10 +278,6 @@ enum TreeQuery {
         window: Option<u64>,
     },
 }
-
-/// Node IDs of the title-bar buttons the shell paints, in the space above
-/// [`computer::REGISTERED_ID_LIMIT`] so they never meet registered nodes.
-const TITLE_BAR_NODES: u64 = u64::MAX - 8;
 
 /// Core-app actions waiting for the compositor to launch their app, shared
 /// between [`Session`] (which queues them) and [`CoreApps`] (which takes
@@ -908,42 +903,9 @@ impl Session {
         self.listeners.remove(&conn);
     }
 
-    /// The title-bar buttons of each visible window, which the shell
-    /// paints itself, so screen readers and agents can press them.
-    fn title_bar_nodes(&self) -> Vec<Subtree> {
-        let bar = self.shell.profile().title_bar;
-        self.shell
-            .placements()
-            .into_iter()
-            .map(|p| {
-                let nodes: Vec<(NodeId, accesskit::Node)> = bar
-                    .buttons(p.frame)
-                    .map(|(button, area)| {
-                        let mut node = accesskit::Node::new(accesskit::Role::Button);
-                        node.set_label(match button {
-                            Button::Close => "Close",
-                            Button::Minimize => "Minimize",
-                            Button::Maximize => "Maximize",
-                        });
-                        node.set_bounds(accesskit::Rect {
-                            x0: f64::from(area.loc.x),
-                            y0: f64::from(area.loc.y),
-                            x1: f64::from(area.loc.x + area.size.w),
-                            y1: f64::from(area.loc.y + area.size.h),
-                        });
-                        node.add_action(accesskit::Action::Click);
-                        (NodeId(TITLE_BAR_NODES + button_index(button)), node)
-                    })
-                    .collect();
-                Subtree {
-                    window: p.window,
-                    roots: nodes.iter().map(|(id, _)| *id).collect(),
-                    nodes,
-                    origin: Origin::Shell,
-                }
-            })
-            .collect()
-    }
+    // Each window's title-bar buttons were accessibility nodes here, since
+    // the shell painted them itself. The buttons are in the top bar now,
+    // which is egui and names its own.
 
     /// Applies actions from any source and carries out their effects.
     fn dispatch(&mut self, actions: Vec<Action>) {
@@ -1347,7 +1309,7 @@ impl compositor::Shell for Session {
             return;
         };
         // Gray if the machine is not in the last list yet: the colour can
-        // wait, the name in the title bar cannot.
+        // wait, the name in the top bar cannot.
         let label = self
             .machines
             .as_ref()
@@ -1599,6 +1561,11 @@ impl compositor::Shell for Session {
     }
 
     fn key(&mut self, key: &KeyInput) -> KeyRoute {
+        // Tracked before anything can return early, so a release behind
+        // the lock screen still lets go of Super+drag.
+        if matches!(key.sym, Keysym::Super_L | Keysym::Super_R) {
+            self.shell.set_move_modifier(key.pressed);
+        }
         // Every key goes to the lock screen's field: no shortcut, and no
         // client.
         if self.lock.is_locked() {
@@ -1803,6 +1770,21 @@ impl compositor::Shell for Session {
         }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        // Dragging the focused window's title in the top bar moves the
+        // window, as dragging its title bar did. The press is the bar's, so
+        // the drag arrives from egui rather than the compositor's pointer.
+        for drag in self.ui.take_title_drags() {
+            let at = (drag.at.x.round() as i32, drag.at.y.round() as i32);
+            match drag.phase {
+                TitleDragPhase::Start => self.shell.grab_title(at),
+                TitleDragPhase::Move => {
+                    self.shell.pointer_motion(at);
+                }
+                TitleDragPhase::End => {
+                    self.shell.pointer_up();
+                }
+            }
+        }
         self.show_notifications(ui);
         self.show_polkit(ui);
         if self.polkit.is_empty() {
@@ -1913,9 +1895,7 @@ impl compositor::Shell for Session {
         if self.lock.is_locked() {
             return Vec::new();
         }
-        let mut subtrees = self.title_bar_nodes();
-        subtrees.extend(self.registered.values().map(|(_, s)| s.clone()));
-        subtrees
+        self.registered.values().map(|(_, s)| s.clone()).collect()
     }
 
     fn access_action(
@@ -1926,20 +1906,6 @@ impl compositor::Shell for Session {
         value: Option<&str>,
     ) {
         if self.lock.is_locked() {
-            return;
-        }
-        if node.0 >= TITLE_BAR_NODES {
-            if action != accesskit::Action::Click {
-                return;
-            }
-            let w = Some(window.get());
-            let action = match node.0 - TITLE_BAR_NODES {
-                0 => Action::Close { window: w },
-                1 => Action::Minimize { window: w },
-                2 => Action::ToggleMaximize { window: w },
-                _ => return,
-            };
-            self.dispatch(vec![action]);
             return;
         }
         // A node a program registered: tell that program.
@@ -2132,14 +2098,6 @@ impl compositor::Shell for Session {
         self.dispatch(vec![Action::Keyboard {
             visible: Some(show),
         }]);
-    }
-}
-
-fn button_index(button: Button) -> u64 {
-    match button {
-        Button::Close => 0,
-        Button::Minimize => 1,
-        Button::Maximize => 2,
     }
 }
 

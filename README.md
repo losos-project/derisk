@@ -8,8 +8,8 @@ derisk takes the good parts from many desktops:
 | Feature | Inspired by |
 | --- | --- |
 | Automatic tiling (mcsapi `Tall`/`Monocle` layouts) with floating windows | tiling WMs |
-| Drag a title bar to an edge or corner to snap; top edge maximizes; Super+arrows; Snap Assist offers the other half | Windows |
-| Window buttons (close, minimize, maximize) on the **left** of the title bar | macOS |
+| Drag a window (Super+drag, or its title in the top bar) to an edge or corner to snap; top edge maximizes; Super+arrows; Snap Assist offers the other half | Windows |
+| No window headers: the top bar shows the focused window's buttons (close, minimize, maximize, on the **left**) and title, tinted in its virtual machine's colour | macOS, Qubes |
 | Global menu in the top bar (app menus + a Window menu) | macOS, KDE |
 | Overview with workspaces, an exposé grid and widgets (clock, suggestions, failed units, calendar, battery, notes) | GNOME, iPadOS |
 | Monochrome systray icons recolored to the theme | macOS, GNOME |
@@ -392,7 +392,7 @@ Editor, System Monitor, Calculator, Machines, in `crates/`) run inside
 the session and launch by name: `--launch files`, `derisk do open calculator`,
 or the command palette. Wayland apps launched from it (or from any
 terminal with `WAYLAND_DISPLAY` set to the socket it prints) get derisk's
-title bars, tiling, snapping, overview and assistant. The agent protocol is
+tiling, snapping, overview and assistant. The agent protocol is
 served on `$XDG_RUNTIME_DIR/derisk/agent.sock` against the live desktop:
 
 ```console
@@ -539,16 +539,17 @@ windows in the headless shell. With `--execute`, effects run through systemd
   systemd integration.
 - **Compositor host** (`derisk session`, feature `host`): derisk's desktop
   implemented on mcsapi's `mcsapi-compositor` (Smithay, winit backend, GLES
-  renderer). The host manages xdg-shell toplevels and popups with server-side
-  decorations, input and outputs, and runs the `derisk-apps` core apps in
+  renderer). The host manages xdg-shell toplevels and popups (asking them for
+  server-side decorations, so they draw no header of their own), input and
+  outputs, and runs the `derisk-apps` core apps in
   process next to Wayland clients; derisk supplies window placement, keys,
-  title bars, chrome and the agent socket on the live desktop.
+  chrome and the agent socket on the live desktop.
 
 Still to do: a DRM/KMS + libinput backend to run on a bare TTY (today the
 session runs nested), layer-shell, XWayland, popup grabs, and bridging D-Bus
 menus (`com.canonical.dbusmenu`) and StatusNotifierItem to the global menu
 and tray. Apps that insist on client-side decorations (GTK, weston clients)
-draw their own title bar inside derisk's.
+still draw their own header bar.
 
 ## Showcase video
 

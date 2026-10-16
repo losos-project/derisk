@@ -1289,10 +1289,15 @@ fn the_overview_rises_in_and_a_picked_card_grows_into_its_window() {
             visible: Some(true),
         })
         .unwrap();
-    // A window card's name, and where it is drawn.
+    // A window card's name, and where it is drawn: below the top bar,
+    // which names the focused window too.
+    let bar = shell.bar_area();
+    let below_bar = (bar.loc.y + bar.size.h) as f32;
     let label = |shapes: &[egui::Shape]| {
         shapes.iter().find_map(|s| match s {
-            egui::Shape::Text(t) if t.galley.text() == "Untitled" => Some(t.pos.y),
+            egui::Shape::Text(t) if t.galley.text() == "Untitled" && t.pos.y > below_bar => {
+                Some(t.pos.y)
+            }
             _ => None,
         })
     };
@@ -1456,7 +1461,7 @@ fn a_machines_window_wears_its_label() {
     use derisk_machines::{Label, colour};
 
     let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
-    shell.map_window("files", "Files");
+    let (files, _) = shell.map_window("files", "Files");
     let (editor, _) = shell.map_window("editor", "notes.md");
     let blue = colour(Label::Blue);
     let before = all_shapes(&shell);
@@ -1476,7 +1481,7 @@ fn a_machines_window_wears_its_label() {
         )
         .unwrap();
     let shapes = all_shapes(&shell);
-    // The title bar is filled with the label, and the ring is drawn in it.
+    // The top bar is filled with the label, and the ring is drawn in it.
     assert!(
         shapes
             .iter()
@@ -1484,16 +1489,37 @@ fn a_machines_window_wears_its_label() {
     );
     assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Rect(r)
         if r.stroke.color == blue && r.stroke.width == derisk::ui::FOCUS_RING)));
-    // Its name leads the title; the other window's title is unchanged.
-    let texts: Vec<String> = shapes
-        .iter()
-        .filter_map(|s| match s {
-            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
-            _ => None,
+    // Its name leads the title in the top bar.
+    let texts = |shapes: &[egui::Shape]| -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    let named = texts(&shapes);
+    assert!(named.iter().any(|t| t == "[work] notes.md"), "{named:?}");
+
+    // Focus elsewhere, the bar names the other window and is not blue, but
+    // the machine's window keeps a border in its label all the way round.
+    shell
+        .apply(Action::Focus {
+            window: files.get(),
         })
-        .collect();
-    assert!(texts.iter().any(|t| t == "[work] notes.md"), "{texts:?}");
-    assert!(texts.iter().any(|t| t == "Files"), "{texts:?}");
+        .unwrap();
+    let shapes = all_shapes(&shell);
+    let named = texts(&shapes);
+    assert!(named.iter().any(|t| t == "Files"), "{named:?}");
+    assert!(!named.iter().any(|t| t == "[work] notes.md"), "{named:?}");
+    assert!(
+        !shapes
+            .iter()
+            .any(|s| matches!(s, egui::Shape::Rect(r) if r.fill == blue))
+    );
+    assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Rect(r)
+        if r.stroke.width == derisk::ui::MACHINE_BORDER && r.stroke.color != egui::Color32::TRANSPARENT)));
 }
 
 #[test]
