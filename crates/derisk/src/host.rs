@@ -1789,8 +1789,8 @@ impl compositor::Shell for Session {
             vrr: look.vrr.unwrap_or(timing.vrr),
             ..*timing
         };
-        match look.max_fps {
-            Some(fps) => timing.interval_for(fps),
+        match look.min_fps {
+            Some(fps) => timing.interval_at_least(fps),
             None => timing.refresh_interval(),
         }
     }
