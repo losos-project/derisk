@@ -23,6 +23,8 @@
 //! - [`assistant`] and [`ipc`]: natural-language and agent control, and
 //!   [`mcp`]: the agent tools as an MCP server.
 //! - [`conversation`]: requests and their progress, shown in the palette.
+//! - [`notification_stack`]: the notifications apps send the session over
+//!   D-Bus, and which of them are on screen.
 //! - [`keys`]: keyboard shortcuts.
 //! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
 //!   `derisk greeter` holds with `derisk display-manager` (or greetd);
@@ -73,6 +75,7 @@ pub mod mcp;
 pub mod menu;
 pub mod mobile;
 pub mod motion;
+pub mod notification_stack;
 pub mod overview;
 pub mod palette;
 pub mod password_age;

@@ -328,6 +328,18 @@ same theme.
   (`/run/polkit/agent-helper.socket`): the fingerprint reader, a password or
   security key PIN, a code. Every key goes to the dialog while it is open,
   and input from agents can cancel it but not authenticate.
+- **Notification server.** With `--execute` the session owns
+  `org.freedesktop.Notifications` on the session bus (spec 1.2, unless
+  another server such as mako already does) and draws notifications as
+  cards in the top-right corner under the top bar, newest first, five at
+  most: the app, the summary, a few lines of body, a progress bar for the
+  `value` hint, the action buttons and a ×. Clicking the card invokes the
+  `default` action. A notification expires after its timeout, 5 seconds
+  when the app leaves it to the server; one sent with a timeout of 0, or
+  critical urgency, stays until the app closes it or the person dismisses
+  it, and replacing it updates the card in place, which is how Danube shows
+  a download's progress. "Hide banners" (do not disturb) hides only the
+  ones that would expire by themselves. Notifications play no sound yet.
 - **Display manager.** `derisk display-manager` replaces gdm: run as root
   from a system service, it starts `derisk greeter` (the lock screen as a
   login screen) on a VT as an unprivileged user, checks the password it is

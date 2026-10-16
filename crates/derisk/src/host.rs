@@ -17,7 +17,10 @@
 //!
 //! With `--execute` the session is also polkit's authentication agent
 //! (`crate::polkit_agent`): a request dims the desktop under a dialog that
-//! takes every key, so no window sees what is typed into it.
+//! takes every key, so no window sees what is typed into it. It is also the
+//! session's notification server (`crate::notifications`): apps'
+//! notifications show as cards in the top-right corner, which take the
+//! pointer over them but never the keyboard or the focus.
 
 use std::{
     collections::HashMap,
@@ -69,7 +72,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     machines::{self, MachineDisplays},
-    pam, polkit_agent, unlock,
+    notifications, pam, polkit_agent, unlock,
 };
 use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
@@ -240,6 +243,8 @@ pub struct Session {
     locked_elsewhere: bool,
     /// Virtual machines and the sockets their windows come in through.
     machines: Option<MachineDisplays>,
+    /// Apps' notifications, which `crate::notifications` fills.
+    notifications: notifications::Center,
 }
 
 /// A choice waiting for the person: the screen to share, say.
@@ -415,6 +420,7 @@ impl Session {
             idle_started: None,
             locked_elsewhere: false,
             machines: MachineDisplays::start(),
+            notifications: notifications::Center::default(),
         }
     }
 
@@ -590,6 +596,25 @@ impl Session {
         }
     }
 
+    /// The notifications, for the server's thread to run its calls on.
+    pub(crate) fn notifications_mut(&mut self) -> &mut notifications::Center {
+        &mut self.notifications
+    }
+
+    /// Draws apps' notifications and acts on what the person did to them.
+    /// Do not disturb is read every frame, so turning it on in Settings
+    /// hides the banners at once.
+    fn show_notifications(&mut self, ui: &mut egui::Ui) {
+        let quiet = self.settings.current().notifications.do_not_disturb;
+        let input = self
+            .ui
+            .show_notifications(ui, &self.shell, self.notifications.stack(), quiet);
+        let now = Instant::now();
+        for input in input {
+            self.notifications.input(input, now);
+        }
+    }
+
     /// Draws the first of polkit's requests over the desktop and sends on
     /// what the person did. Only real input counts: an agent driving the
     /// desktop must not authenticate for the person (the shell marks
@@ -670,6 +695,7 @@ impl Session {
             );
         }
         self.ui.theme = Theme::from(&theme);
+        self.ui.tokens = mcsapi_components::Tokens::from_spec(&theme);
         // The chrome and the core apps share this process, so they all
         // draw from the icon theme the theme names.
         derisk::icons::set_theme(&theme.icons.theme);
@@ -1334,6 +1360,9 @@ impl compositor::Shell for Session {
     /// minute.
     fn tick(&mut self) {
         self.poll_idle();
+        // Every frame, so a banner goes when its time is up rather than
+        // up to a second later.
+        self.notifications.expire(Instant::now());
         // Every frame, before the host asks where the windows are.
         self.move_windows();
         if !self.ending.is_empty() && self.ui.has_shut() {
@@ -1460,6 +1489,13 @@ impl compositor::Shell for Session {
             // not fall through to the one underneath.
             || self.shell.keyboard_area().is_some_and(inside)
             || self.shell.snap_assist().is_some_and(|a| inside(a.frame))
+            // A click on a notification card is the card's, not that of
+            // the window under it, which would come forward and take focus.
+            || self
+                .ui
+                .notification_rects()
+                .iter()
+                .any(|r| r.contains(egui::pos2(x as f32, y as f32)))
             || !self.startup_done()
     }
 
@@ -1656,6 +1692,7 @@ impl compositor::Shell for Session {
         }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        self.show_notifications(ui);
         self.show_polkit(ui);
         if self.polkit.is_empty() {
             self.show_choice(ui);
@@ -2072,6 +2109,12 @@ pub fn run(options: Options) -> Result {
     {
         let user = pam::current_user().unwrap_or_default();
         polkit_agent::start(session_id, user, remote.clone());
+    }
+    // Only the real session as well: a nested one shares its parent's
+    // session bus, where the parent (or the person's own server) already
+    // owns the name.
+    if options.execute {
+        notifications::start(remote.clone());
     }
     let lock_watch = lock_path.map(|path| LockWatch::start(path, remote));
     for app in options.launch {

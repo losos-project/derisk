@@ -22,6 +22,8 @@ mod installer;
 #[cfg(feature = "host")]
 mod machines;
 #[cfg(feature = "host")]
+mod notifications;
+#[cfg(feature = "host")]
 mod pam;
 #[cfg(feature = "host")]
 mod polkit_agent;
