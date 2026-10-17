@@ -12,11 +12,11 @@
 //! record (`passwordChangeMaxUSec`, `passwordChangeWarnUSec`), and from there
 //! pam_systemd_home warns before the date and, once it passed, makes the
 //! next login change the password (`derisk display-manager` asks for the new
-//! one in the same conversation). First-boot setup writes it when it creates
-//! the account, and the display manager brings an existing account's record
-//! up to the policy when that person logs in, because only an administrator
-//! (or root) may change these fields: a person cannot opt out of the policy
-//! by editing their own record.
+//! one in the same conversation). First-boot setup and Settings' Users page
+//! write it when they create an account, and the display manager brings an
+//! existing account's record up to the policy when that person logs in,
+//! because only an administrator (or root) may change these fields: a
+//! person cannot opt out of the policy by editing their own record.
 //!
 //! ```
 //! use derisk::password_age::PasswordAge;

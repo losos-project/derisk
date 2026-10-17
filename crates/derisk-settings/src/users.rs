@@ -41,6 +41,20 @@ pub fn set_password_check(check: PasswordCheck) {
     let _ = PASSWORD_CHECK.set(check);
 }
 
+/// The `homectl` options that put a new account under the system's password
+/// age policy, as first-boot setup makes its account. The policy's reader
+/// lives in the session; it hands it in ([`set_password_age`]).
+pub type PasswordAgeArgs = fn() -> Vec<String>;
+
+static PASSWORD_AGE: std::sync::OnceLock<PasswordAgeArgs> = std::sync::OnceLock::new();
+
+/// Makes new accounts under the system's password age policy. Without it an
+/// account is made without one and the display manager brings its record up
+/// to the policy at the first login.
+pub fn set_password_age(args: PasswordAgeArgs) {
+    let _ = PASSWORD_AGE.set(args);
+}
+
 /// The group whose members administer the machine.
 pub const ADMIN_GROUP: &str = "wheel";
 
@@ -125,19 +139,25 @@ pub fn parse_people(userdbctl_json: &str, wheel: &[String]) -> Vec<Person> {
                 })
                 .unwrap_or_default();
             let admin = groups.iter().any(|g| g == ADMIN_GROUP) || wheel.contains(&user_name);
-            // homed puts the home area's state in the record's status
-            // section, one entry per machine ID; this machine's is the only
-            // one a local record has.
-            let in_use = record
+            // homed says it keeps the account, and what state the home
+            // area is in, in the record's status section, one entry per
+            // machine ID; this machine's is the only one a local record has.
+            let status: Vec<&serde_json::Value> = record
                 .get("status")
                 .and_then(|v| v.as_object())
                 .into_iter()
                 .flat_map(|machines| machines.values())
-                .filter_map(|status| status.get("state")?.as_str())
+                .collect();
+            let homed = status
+                .iter()
+                .any(|s| s.get("service").and_then(|v| v.as_str()) == Some("io.systemd.Home"));
+            let in_use = status
+                .iter()
+                .filter_map(|s| s.get("state")?.as_str())
                 .any(|state| !CLOSED_STATES.contains(&state));
             Some(Person {
                 real_name: text("realName"),
-                homed: text("service") == "io.systemd.Home",
+                homed,
                 in_use,
                 user_name,
                 groups,
@@ -185,6 +205,7 @@ pub fn create(new: &NewPerson, extra: &[String]) -> Job {
     if !groups.is_empty() {
         argv.push(format!("--member-of={}", groups.join(",")));
     }
+    argv.extend(PASSWORD_AGE.get().map(|args| args()).unwrap_or_default());
     Job {
         label: "Adding the account",
         argv,
@@ -714,10 +735,13 @@ fn add_form(ui: &mut egui::Ui, state: &mut UsersUi, theme: &Theme) -> Option<Job
 mod tests {
     use super::*;
 
+    // Shaped as userdbctl prints homed's records: the service and the home
+    // area's state are in the status section, under the machine ID.
     const USERDB: &str = "\u{1e}{\"userName\":\"ada\",\"realName\":\"Ada Lovelace\",\
-        \"memberOf\":[\"wheel\",\"wpa_supplicant\"],\"service\":\"io.systemd.Home\"}\n\
-        \u{1e}{\"userName\":\"bob\",\"realName\":\"Bob\",\"service\":\"io.systemd.Home\",\
-        \"status\":{\"6a1f\":{\"state\":\"active\"}}}\n\
+        \"memberOf\":[\"wheel\",\"wpa_supplicant\"],\"status\":{\"4d25\":\
+        {\"state\":\"inactive\",\"service\":\"io.systemd.Home\"}}}\n\
+        \u{1e}{\"userName\":\"bob\",\"realName\":\"Bob\",\"status\":{\"4d25\":\
+        {\"state\":\"active\",\"service\":\"io.systemd.Home\"}}}\n\
         \u{1e}{\"userName\":\"old\",\"realName\":\"\"}\n";
 
     #[test]
@@ -727,7 +751,7 @@ mod tests {
         assert_eq!(names, ["Ada Lovelace", "Bob", "old"]);
         assert!(people[0].admin && people[0].homed);
         assert!(!people[1].admin);
-        // Bob is signed in; Ada's record says nothing, so hers is closed.
+        // Bob is signed in; Ada's home area is closed.
         assert!(people[1].in_use && !people[0].in_use);
         // /etc/group makes a passwd user an administrator; homed doesn't
         // keep them, so the page leaves them alone.
