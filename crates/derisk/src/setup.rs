@@ -99,6 +99,10 @@ pub struct Account {
     /// Whether the user name was typed rather than derived from the full
     /// name; once it was, the full name stops changing it.
     pub user_name_edited: bool,
+    /// Why homed's quality check would refuse the password, set by whoever
+    /// can ask libpwquality (`derisk setup`); `None` when it would take it
+    /// or nobody asked.
+    pub weakness: Option<String>,
 }
 
 /// Names a user may not take: system accounts that exist or that systemd
@@ -130,7 +134,7 @@ impl Account {
 
     /// What is wrong with the account so far, in a sentence, or `None` when
     /// it can be created.
-    pub fn problem(&self) -> Option<&'static str> {
+    pub fn problem(&self) -> Option<&str> {
         if self.real_name.trim().is_empty() {
             return Some("Enter your name.");
         }
@@ -142,6 +146,11 @@ impl Account {
         }
         if self.password.is_empty() {
             return Some("Choose a password.");
+        }
+        // Before the confirmation, so a weak password is said while it is
+        // typed the first time.
+        if let Some(weakness) = &self.weakness {
+            return Some(weakness);
         }
         if self.password != self.confirm {
             return Some("The passwords do not match.");
@@ -372,4 +381,16 @@ pub fn task_failure(stderr: &str) -> Option<&str> {
         })
         .next_back()
         .or_else(|| lines().next_back())
+}
+
+/// `text` as a sentence: libpwquality's messages ("The password is shorter
+/// than 8 characters") end without a full stop, and the page's own notices
+/// end with one.
+pub fn sentence(text: &str) -> String {
+    let text = text.trim();
+    if text.ends_with(['.', '!', '?']) {
+        text.to_owned()
+    } else {
+        format!("{text}.")
+    }
 }

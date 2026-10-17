@@ -30,7 +30,7 @@ use mcsapi_compositor::{Command, egui};
 use tracing::{info, warn};
 
 use crate::{
-    first_login,
+    first_login, pwquality,
     wizard_host::{self, Flow},
 };
 
@@ -91,6 +91,11 @@ struct Setup {
     wifi: Wifi,
     network: NetworkPage,
     account: Account,
+    /// homed's password check, to say a weak password is weak before the
+    /// account is made; `None` where libpwquality is missing.
+    quality: Option<pwquality::Checker>,
+    /// The password and user name `account.weakness` was worked out for.
+    judged: (String, String),
     account_error: Option<mcsapi_ui::Error>,
     applying: Option<Applying>,
 }
@@ -130,6 +135,8 @@ impl Setup {
             wifi: Wifi::start(!dry_run),
             network: NetworkPage::default(),
             account: Account::default(),
+            quality: pwquality::Checker::load(),
+            judged: Default::default(),
             account_error: None,
             applying: None,
         }
@@ -359,6 +366,7 @@ impl Setup {
             wizard::Entry::Secret,
             "Password again",
         );
+        self.judge_password();
         wizard::error(ui, "account-error", &mut self.account_error);
         if let Some(problem) = self.account.problem() {
             // Only once there is something to judge: an empty form is not
@@ -367,6 +375,23 @@ impl Setup {
                 wizard::notice(ui, problem, false);
             }
         }
+    }
+
+    /// Asks homed's quality check about the password whenever it or the
+    /// user name (which the check compares it with) changed.
+    fn judge_password(&mut self) {
+        let Some(quality) = &self.quality else {
+            return;
+        };
+        let account = &self.account;
+        if self.judged.0 == account.password && self.judged.1 == account.user_name {
+            return;
+        }
+        self.judged = (account.password.clone(), account.user_name.clone());
+        self.account.weakness = (!account.password.is_empty())
+            .then(|| quality.weakness(&account.password, &account.user_name))
+            .flatten()
+            .map(|why| setup::sentence(&why));
     }
 
     fn applying_page(&mut self, ui: &mut Ui) {

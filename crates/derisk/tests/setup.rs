@@ -117,6 +117,12 @@ fn account_problems_in_order() {
     account.set_real_name("Ada".into());
     assert_eq!(account.problem(), Some("Choose a password."));
     account.password = "hunter2".into();
+    account.weakness = Some("The password is shorter than 8 characters.".into());
+    assert_eq!(
+        account.problem(),
+        Some("The password is shorter than 8 characters.")
+    );
+    account.weakness = None;
     assert_eq!(account.problem(), Some("The passwords do not match."));
     account.confirm = "hunter2".into();
     assert_eq!(account.problem(), None);
@@ -142,6 +148,7 @@ fn the_plan_saves_everything_and_creates_the_account_last() {
             password: "correct horse".into(),
             confirm: "correct horse".into(),
             user_name_edited: false,
+            weakness: None,
         },
         password_age: PasswordAge::default(),
         groups: vec!["wpa_supplicant".into()],
@@ -235,6 +242,15 @@ fn a_password_question_is_matched_to_the_process_asking() {
     assert_eq!(setup::ask_socket(ask, 18), None);
     assert_eq!(setup::ask_socket("[Ask]\nPID=1875\n", 1875), None);
     assert_eq!(setup::ask_socket("", 1875), None);
+}
+
+#[test]
+fn quality_messages_become_sentences() {
+    assert_eq!(
+        setup::sentence("The password is shorter than 8 characters"),
+        "The password is shorter than 8 characters."
+    );
+    assert_eq!(setup::sentence("Already one. "), "Already one.");
 }
 
 #[test]
