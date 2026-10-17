@@ -246,7 +246,7 @@ pub fn run(options: Options) -> Result {
             continue;
         }
         greet = false;
-        match round(&options, &greeter, sessions.is_empty()) {
+        match round(&options, &greeter, sessions.is_empty(), &switch, &sessions) {
             Ok((Some(session), _)) => sessions.push(session),
             // The greeter went back to someone's running session, or
             // stopped with nobody logged in; if its VT is still the one on
@@ -268,7 +268,13 @@ pub fn run(options: Options) -> Result {
 /// One login on a free VT, by the greeter or (on the `first` round, with
 /// nobody logged in) by first-boot setup's ticket, and the session it
 /// started, if any, with the VT it used.
-fn round(options: &Options, greeter: &Account, first: bool) -> Result<(Option<Live>, u32)> {
+fn round(
+    options: &Options,
+    greeter: &Account,
+    first: bool,
+    switch: &UnixListener,
+    sessions: &[Live],
+) -> Result<(Option<Live>, u32)> {
     let vt = free_vt(options.vt).ok_or("every VT is in use")?;
     // Held open until the session on it has its own: logind starts a
     // getty on a VT that comes to the front with nobody on it, unless
@@ -284,7 +290,7 @@ fn round(options: &Options, greeter: &Account, first: bool) -> Result<(Option<Li
     activate_vt(vt);
     let pending = match first.then(|| first_login(options, vt)).flatten() {
         Some(pending) => Some(pending),
-        None => greet(options, greeter, vt)?,
+        None => greet(options, greeter, vt, switch, sessions)?,
     };
     let Some(Pending {
         pam,
@@ -441,8 +447,15 @@ impl Drop for Scripted {
 }
 
 /// One greeter, and who it authenticated and the session it asked for, if
-/// it got that far.
-fn greet(options: &Options, greeter: &Account, vt: u32) -> Result<Option<Pending>> {
+/// it got that far. Switch user from one of `sessions` while it is up
+/// brings it back to the front ([`answer_switches`]).
+fn greet(
+    options: &Options,
+    greeter: &Account,
+    vt: u32,
+    switch: &UnixListener,
+    sessions: &[Live],
+) -> Result<Option<Pending>> {
     fs::create_dir_all(&options.runtime_dir)?;
     fs::set_permissions(&options.runtime_dir, fs::Permissions::from_mode(0o711))?;
     let socket = options.runtime_dir.join(format!("greeter-vt{vt}.sock"));
@@ -470,6 +483,7 @@ fn greet(options: &Options, greeter: &Account, vt: u32) -> Result<Option<Pending
                 if exited(worker) {
                     break None;
                 }
+                answer_switches(switch, sessions, vt);
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => return Err(e.into()),
@@ -479,7 +493,7 @@ fn greet(options: &Options, greeter: &Account, vt: u32) -> Result<Option<Pending
     match stream {
         Some(stream) => {
             stream.set_nonblocking(false)?;
-            let pending = serve(options, stream, vt);
+            let pending = serve(options, stream, vt, switch, sessions);
             wait(worker);
             Ok(pending)
         }
@@ -525,9 +539,21 @@ fn apply_password_age(user: &str) {
 
 /// Serves the greeter until it hangs up. Returns the authenticated user and
 /// the session they asked for, if the greeter got that far.
-fn serve(options: &Options, mut stream: UnixStream, vt: u32) -> Option<Pending> {
+fn serve(
+    options: &Options,
+    mut stream: UnixStream,
+    vt: u32,
+    switch: &UnixListener,
+    sessions: &[Live],
+) -> Option<Pending> {
     let mut pending: Option<Pending> = None;
     loop {
+        // Wait for the greeter's next request, answering Switch user from
+        // the sessions meanwhile.
+        if !readable(&stream, switch) {
+            answer_switches(switch, sessions, vt);
+            continue;
+        }
         let request = match greetd::read_request(&mut stream) {
             Ok(request) => request,
             // EOF: the greeter is done (it exits after a start).
@@ -827,9 +853,12 @@ fn active_vt() -> Option<u32> {
 }
 
 /// Whether `vt` is on the screen, giving a VT switch that logind was asked
-/// for a moment to land.
+/// for time to land: the greeter quits as soon as logind takes the request,
+/// and the switch waits for its compositor to let the VT go. Called back
+/// too early, a login screen would start on the VT being left and stay
+/// there behind the session, where Switch user could not reach it.
 fn still_active(vt: u32) -> bool {
-    for _ in 0..10 {
+    for _ in 0..50 {
         if active_vt() != Some(vt) {
             return false;
         }
@@ -884,6 +913,39 @@ fn switch_requested(listener: &UnixListener, sessions: &[Live], active: Option<u
         }
     }
     asked
+}
+
+/// Brings the login screen on `vt` back to the front when one of
+/// `sessions` asks for it, as [`switch_requested`] judges: its owner went
+/// back to it from the login screen without logging in, and now wants the
+/// login screen again.
+fn answer_switches(switch: &UnixListener, sessions: &[Live], vt: u32) {
+    if switch_requested(switch, sessions, active_vt()) {
+        activate_vt(vt);
+    }
+}
+
+/// Whether the greeter's `stream` has something to read (or hung up), as
+/// against a Switch user request arriving on `switch` first.
+fn readable(stream: &UnixStream, switch: &UnixListener) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut fds = [
+        libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: switch.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    // SAFETY: poll reads and writes the two pollfds it is given.
+    let r = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+    // On an error (EINTR) the read decides: it blocks until the greeter
+    // speaks, which is what serving it did before.
+    r < 0 || fds[0].revents != 0
 }
 
 /// Who connected on `stream`, as the kernel recorded at connect time.
