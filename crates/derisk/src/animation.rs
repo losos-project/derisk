@@ -108,6 +108,53 @@ pub mod ease {
     pub const CAM: Ease = Ease::new(0.48, 0.1, 0.0, 0.9);
 }
 
+/// Time for motion, in milliseconds: a clock that runs `speed` times as
+/// fast as the one it follows, so every animation timed on it takes
+/// `1 / speed` as long. The speed rises as the person gets used to the
+/// desktop ([`derisk_settings::familiarity`]); a change carries on from
+/// where the clock is instead of jumping, so nothing in flight skips.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MotionClock {
+    /// The followed clock's time when last asked, `None` before that.
+    real: Option<f64>,
+    at: f64,
+    speed: f32,
+}
+
+impl Default for MotionClock {
+    fn default() -> Self {
+        Self {
+            real: None,
+            at: 0.0,
+            speed: 1.0,
+        }
+    }
+}
+
+impl MotionClock {
+    /// From now on, runs `speed` times as fast as the clock followed.
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed.max(f32::EPSILON);
+    }
+
+    /// The speed set last.
+    pub fn speed(&self) -> f32 {
+        self.speed
+    }
+
+    /// The time when the followed clock reads `real_ms`. It starts where
+    /// that clock is, so at speed 1 the two read the same.
+    pub fn at(&mut self, real_ms: f64) -> f64 {
+        match self.real {
+            None => self.at = real_ms,
+            // A clock that steps back holds still rather than rewinding.
+            Some(last) => self.at += (real_ms - last).max(0.0) * f64::from(self.speed),
+        }
+        self.real = Some(self.real.map_or(real_ms, |last| last.max(real_ms)));
+        self.at
+    }
+}
+
 /// Eased progress of `now` through `[from, to]` (milliseconds), 0 before and
 /// 1 after.
 pub fn progress(now: f32, from: f32, to: f32, ease: Ease) -> f32 {
@@ -453,5 +500,20 @@ mod tests {
         assert!(end.done);
         assert_eq!(end.reveal, Reveal::Hidden);
         assert_eq!((end.open, end.flight), (0.0, 0.0));
+    }
+    #[test]
+    fn a_quicker_clock_carries_on_from_where_it_is() {
+        let mut clock = MotionClock::default();
+        assert_eq!(clock.at(1000.0), 1000.0);
+        assert_eq!(clock.at(1100.0), 1100.0);
+        clock.set_speed(4.0);
+        // A 22-frame opening takes a quarter as long.
+        assert_eq!(clock.at(1100.0), 1100.0);
+        let opened = clock.at(1100.0 + f64::from(f(22)) / 4.0);
+        assert!((opened - (1100.0 + f64::from(f(22)))).abs() < 1e-9);
+        clock.set_speed(1.0);
+        let now = clock.at(2000.0);
+        assert_eq!(clock.at(1900.0), now);
+        assert_eq!(clock.at(2010.0), now + 10.0);
     }
 }

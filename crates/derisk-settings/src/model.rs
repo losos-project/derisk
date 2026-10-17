@@ -224,6 +224,9 @@ pub struct Appearance {
     pub text_scale: f32,
     /// Replace motion with cross-fades.
     pub reduce_motion: bool,
+    /// Run motion faster the longer the person has used the desktop (see
+    /// [`crate::familiarity`]).
+    pub settle_motion: bool,
     /// Background blur under translucent panels, 0 (off) to 10.
     pub blur: u8,
     /// Panel opacity.
@@ -687,6 +690,7 @@ impl Default for Settings {
                 accent: Accent::Teal,
                 text_scale: 1.0,
                 reduce_motion: false,
+                settle_motion: true,
                 blur: 6,
                 panels: PanelOpacity {
                     top_bar: 70,
@@ -875,6 +879,7 @@ impl Settings {
             "appearance.accent" => put(&mut a.accent, Accent::parse(value)),
             "appearance.text_scale" => put(&mut a.text_scale, parse_in(value, 0.75, 2.0)),
             "appearance.reduce_motion" => put(&mut a.reduce_motion, parse_bool(value)),
+            "appearance.settle_motion" => put(&mut a.settle_motion, parse_bool(value)),
             "appearance.blur" => put(&mut a.blur, parse_in(value, 0, 10)),
             "appearance.top_bar_opacity" => put(&mut a.panels.top_bar, parse_in(value, 20, 100)),
             "appearance.overview_opacity" => put(&mut a.panels.overview, parse_in(value, 20, 100)),
@@ -995,6 +1000,7 @@ impl Settings {
              appearance.accent = {}\n\
              appearance.text_scale = {}\n\
              appearance.reduce_motion = {}\n\
+             appearance.settle_motion = {}\n\
              appearance.blur = {}\n\
              appearance.top_bar_opacity = {}\n\
              appearance.overview_opacity = {}\n\
@@ -1055,6 +1061,7 @@ impl Settings {
             a.accent.as_str(),
             a.text_scale,
             a.reduce_motion,
+            a.settle_motion,
             a.blur,
             a.panels.top_bar,
             a.panels.overview,

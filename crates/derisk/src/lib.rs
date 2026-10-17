@@ -20,6 +20,8 @@
 //!   with the assistant as the fallback.
 //! - [`tray`]: monochrome system tray icons.
 //! - [`animation`]: the startup animation.
+//! - [`familiarity`]: animations that quicken as the person gets used to
+//!   the desktop.
 //! - [`effects`]: translucent, blurred panels and low power mode.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control, and
 //!   [`mcp`]: the agent tools as an MCP server.
@@ -72,6 +74,7 @@ pub mod assistant;
 pub mod backlight;
 pub mod conversation;
 pub mod effects;
+pub mod familiarity;
 pub mod icons;
 pub mod idle;
 pub mod ipc;
