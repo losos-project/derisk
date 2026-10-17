@@ -496,7 +496,8 @@ const ASK_POLL: Duration = Duration::from_millis(200);
 /// Runs one task, returning what it said on failure. A task that stops to
 /// ask for a password is answered "cancel" ([`cancel_questions`]), so it
 /// fails with its reason instead of waiting for an answer nobody can give.
-fn execute(task: &Task) -> std::result::Result<(), String> {
+/// The display manager runs its homectl update through this too.
+pub(crate) fn execute(task: &Task) -> std::result::Result<(), String> {
     let mut child = Process::new(&task.argv[0])
         .args(&task.argv[1..])
         .envs(task.env.iter().map(|(k, v)| (k, v)))
@@ -551,7 +552,7 @@ fn cancel_questions(pid: u32) {
             continue;
         };
         if let Some(socket) = setup::ask_socket(&ask, pid) {
-            warn!(pid, "a setup task asked for a password; cancelling it");
+            warn!(pid, "a task asked for a password; cancelling it");
             if let Err(error) =
                 UnixDatagram::unbound().and_then(|s| s.send_to(setup::ASK_CANCEL, &socket))
             {
