@@ -33,6 +33,7 @@ pub const GROUPS: [(&str, &[Page]); 4] = [
         &[
             Page::Notifications,
             Page::Power,
+            Page::Backups,
             Page::DefaultApps,
             Page::System,
             Page::About,
