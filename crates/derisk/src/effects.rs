@@ -50,6 +50,8 @@ pub struct Effects {
     pub panels: PanelOpacity,
     /// Replace motion with cross-fades.
     pub reduce_motion: bool,
+    /// Quicken motion as the person gets used to the desktop.
+    pub settle_motion: bool,
     /// When low power mode turns on.
     pub low_power: LowPower,
     /// Whether the display has variable refresh rate.
@@ -112,6 +114,7 @@ impl Effects {
             blur: a.blur.min(10),
             panels: a.panels,
             reduce_motion: a.reduce_motion,
+            settle_motion: a.settle_motion,
             low_power: settings.power.low_power,
             vrr: settings.desktop.vrr,
             top_bar: settings.top_bar,

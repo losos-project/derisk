@@ -147,6 +147,10 @@ fn action_icons_come_from_papirus_as_greyscale_masks() {
     let symbolic = write("Papirus-Dark/symbolic/actions/window-close-symbolic.svg");
     write("Papirus-Dark/16x16/actions/window-close.svg");
     let plain = write("Papirus/16x16/places/folder.svg");
+    // And Papirus's layout since 2025, a level deeper under each size,
+    // where the colored category icon beside it would mask to a blob.
+    let science = write("Papirus/16x16/symbolic/categories/applications-science-symbolic.svg");
+    write("Papirus/16x16/categories/applications-science.svg");
     // A big plain icon is a picture, never used as a mask.
     write("Papirus/48x48/actions/list-add.svg");
     let roots = [root.clone()];
@@ -157,6 +161,7 @@ fn action_icons_come_from_papirus_as_greyscale_masks() {
     // Papirus, any context.
     assert_eq!(find("window-close"), Some(symbolic.clone()));
     assert_eq!(find("folder"), Some(plain));
+    assert_eq!(find("applications-science"), Some(science));
     assert_eq!(find("../folder"), None);
     assert_eq!(find("list-add"), None);
 

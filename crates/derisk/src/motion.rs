@@ -6,10 +6,14 @@
 //! state in the context's memory under the ID it is given, and asks for
 //! another frame while it is moving. With motion off (reduced motion, or
 //! the Look setting) every helper returns its end state at once.
+//!
+//! Every helper times itself on [`now`], which runs faster than egui's
+//! clock as the person gets used to the desktop ([`set_speed`]), so all of
+//! the chrome's motion quickens together, delays and chained steps too.
 
 use mcsapi::toolkit::egui::{self, Context, Id, Pos2, Rect, pos2};
 
-use crate::animation::Ease;
+use crate::animation::{Ease, MotionClock};
 
 /// Turns motion on or off for every helper in `ctx`, for this frame on.
 pub fn set_enabled(ctx: &Context, enabled: bool) {
@@ -22,9 +26,29 @@ pub fn enabled(ctx: &Context) -> bool {
         .unwrap_or(false)
 }
 
-/// The context's clock, in milliseconds.
+/// Runs motion in `ctx` `speed` times as fast as the film, for this frame
+/// on: 1 on a new desktop, more on one the person knows.
+pub fn set_speed(ctx: &Context, speed: f32) {
+    clock(ctx, |c| c.set_speed(speed));
+}
+
+/// The motion clock, in milliseconds: egui's, sped up by [`set_speed`].
 pub fn now(ctx: &Context) -> f64 {
-    ctx.input(|i| i.time) * 1000.0
+    clock(ctx, |_| ())
+}
+
+/// Brings the context's motion clock up to egui's, then applies `change`;
+/// returns the time before the change.
+fn clock(ctx: &Context, change: impl FnOnce(&mut MotionClock)) -> f64 {
+    let id = Id::new("derisk-motion-clock");
+    let real = ctx.input(|i| i.time) * 1000.0;
+    let mut clock = ctx
+        .data(|d| d.get_temp::<MotionClock>(id))
+        .unwrap_or_default();
+    let at = clock.at(real);
+    change(&mut clock);
+    ctx.data_mut(|d| d.insert_temp(id, clock));
+    at
 }
 
 /// Eased progress through `ms` since `since` (ms on [`now`]'s clock),
@@ -259,6 +283,22 @@ mod tests {
         frame(&ctx, 0.02, |c| {
             v = appear(c, Id::new("a"), 0.0, 100.0, ease::OUT)
         });
+        assert_eq!(v, 1.0);
+    }
+
+    #[test]
+    fn a_quicker_desktop_finishes_sooner() {
+        let ctx = Context::default();
+        let id = Id::new("t");
+        let mut v = 0.0;
+        frame(&ctx, 0.0, |c| {
+            set_speed(c, 4.0);
+            v = tween(c, id, 0.0, 100.0, ease::SMOOTH);
+        });
+        frame(&ctx, 1.0, |c| v = tween(c, id, 1.0, 100.0, ease::SMOOTH));
+        assert_eq!(v, 0.0);
+        // A quarter of the film's 100 ms.
+        frame(&ctx, 1.026, |c| v = tween(c, id, 1.0, 100.0, ease::SMOOTH));
         assert_eq!(v, 1.0);
     }
 
