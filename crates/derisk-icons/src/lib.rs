@@ -104,10 +104,22 @@ fn in_theme(
             continue;
         };
         let a_size = dir_size(&a.file_name().to_string_lossy());
-        for b in inner.filter_map(Result::ok) {
+        // Papirus since 2025 keeps its symbolic icons a level deeper, in
+        // `16x16/symbolic/categories`, beside the colored `16x16/categories`.
+        let dirs = inner.filter_map(Result::ok).flat_map(|b| {
+            let nested = (b.file_name() == "symbolic")
+                .then(|| fs::read_dir(b.path()).ok())
+                .flatten()
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .map(|c| (c.path(), a_size));
             let size = a_size.or_else(|| dir_size(&b.file_name().to_string_lossy()));
+            std::iter::once((b.path(), size)).chain(nested)
+        });
+        for (dir, size) in dirs {
             for ext in ["png", "svg"] {
-                let path = b.path().join(format!("{name}.{ext}"));
+                let path = dir.join(format!("{name}.{ext}"));
                 if !fs::is_file(&path) {
                     continue;
                 }
