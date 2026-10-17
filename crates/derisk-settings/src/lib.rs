@@ -593,7 +593,7 @@ impl SettingsApp {
                     ui.label("");
                     ui.label(layout::note(
                         tokens,
-                        "Turns off blur and animations and caps the frame rate at 30 fps.",
+                        "Turns off blur, shadows and animations. Frames stay at 60 per second or more.",
                     ));
                     ui.end_row();
                     profiles::row(ui, &mut self.profiles);

@@ -58,7 +58,9 @@ pub fn set_argv(profile: &str) -> [&str; 3] {
     ["powerprofilesctl", "set", profile]
 }
 
-fn list() -> Option<Profiles> {
+/// What power-profiles-daemon offers now, or `None` without it. It runs
+/// `powerprofilesctl`, so it blocks: call it off the UI thread.
+pub fn read() -> Option<Profiles> {
     let out = Command::new("powerprofilesctl")
         .arg("list")
         .stdin(Stdio::null())
@@ -67,6 +69,17 @@ fn list() -> Option<Profiles> {
         .ok()
         .filter(|o| o.status.success())?;
     Some(parse_list(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Switches the whole machine to `profile`; blocks like [`read`].
+pub fn set(profile: &str) {
+    let argv = set_argv(profile);
+    let _ = Command::new(argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// The page's state: what the daemon last said, while a read or a switch
@@ -84,15 +97,9 @@ impl ProfilesUi {
         let (tx, rx) = mpsc::channel();
         derisk_sys::thread::detach(move || {
             if let Some(profile) = set {
-                let argv = set_argv(&profile);
-                let _ = Command::new(argv[0])
-                    .args(&argv[1..])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+                self::set(&profile);
             }
-            let _ = tx.send(list());
+            let _ = tx.send(read());
         });
         self.pending = Some(rx);
     }
