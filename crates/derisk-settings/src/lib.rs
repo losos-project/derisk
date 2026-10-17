@@ -479,7 +479,7 @@ impl SettingsApp {
                         !a.reduce_motion,
                         egui::Checkbox::new(
                             &mut a.settle_motion,
-                            "Speed animations up as you get used to the desktop",
+                            "Speed up as you get used to them",
                         ),
                     );
                     ui.end_row();
@@ -490,12 +490,12 @@ impl SettingsApp {
                                 .unwrap_or_default()
                         });
                         ui.label("");
-                        ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
                             let speed = familiarity::speed(active);
                             let text = if speed < 1.05 {
-                                "Animations run at their full length for now.".to_owned()
+                                "Full length while the desktop is new.".to_owned()
                             } else {
-                                format!("Animations run {speed:.1}× as fast as at first.")
+                                format!("Now {speed:.1}× as fast as at first.")
                             };
                             ui.label(layout::note(tokens, &text));
                             let again = Button::new("Start over")
