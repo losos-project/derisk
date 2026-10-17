@@ -1,0 +1,17 @@
+[package]
+name = "derisk-faces"
+description = "Counts the faces in front of the camera for derisk's privacy display: libfacedetection over low-resolution V4L2 frames, in memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libfacedetection-sys = { path = "../libfacedetection-sys", version = "0.1.0" }
+thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# V4L2 straight through the kernel's ioctls (its `v4l2` feature), no libv4l.
+v4l = { version = "0.14.0", default-features = false, features = ["v4l2"] }
+crossbeam-channel.workspace = true

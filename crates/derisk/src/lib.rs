@@ -6,7 +6,8 @@
 //!
 //! - [`shell`]: tiling plus floating, snapped and minimized windows, and
 //!   Windows-style dragging with edge/corner snapping and Snap Assist.
-//! - [`decorations`]: server-side title bars with the buttons on the left.
+//! - [`decorations`]: the window buttons the top bar shows for the
+//!   focused window.
 //! - [`adaptive`]: phone/tablet/desktop profiles and learned app suggestions.
 //! - [`mobile`]: the touch navigation bar and edge swipes on phones.
 //! - [`keyboard`]: the on-screen keyboard and its word prediction.
@@ -26,15 +27,19 @@
 //! - [`notification_stack`]: the notifications apps send the session over
 //!   D-Bus, and which of them are on screen.
 //! - [`keys`]: keyboard shortcuts.
+//! - [`tutorial`]: the tour of the desktop the first login starts with.
 //! - [`lock`] and [`greetd`]: the lock screen, and the login conversation
 //!   `derisk greeter` holds with `derisk display-manager` (or greetd);
 //!   [`polkit`]: the dialog the session's polkit agent shows.
+//! - [`backlight`]: turning the backlight down while a password is typed.
 //! - [`idle`]: dimming, locking and suspending when nobody uses the
 //!   session, through swayidle.
 //! - [`systemd`]: apps as transient units, sd_notify, socket activation,
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
 //! - [`privacy`]: forgetting recent files and emptying old trash.
+//! - [`privacy_display`]: covering the screen while someone else looks at
+//!   it, Samsung's privacy display in software.
 //! - [`wallpaper`]: the desktop background, from a color to a looping video.
 //! - [`wizard`], [`setup`], [`install`], [`locale`] and [`network`]: the
 //!   installer (`derisk installer`) and first-boot setup (`derisk setup`),
@@ -64,6 +69,7 @@ pub mod action;
 pub mod adaptive;
 pub mod animation;
 pub mod assistant;
+pub mod backlight;
 pub mod conversation;
 pub mod effects;
 pub mod icons;
@@ -81,12 +87,14 @@ pub mod palette;
 pub mod password_age;
 pub mod plugins;
 pub mod privacy;
+pub mod privacy_display;
 pub mod setup;
 pub mod shell;
 pub mod systemd;
 pub mod theme;
 pub mod time;
 pub mod tray;
+pub mod tutorial;
 pub mod ui;
 pub mod wallpaper;
 pub mod widgets;

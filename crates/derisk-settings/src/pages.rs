@@ -9,7 +9,7 @@ use crate::{
     model::{
         BarPosition, Fit, Rgb, Settings, TopBar, Wallpaper, WallpaperKind, web_background_url,
     },
-    shortcuts::{Chord, Shortcut, Shortcuts},
+    shortcuts::{Group, Keys, Shortcut, Shortcuts},
     thumbs::Thumbnails,
 };
 
@@ -54,8 +54,8 @@ impl Drafts {
     }
 }
 
-fn chord_text(chord: Option<Chord>) -> String {
-    chord.map_or_else(|| "none".to_owned(), |c| c.to_string())
+fn chord_text(keys: Option<Keys>) -> String {
+    keys.map_or_else(|| "none".to_owned(), |k| k.to_string())
 }
 
 /// Where pictures and videos usually live: the user's Pictures and Videos
@@ -131,9 +131,12 @@ fn color_row(ui: &mut egui::Ui, label: &str, color: &mut Rgb) {
     ui.end_row();
 }
 
-fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
+fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label("");
-    ui.label(egui::RichText::new(text).small().color(theme.border));
+    ui.label(crate::layout::note(
+        &mcsapi_components::Tokens::current(ui.ctx()),
+        text,
+    ));
     ui.end_row();
 }
 
@@ -156,11 +159,7 @@ pub(crate) fn wallpaper(
     ui.end_row();
     match w.kind {
         WallpaperKind::Default => {
-            hint(
-                ui,
-                theme,
-                "derisk's gradient, tinted with the accent color.",
-            );
+            hint(ui, "derisk's gradient, tinted with the accent color.");
         }
         WallpaperKind::Color => color_row(ui, "Color", &mut w.color),
         WallpaperKind::Gradient => {
@@ -180,7 +179,7 @@ pub(crate) fn wallpaper(
                 color_row(ui, "Bars", &mut w.color);
             }
         }
-        WallpaperKind::Web => url_rows(ui, w, drafts, theme),
+        WallpaperKind::Web => url_rows(ui, w, drafts),
     }
     if w.kind == WallpaperKind::Slideshow {
         ui.label("Change every");
@@ -205,15 +204,14 @@ pub(crate) fn wallpaper(
     if w.kind == WallpaperKind::Video {
         hint(
             ui,
-            theme,
             "Videos loop without sound. They are decoded by ffmpeg at up to 30 fps.",
         );
     }
-    lock_screen_rows(ui, w, drafts, theme);
+    lock_screen_rows(ui, w, drafts);
 }
 
 /// The web page's address: http(s), a file:/// URL, or a file's full path.
-fn url_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &Theme) {
+fn url_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts) {
     ui.label("Address");
     let edit = ui.add(
         egui::TextEdit::singleline(&mut drafts.url)
@@ -234,7 +232,6 @@ fn url_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &T
     ui.end_row();
     hint(
         ui,
-        theme,
         if !valid {
             "Type an address starting with https:// or http://, or a full path."
         } else {
@@ -246,7 +243,7 @@ fn url_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &T
 }
 
 /// The lock screen's picture: a path, or empty for derisk's gradient.
-fn lock_screen_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, theme: &Theme) {
+fn lock_screen_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts) {
     ui.label("Lock screen");
     ui.horizontal_wrapped(|ui| {
         let edit = ui.add(
@@ -271,17 +268,12 @@ fn lock_screen_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts, t
     ui.end_row();
     let typed = drafts.lock_path.trim();
     if !typed.is_empty() && !Path::new(typed).is_absolute() {
-        hint(ui, theme, "Type a full path, starting with /.");
+        hint(ui, "Type a full path, starting with /.");
     } else if !w.lock_screen.as_os_str().is_empty() && !derisk_sys::fs::exists(&w.lock_screen) {
-        hint(
-            ui,
-            theme,
-            "Nothing is there yet; the gradient shows instead.",
-        );
+        hint(ui, "Nothing is there yet; the gradient shows instead.");
     } else {
         hint(
             ui,
-            theme,
             "A picture fills the screen, darkened so the clock stays readable.",
         );
     }
@@ -311,13 +303,9 @@ fn file_rows(
     }
     ui.end_row();
     if !valid {
-        hint(ui, theme, "Type a full path, starting with /.");
+        hint(ui, "Type a full path, starting with /.");
     } else if !w.path.as_os_str().is_empty() && !derisk_sys::fs::exists(&w.path) {
-        hint(
-            ui,
-            theme,
-            "Nothing is there yet; the default shows instead.",
-        );
+        hint(ui, "Nothing is there yet; the default shows instead.");
     }
     if drafts.candidates.as_ref().is_none_or(|(k, _)| *k != w.kind) {
         drafts.candidates = Some((w.kind, candidates(w.kind, &wallpaper_dirs())));
@@ -326,11 +314,7 @@ fn file_rows(
         return;
     };
     if found.is_empty() {
-        hint(
-            ui,
-            theme,
-            "Nothing found in Pictures, Videos or backgrounds.",
-        );
+        hint(ui, "Nothing found in Pictures, Videos or backgrounds.");
         return;
     }
     ui.label("Found");
@@ -506,7 +490,7 @@ fn preview(
     response
 }
 
-pub(crate) fn top_bar(ui: &mut egui::Ui, b: &mut TopBar, theme: &Theme) {
+pub(crate) fn top_bar(ui: &mut egui::Ui, b: &mut TopBar) {
     ui.label("Position");
     ui.horizontal(|ui| {
         ui.selectable_value(&mut b.position, BarPosition::Top, "Top");
@@ -532,46 +516,53 @@ pub(crate) fn top_bar(ui: &mut egui::Ui, b: &mut TopBar, theme: &Theme) {
     ui.end_row();
     hint(
         ui,
-        theme,
         "The overview button, menus, tray and warnings always show.",
     );
 }
 
 pub(crate) fn shortcuts(ui: &mut egui::Ui, s: &mut Shortcuts, drafts: &mut Drafts, theme: &Theme) {
     let clashes = s.clashes();
-    for (i, shortcut) in Shortcut::ALL.into_iter().enumerate() {
-        ui.label(shortcut.label());
-        ui.horizontal(|ui| {
-            let text = &mut drafts.chords[i];
-            let edit = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
-            let parsed = if text.trim().eq_ignore_ascii_case("none") {
-                Some(None)
-            } else {
-                Chord::parse(text).map(Some)
-            };
-            match parsed {
-                Some(chord) if edit.changed() => s.set(shortcut, chord),
-                None => {
-                    ui.label(egui::RichText::new("Not a shortcut").color(theme.accent));
-                }
-                _ => {}
-            }
-            if clashes.contains(&shortcut) {
-                ui.label(egui::RichText::new("Used twice").color(theme.accent));
-            }
-            if s.get(shortcut) != Some(shortcut.default_chord())
-                && ui.small_button("Reset").clicked()
-            {
-                s.set(shortcut, Some(shortcut.default_chord()));
-                *text = chord_text(s.get(shortcut));
-            }
-        });
+    for group in Group::ALL {
+        ui.label(egui::RichText::new(group.label()).strong());
         ui.end_row();
+        for (i, shortcut) in Shortcut::ALL.into_iter().enumerate() {
+            if shortcut.group() != group {
+                continue;
+            }
+            ui.label(shortcut.label());
+            ui.horizontal(|ui| {
+                let text = &mut drafts.chords[i];
+                let edit = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
+                let parsed = if text.trim().eq_ignore_ascii_case("none") {
+                    Some(None)
+                } else {
+                    Keys::parse(text).map(Some)
+                };
+                match parsed {
+                    Some(keys) if edit.changed() => s.set(shortcut, keys),
+                    None => {
+                        ui.label(egui::RichText::new("Not a shortcut").color(theme.accent));
+                    }
+                    _ => {}
+                }
+                if clashes.contains(&shortcut) {
+                    ui.label(egui::RichText::new("Clashes").color(theme.accent));
+                }
+                if s.get(shortcut) != Some(shortcut.default_keys())
+                    && ui.small_button("Reset").clicked()
+                {
+                    s.set(shortcut, Some(shortcut.default_keys()));
+                    *text = chord_text(s.get(shortcut));
+                }
+            });
+            ui.end_row();
+        }
     }
     hint(
         ui,
-        theme,
-        "Write chords like Super+Shift+M; \"none\" turns one off. Each needs Super, Ctrl or Alt. \
-         Super+1…9, Super+arrows and Alt+Tab are fixed.",
+        "Write a chord like Super+Shift+M, or a sequence like Super+W Left: press the first \
+         chord, then the next key. \"none\" turns one off. The first chord needs Super, Ctrl or \
+         Alt, unless it is Print or F1…F12. Super+1…9, Super+arrows, Super+Ctrl+arrows, Alt+Tab \
+         and Alt+F4 are fixed.",
     );
 }

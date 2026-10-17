@@ -284,8 +284,11 @@ impl BluetoothUi {
     }
 }
 
-fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
-    ui.label(egui::RichText::new(text).small().color(theme.border));
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(crate::layout::note(
+        &mcsapi_components::Tokens::current(ui.ctx()),
+        text,
+    ));
 }
 
 pub(crate) fn page(ui: &mut egui::Ui, state: &mut BluetoothUi, theme: &Theme) {
@@ -304,7 +307,6 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BluetoothUi, theme: &Theme) {
     let Some(adapter) = &snapshot.adapter else {
         hint(
             ui,
-            theme,
             "No Bluetooth adapter was found, or Bluetooth is not running on this machine.",
         );
         return;
@@ -329,7 +331,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BluetoothUi, theme: &Theme) {
             job = Some(power(on));
         }
         if !adapter.name.is_empty() {
-            hint(ui, theme, &format!("Visible to devices pairing with it as {}", adapter.name));
+            hint(ui, &format!("Visible to devices pairing with it as {}", adapter.name));
         }
         if !adapter.powered {
             return;
@@ -343,14 +345,13 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BluetoothUi, theme: &Theme) {
         );
         let paired: Vec<&Device> = snapshot.devices.iter().filter(|d| d.paired).collect();
         if paired.is_empty() {
-            hint(ui, theme, "Nothing is paired yet.");
+            hint(ui, "Nothing is paired yet.");
         }
         for device in paired {
             ui.horizontal(|ui| {
                 ui.label(&device.name);
                 hint(
                     ui,
-                    theme,
                     if device.connected { "Connected" } else { "Not connected" },
                 );
                 let toggle = if device.connected { "Disconnect" } else { "Connect" };
@@ -380,7 +381,6 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BluetoothUi, theme: &Theme) {
         });
         hint(
             ui,
-            theme,
             "Put the device in pairing mode first. Devices that show a code to type are not supported yet.",
         );
         for device in snapshot

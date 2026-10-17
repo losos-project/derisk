@@ -1,5 +1,5 @@
-//! The Privacy page: device access for every app, history and trash, and
-//! each Flatpak app's permissions.
+//! The Privacy page: the privacy display, device access for every app,
+//! history and trash, and each Flatpak app's permissions.
 //!
 //! The switches at the top are settings and apply on Save; a switched-off
 //! device is then denied to every Flatpak app in the portal permission
@@ -13,7 +13,7 @@ use mcsapi_ui::{Theme, egui};
 
 use crate::{
     flatpak::{self, App, Context, Dirs, Grant, PERMISSIONS, Portal},
-    model::Privacy,
+    model::{Privacy, PrivacyDisplay},
 };
 
 /// An app's portal permissions, or why they can't be read, by app ID.
@@ -30,6 +30,8 @@ pub(crate) struct PrivacyUi {
     /// The selected app's portal permissions, or why they can't be read.
     portals: Option<PortalState>,
     status: Option<String>,
+    /// The app ID being typed for the privacy display's list.
+    new_app: String,
 }
 
 impl PrivacyUi {
@@ -91,15 +93,79 @@ impl PrivacyUi {
     }
 }
 
-fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
-    ui.label(egui::RichText::new(text).small().color(theme.border));
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(crate::layout::note(
+        &mcsapi_components::Tokens::current(ui.ctx()),
+        text,
+    ));
 }
 
-pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, theme: &Theme) {
+/// The privacy display's switch, its conditions and its apps.
+fn privacy_display(ui: &mut egui::Ui, d: &mut PrivacyDisplay, new_app: &mut String) {
+    ui.label("Privacy display");
+    ui.vertical(|ui| {
+        ui.checkbox(
+            &mut d.enabled,
+            "Cover the screen when someone else is looking",
+        );
+        hint(
+            ui,
+            "While one of the conditions below holds, the camera looks for a second face. \
+             Pictures stay in memory and are never saved or sent anywhere.",
+        );
+        ui.add_enabled_ui(d.enabled, |ui| {
+            ui.add_space(4.0);
+            ui.checkbox(&mut d.passwords, "When a password is asked for");
+            ui.checkbox(&mut d.notifications, "Over notification pop-ups");
+            ui.checkbox(&mut d.maximum, "Maximum protection: also dim the screen");
+            ui.add_space(4.0);
+            ui.label("When one of these apps is in use:");
+            let mut remove = None;
+            for (i, id) in d.apps.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(id);
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                d.apps.remove(i);
+            }
+            ui.horizontal(|ui| {
+                let field = ui.add(
+                    egui::TextEdit::singleline(new_app)
+                        .hint_text("App ID, such as org.mozilla.firefox")
+                        .desired_width(260.0),
+                );
+                let id = new_app.trim().to_owned();
+                let ok = !id.is_empty() && !id.contains([',', '/']) && !d.apps.contains(&id);
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // The button is added every frame, Enter or not, so it never
+                // blinks out of the row.
+                let added = ui.add_enabled(ok, egui::Button::new("Add")).clicked();
+                if ok && (added || entered) {
+                    d.apps.push(id);
+                    new_app.clear();
+                }
+            });
+        });
+    });
+    ui.end_row();
+}
+
+pub(crate) fn page(
+    ui: &mut egui::Ui,
+    p: &mut Privacy,
+    display: &mut PrivacyDisplay,
+    state: &mut PrivacyUi,
+    theme: &Theme,
+) {
     egui::Grid::new("privacy-global")
         .num_columns(2)
         .spacing([24.0, 10.0])
         .show(ui, |ui| {
+            privacy_display(ui, display, &mut state.new_app);
             ui.label("Devices");
             ui.vertical(|ui| {
                 ui.checkbox(&mut p.location, "Location services");
@@ -107,7 +173,6 @@ pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, th
                 ui.checkbox(&mut p.microphone, "Microphone");
                 hint(
                     ui,
-                    theme,
                     "Off denies it to every Flatpak app when you save; on lets them ask again.",
                 );
             });
@@ -115,11 +180,7 @@ pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, th
             ui.label("History");
             ui.vertical(|ui| {
                 ui.checkbox(&mut p.remember_recent, "Remember recently used files");
-                hint(
-                    ui,
-                    theme,
-                    "Off also clears the list and the palette's picks.",
-                );
+                hint(ui, "Off also clears the list and the palette's picks.");
             });
             ui.end_row();
             ui.label("Trash");
@@ -140,7 +201,6 @@ pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, th
                 ui.checkbox(&mut p.usage_ping, "Count me as an active user");
                 hint(
                     ui,
-                    theme,
                     "Once a day the system sends an anonymous id that changes every month, \
                      and nothing else about you, so the project knows how many people use it.",
                 );
@@ -152,7 +212,6 @@ pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, th
     ui.heading(egui::RichText::new("Flatpak apps").color(theme.foreground));
     hint(
         ui,
-        theme,
         "What each app may reach. Changes apply right away and take effect when the app next starts.",
     );
     ui.add_space(6.0);
@@ -175,11 +234,7 @@ pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, th
     });
     let apps = state.apps.clone().unwrap_or_default();
     if apps.is_empty() {
-        hint(
-            ui,
-            theme,
-            "No Flatpak apps are installed for you or system-wide.",
-        );
+        hint(ui, "No Flatpak apps are installed for you or system-wide.");
         return;
     }
     ui.add_space(6.0);
@@ -215,7 +270,7 @@ pub(crate) fn page(ui: &mut egui::Ui, p: &mut Privacy, state: &mut PrivacyUi, th
                 .as_ref()
                 .and_then(|id| apps.iter().position(|a| &a.id == id))
             else {
-                hint(ui, theme, "Pick an app to see what it may reach.");
+                hint(ui, "Pick an app to see what it may reach.");
                 return;
             };
             app_permissions(ui, state, index, p, theme);
@@ -241,7 +296,6 @@ fn app_permissions(
     );
     hint(
         ui,
-        theme,
         &format!(
             "{} · installed {}",
             app.id,
@@ -280,7 +334,7 @@ fn app_permissions(
                     (true, None) => "asked for by the app",
                     (false, None) => "",
                 };
-                hint(ui, theme, note);
+                hint(ui, note);
                 ui.end_row();
             }
             // Folders the app asks for beyond the standard ones.
@@ -303,7 +357,7 @@ fn app_permissions(
                     app.switch(&global, key, &value, on);
                     changed = true;
                 }
-                hint(ui, theme, "");
+                hint(ui, "");
                 ui.end_row();
             }
         });
@@ -352,7 +406,7 @@ fn app_permissions(
     let portals = match portals {
         Ok(p) => p.clone(),
         Err(e) => {
-            hint(ui, theme, &format!("Portal permissions can't be read: {e}"));
+            hint(ui, &format!("Portal permissions can't be read: {e}"));
             return;
         }
     };
@@ -371,7 +425,7 @@ fn app_permissions(
                 ui.label(portal.label());
                 ui.horizontal(|ui| {
                     if blocked {
-                        hint(ui, theme, "Off for every app (see Devices above)");
+                        hint(ui, "Off for every app (see Devices above)");
                         return;
                     }
                     let current = portals.get(&portal).copied();

@@ -36,6 +36,10 @@ fn text_round_trips_every_field() {
     settings.appearance.panels.snap_assist = 20;
     settings.power.low_power = LowPower::On;
     settings.privacy.usage_ping = false;
+    settings.privacy_display.enabled = true;
+    settings.privacy_display.notifications = false;
+    settings.privacy_display.maximum = true;
+    settings.privacy_display.apps = vec!["org.derisk.files".into(), "org.mozilla.firefox".into()];
     settings.defaults.browser = "org.mozilla.firefox.desktop".into();
     settings.defaults.search = Some(SearchEngine::Ecosia);
     let (parsed, warnings) = Settings::parse(&settings.to_text());
@@ -171,7 +175,7 @@ fn low_power_follows_the_battery_only_when_asked() {
 
 #[test]
 fn customization_round_trips() {
-    use derisk_settings::{BarPosition, Chord, Fit, Rgb, Shortcut, WallpaperKind};
+    use derisk_settings::{BarPosition, Fit, Keys, Rgb, Shortcut, WallpaperKind};
     let mut settings = Settings::default();
     settings.top_bar.position = BarPosition::Bottom;
     settings.top_bar.autohide = true;
@@ -189,12 +193,19 @@ fn customization_round_trips() {
     settings.wallpaper.lock_screen = PathBuf::from("/home/me/Pictures/lake.jpg");
     settings
         .shortcuts
-        .set(Shortcut::Palette, Chord::parse("Ctrl+Alt+P"));
+        .set(Shortcut::Palette, Keys::parse("Ctrl+Alt+P"));
+    settings
+        .shortcuts
+        .set(Shortcut::SnapLeft, Keys::parse("Ctrl+K Left"));
     settings.shortcuts.set(Shortcut::Close, None);
     let text = settings.to_text();
     assert!(text.contains("wallpaper.color = #12abef\n"), "{text}");
     assert!(text.contains("shortcut.palette = Ctrl+Alt+P\n"), "{text}");
     assert!(text.contains("shortcut.close = none\n"), "{text}");
+    assert!(
+        text.contains("shortcut.snap_left = Ctrl+K Left\n"),
+        "{text}"
+    );
     let (parsed, warnings) = Settings::parse(&text);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(parsed, settings);
@@ -221,7 +232,7 @@ fn wallpaper_paths_must_be_absolute() {
 
 #[test]
 fn chords_parse_and_clash() {
-    use derisk_settings::{Chord, KeyName, Shortcut, Shortcuts};
+    use derisk_settings::{Chord, KeyName, Keys, Shortcut, Shortcuts};
     let chord = Chord::parse("shift + SUPER + m").unwrap();
     assert!(chord.logo && chord.shift && !chord.ctrl);
     assert_eq!(chord.key, KeyName::Letter('m'));
@@ -232,7 +243,7 @@ fn chords_parse_and_clash() {
     assert_eq!(Chord::parse("Super+F13"), None);
     let mut shortcuts = Shortcuts::default();
     assert!(shortcuts.clashes().is_empty());
-    shortcuts.set(Shortcut::Close, Chord::parse("Super+F"));
+    shortcuts.set(Shortcut::Close, Keys::parse("Super+F"));
     assert_eq!(shortcuts.clashes(), [Shortcut::Close, Shortcut::Float]);
     // The first in the list keeps the chord until the clash is fixed.
     assert_eq!(
@@ -555,4 +566,18 @@ fn a_web_background_is_an_http_address_or_a_local_file() {
         Settings::parse("wallpaper.kind = web\nwallpaper.url = javascript:alert(1)\n");
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(parsed.wallpaper.url.is_empty());
+}
+
+#[test]
+fn the_privacy_display_is_off_until_turned_on() {
+    let defaults = Settings::default().privacy_display;
+    assert!(!defaults.enabled);
+    assert!(defaults.passwords && defaults.notifications && !defaults.maximum);
+    assert!(defaults.apps.is_empty());
+    let mut settings = Settings::default();
+    assert!(settings.set("privacy_display.apps", "a.desktop, b"));
+    assert_eq!(settings.privacy_display.apps, ["a.desktop", "b"]);
+    assert!(settings.set("privacy_display.apps", ""));
+    assert!(settings.privacy_display.apps.is_empty());
+    assert!(!settings.set("privacy_display.apps", "ok,../bad/path"));
 }

@@ -20,6 +20,7 @@
 pub mod bluetooth;
 pub mod choice;
 pub mod flatpak;
+mod layout;
 mod model;
 #[cfg(not(target_family = "wasm"))]
 pub mod network;
@@ -39,19 +40,19 @@ mod totp;
 
 use std::path::PathBuf;
 
-use mcsapi_components::{ErrorDialog, Tokens};
+use mcsapi_components::{Button, ButtonVariant, ErrorDialog, Tokens};
 use mcsapi_ui::{
     App, Context as _, DocLink, Error, Theme, egui,
     error::miette::{MietteDiagnostic, Severity},
 };
 pub use model::{
     Accent, Appearance, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit, Input, Layout,
-    LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy, Profile, Rgb, Settings,
-    ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle, default_path,
-    machine_name, web_background_url,
+    LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy, PrivacyDisplay, Profile,
+    Rgb, Settings, ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle,
+    default_path, machine_name, web_background_url,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
-pub use shortcuts::{Chord, KeyName, Shortcut, Shortcuts};
+pub use shortcuts::{Chord, Group, KeyName, Keys, Resolved, Shortcut, Shortcuts};
 pub use thumbs::thumbnail;
 
 /// A page of the Settings app.
@@ -129,6 +130,27 @@ impl Page {
             Self::DefaultApps => "Default apps",
             Self::System => "System",
             Self::About => "About",
+        }
+    }
+
+    /// The line under the page's title, saying what it holds.
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Appearance => "Theme, accent colour, text size, blur and motion.",
+            Self::Wallpaper => "What the desktop and the lock screen show behind windows.",
+            Self::TopBar => "Where the top bar sits and what it shows.",
+            Self::Desktop => "How windows are laid out, and on which workspaces.",
+            Self::Input => "Scrolling, the touchpad and key repeat.",
+            Self::Shortcuts => "Keys for the desktop's actions, single or in sequence.",
+            Self::Network => "Wired ports and Wi-Fi networks.",
+            Self::Bluetooth => "The adapter and the devices paired with it.",
+            Self::Privacy => "What apps may reach, what is remembered, and the privacy display.",
+            Self::SignIn => "Your password and the other ways you can sign in.",
+            Self::Notifications => "Banners, sounds and what the lock screen shows.",
+            Self::Power => "When the screen dims and locks, and when the computer sleeps.",
+            Self::DefaultApps => "The browser and search engine the desktop opens.",
+            Self::System => "The security report and resetting this computer.",
+            Self::About => "This version of Settings and where it keeps them.",
         }
     }
 }
@@ -327,18 +349,28 @@ impl SettingsApp {
         self.error = None;
     }
 
-    fn page_ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+    fn page_ui(&mut self, ui: &mut egui::Ui, theme: &Theme, tokens: &Tokens) {
+        layout::header(ui, tokens, self.page);
+        layout::card(ui, tokens, |ui| self.page_body(ui, theme, tokens));
+    }
+
+    fn page_body(&mut self, ui: &mut egui::Ui, theme: &Theme, tokens: &Tokens) {
         let s = &mut self.settings;
-        ui.heading(egui::RichText::new(self.page.label()).color(theme.foreground));
-        ui.add_space(8.0);
-        // Sliders and fields grow with the window instead of sitting at
-        // egui's 100 and 280 pixels in a wide page, up to where a row is
-        // still easy to read across. The label column takes about 160.
-        let control = (ui.available_width() - 160.0).clamp(160.0, 560.0);
+        // Sliders and fields grow with the card instead of sitting at
+        // egui's 100 and 280 pixels, beside the label column and the gap
+        // after it, up to where a row is still easy to read across.
+        let (label, gap) = layout::label_width(ui.available_width());
+        let control = (ui.available_width() - label - gap).clamp(120.0, 440.0);
         ui.spacing_mut().slider_width = control - 64.0;
         ui.spacing_mut().text_edit_width = control;
         if self.page == Page::Privacy {
-            return privacy::page(ui, &mut s.privacy, &mut self.privacy, theme);
+            return privacy::page(
+                ui,
+                &mut s.privacy,
+                &mut s.privacy_display,
+                &mut self.privacy,
+                theme,
+            );
         }
         if self.page == Page::SignIn {
             return signin::page(ui, &mut self.signin, theme);
@@ -367,7 +399,8 @@ impl SettingsApp {
         }
         egui::Grid::new("settings-page")
             .num_columns(2)
-            .spacing([24.0, 10.0])
+            .min_col_width(label)
+            .spacing([gap, 18.0])
             .show(ui, |ui| match self.page {
                 Page::Appearance => {
                     let a = &mut s.appearance;
@@ -439,9 +472,10 @@ impl SettingsApp {
                         ui.end_row();
                     }
                     let w = &mut s.windows;
-                    ui.label("Window corners");
-                    ui.add(egui::Slider::new(&mut w.corner_radius, 0..=20).suffix(" px"));
-                    ui.end_row();
+                    // No "Window corners" slider: windows have had no frame
+                    // of the shell's own to round since their headers went,
+                    // and apps round their own corners. The setting is still
+                    // read, so older files load as they were.
                     ui.label("Window shadows");
                     ui.checkbox(&mut w.shadows, "Soft shadow under windows");
                     ui.end_row();
@@ -453,7 +487,7 @@ impl SettingsApp {
                     &mut self.thumbs,
                     theme,
                 ),
-                Page::TopBar => pages::top_bar(ui, &mut s.top_bar, theme),
+                Page::TopBar => pages::top_bar(ui, &mut s.top_bar),
                 Page::Privacy
                 | Page::SignIn
                 | Page::Network
@@ -557,15 +591,12 @@ impl SettingsApp {
                     });
                     ui.end_row();
                     ui.label("");
-                    ui.label(
-                        egui::RichText::new(
-                            "Turns off blur, shadows and animations. Frames stay at 60 per second or more.",
-                        )
-                        .small()
-                        .color(theme.border),
-                    );
+                    ui.label(layout::note(
+                        tokens,
+                        "Turns off blur, shadows and animations. Frames stay at 60 per second or more.",
+                    ));
                     ui.end_row();
-                    profiles::row(ui, &mut self.profiles, theme);
+                    profiles::row(ui, &mut self.profiles);
                 }
                 Page::About => {
                     ui.label("derisk Settings");
@@ -618,6 +649,11 @@ impl App for SettingsApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         let narrow = ui.available_width() < NARROW;
+        // Everything below draws with the theme's component tokens, so a
+        // theme restyles the app along with the desktop.
+        let tokens = Tokens::from_theme(theme);
+        tokens.install(ui.ctx());
+        layout::style(ui, &tokens);
         if narrow {
             // A sidebar would leave a phone half a page, so the
             // pages become a row of tabs across the top that scrolls sideways.
@@ -627,38 +663,66 @@ impl App for SettingsApp {
                 });
             });
         } else {
-            let sidebar = (ui.available_width() * 0.16).clamp(140.0, 200.0);
+            let sidebar = (ui.available_width() * 0.2).clamp(200.0, 248.0);
             egui::Panel::left("settings-pages")
                 .resizable(false)
                 .exact_size(sidebar)
-                .show(ui, |ui| self.page_buttons(ui));
+                .frame(
+                    egui::Frame::new()
+                        .fill(tokens.card)
+                        .stroke(tokens.border_stroke())
+                        .inner_margin(egui::Margin::symmetric(12, 8)),
+                )
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let listed = |page| self.listed(page);
+                        if let Some(page) = layout::sidebar(ui, &tokens, self.page, listed) {
+                            self.page = page;
+                        }
+                    });
+                });
         }
-        egui::Panel::bottom("settings-actions").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let dirty = self.is_dirty();
-                if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
-                    self.save();
-                }
-                if ui.add_enabled(dirty, egui::Button::new("Revert")).clicked() {
-                    self.revert();
-                }
-                if dirty {
-                    ui.label(egui::RichText::new("Unsaved changes").color(theme.accent));
-                } else if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
-                    // An error has its own dialog, so the line does not
-                    // repeat it.
-                    ui.label(status);
-                }
+        egui::Panel::bottom("settings-actions")
+            .frame(
+                egui::Frame::new()
+                    .fill(tokens.background)
+                    .stroke(tokens.border_stroke())
+                    .inner_margin(egui::Margin::symmetric(20, 12)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let dirty = self.is_dirty();
+                    if dirty {
+                        ui.label(egui::RichText::new("Unsaved changes").color(theme.accent));
+                    } else if let Some(status) =
+                        self.status.as_ref().filter(|_| self.error.is_none())
+                    {
+                        // An error has its own dialog, so the line does not
+                        // repeat it.
+                        ui.label(egui::RichText::new(status).color(tokens.muted_foreground));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(Button::new("Save").enabled(dirty)).clicked() {
+                            self.save();
+                        }
+                        let revert = Button::new("Revert")
+                            .variant(ButtonVariant::Outline)
+                            .enabled(dirty);
+                        if ui.add(revert).clicked() {
+                            self.revert();
+                        }
+                    });
+                });
             });
-        });
         if self.error.is_some() {
-            Tokens::from_theme(theme).install(ui.ctx());
             let shown = ErrorDialog::new("settings-error", &mut self.error).show(ui.ctx());
             if shown.closed {
                 self.status = None;
             }
         }
-        egui::CentralPanel::default_margins().show(ui, |ui| {
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0, tokens.background);
             // A row of controls wider than a phone scrolls rather than being
             // cut off where nothing can reach it.
             let scroll = if narrow {
@@ -666,7 +730,9 @@ impl App for SettingsApp {
             } else {
                 egui::ScrollArea::vertical()
             };
-            scroll.show(ui, |ui| self.page_ui(ui, theme));
+            scroll.show(ui, |ui| {
+                layout::column(ui, |ui| self.page_ui(ui, theme, &tokens));
+            });
         });
     }
 }

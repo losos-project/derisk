@@ -24,6 +24,7 @@ use std::{
 
 use derisk::{
     animation::LoginAnimation,
+    backlight::{self, PasswordDim},
     greetd::{self, Login, Phase, Request, Response},
     time::Clock,
     ui::{GreeterInput, paint_login, paint_startup, paint_wallpaper, show_greeter},
@@ -45,6 +46,41 @@ pub struct Options {
     pub command: Vec<String>,
     /// Extra `KEY=VALUE` pairs for the session's environment.
     pub env: Vec<String>,
+}
+
+impl Options {
+    /// Reads `derisk greeter`'s arguments (what follows `greeter`).
+    pub fn parse(args: &[String]) -> std::result::Result<Self, String> {
+        let mut options = Self::default();
+        let mut it = args.iter();
+        while let Some(arg) = it.next() {
+            match arg.as_str() {
+                "--user" => options.user = Some(it.next().ok_or("--user needs a name")?.clone()),
+                "--env" => {
+                    let pair = it.next().ok_or("--env needs KEY=VALUE")?;
+                    if !pair.contains('=') {
+                        return Err("--env needs KEY=VALUE".into());
+                    }
+                    options.env.push(pair.clone());
+                }
+                "--" => {
+                    options.command = it.cloned().collect();
+                    break;
+                }
+                other => return Err(format!("unknown greeter option: {other}")),
+            }
+        }
+        Ok(options)
+    }
+}
+
+/// The session a greeter run as `greeter` (its whole command line, `derisk
+/// greeter ... -- <session>`) would start, with its environment: what the
+/// display manager starts itself when it logs someone in without one.
+pub fn session_of(greeter: &[String]) -> Option<(Vec<String>, Vec<String>)> {
+    let at = greeter.iter().position(|arg| arg == "greeter")?;
+    let options = Options::parse(&greeter[at + 1..]).ok()?;
+    (!options.command.is_empty()).then(|| (options.command, session_env(options.env)))
 }
 
 /// The session's environment unless `--env` overrides a key: a Wayland
@@ -75,6 +111,8 @@ struct Greeter {
     /// animation runs from then, and the greeter quits at its end.
     leaving: Option<u32>,
     commands: Vec<Command>,
+    /// The backlight, turned down while a password is typed.
+    password_dim: PasswordDim,
 }
 
 impl Greeter {
@@ -116,6 +154,18 @@ impl Greeter {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return self.lost("worker stopped"),
             }
+        }
+        let phase = self.login.phase();
+        let field = backlight::Field {
+            shown: !matches!(phase, Phase::Starting | Phase::Started),
+            typed: matches!(phase, Phase::Prompt { secret: true, .. })
+                && !self.login.answer.is_empty(),
+            checking: *phase == Phase::Waiting,
+        };
+        if let Some((name, level)) = self.password_dim.update(field, Instant::now())
+            && let Err(e) = backlight::set(&name, level)
+        {
+            error!("cannot set the backlight: {e}");
         }
         if *self.login.phase() == Phase::Started && self.leaving.is_none() {
             // The display manager logs the session; logind records whose it is.
@@ -363,6 +413,7 @@ pub fn run(options: Options) -> Result {
         quit: false,
         leaving: None,
         commands: Vec::new(),
+        password_dim: PasswordDim::system(),
     };
     Compositor::new(greeter).title("derisk greeter").run()?;
     Ok(())
@@ -388,5 +439,19 @@ mod tests {
         assert!(env.contains(&"XDG_CURRENT_DESKTOP=other".to_owned()));
         assert!(!env.contains(&"XDG_CURRENT_DESKTOP=derisk".to_owned()));
         assert!(env.contains(&"XDG_SESSION_TYPE=wayland".to_owned()));
+    }
+
+    #[test]
+    fn the_display_manager_finds_the_session_in_the_greeters_command() {
+        let argv = |s: &str| s.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        let (cmd, env) = session_of(&argv(
+            "/bin/derisk greeter --env XDG_CURRENT_DESKTOP=x -- /bin/derisk session --execute",
+        ))
+        .unwrap();
+        assert_eq!(cmd, ["/bin/derisk", "session", "--execute"]);
+        assert!(env.contains(&"XDG_CURRENT_DESKTOP=x".to_owned()));
+        assert!(env.contains(&"XDG_SESSION_TYPE=wayland".to_owned()));
+        assert!(session_of(&argv("/bin/derisk greeter")).is_none());
+        assert!(session_of(&argv("/bin/other -- session")).is_none());
     }
 }

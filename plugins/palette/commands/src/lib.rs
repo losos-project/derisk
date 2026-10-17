@@ -1,5 +1,6 @@
 //! Commands: what the shell itself can do with no window in mind, such as
-//! the overview, the on-screen keyboard, cycling focus and the layouts.
+//! the overview, the on-screen keyboard, cycling focus, the layouts, the
+//! shortcut list, a screenshot and the tour of the desktop.
 
 use derisk_palette_sdk::{Category, Entry, Guest, Hook, Manifest, Value, View, export, json};
 
@@ -19,6 +20,10 @@ impl Guest for Commands {
             "focus_next",
             "focus_previous",
             "set_layout",
+            "shortcut_help",
+            "show_desktop",
+            "screenshot",
+            "tutorial",
         ])
     }
 
@@ -33,7 +38,7 @@ impl Guest for Commands {
 
 /// The catalog, which needs nothing from the view.
 pub fn entries() -> Vec<Entry> {
-    let commands: [(&str, &str, Value, Option<&str>, &str); 6] = [
+    let commands: [(&str, &str, Value, Option<&str>, &str); 10] = [
         (
             "Overview",
             "view-app-grid",
@@ -75,6 +80,34 @@ pub fn entries() -> Vec<Entry> {
             json!({"action": "set_layout", "layout": "monocle"}),
             Some("Super+M"),
             "tiling fullscreen one at a time",
+        ),
+        (
+            "Keyboard Shortcuts",
+            "preferences-desktop-keyboard-shortcuts",
+            json!({"action": "shortcut_help", "visible": true}),
+            Some("Super+/"),
+            "keys keybindings hotkeys help list",
+        ),
+        (
+            "Show Desktop",
+            "user-desktop",
+            json!({"action": "show_desktop"}),
+            Some("Super+D"),
+            "minimize all hide windows wallpaper",
+        ),
+        (
+            "Take a Screenshot",
+            "applets-screenshooter",
+            json!({"action": "screenshot"}),
+            Some("Print"),
+            "screen capture picture print",
+        ),
+        (
+            "Take the Tour",
+            "help-browser",
+            json!({"action": "tutorial", "visible": true}),
+            None,
+            "tutorial welcome help introduction getting started guide",
         ),
     ];
     commands

@@ -415,8 +415,11 @@ impl SigninUi {
     }
 }
 
-fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
-    ui.label(egui::RichText::new(text).small().color(theme.border));
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(crate::layout::note(
+        &mcsapi_components::Tokens::current(ui.ctx()),
+        text,
+    ));
 }
 
 fn secret_field(ui: &mut egui::Ui, text: &mut String, hint: &str) {
@@ -492,16 +495,11 @@ fn section(ui: &mut egui::Ui, theme: &Theme, title: &str) {
 fn password(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
     section(ui, theme, "Password");
     if !state.account.homed {
-        hint(
-            ui,
-            theme,
-            "Your account's password is managed outside derisk.",
-        );
+        hint(ui, "Your account's password is managed outside derisk.");
         return;
     }
     hint(
         ui,
-        theme,
         match state.account.expiry {
             Some(Expiry::Expired) => {
                 "Your password has expired. Change it now, or you'll be asked at your next login."
@@ -515,7 +513,7 @@ fn password(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
     if let Some(Expiry::InDays(days)) = state.account.expiry
         && days > 1
     {
-        hint(ui, theme, &format!("Your password expires in {days} days."));
+        hint(ui, &format!("Your password expires in {days} days."));
     }
     egui::Grid::new("signin-password")
         .num_columns(2)
@@ -533,7 +531,7 @@ fn password(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
         });
     let mismatch = !state.confirm.is_empty() && state.new != state.confirm;
     if mismatch {
-        hint(ui, theme, "The new passwords do not match.");
+        hint(ui, "The new passwords do not match.");
     }
     let ready = !state.current.is_empty() && !state.new.is_empty() && state.new == state.confirm;
     if ui
@@ -553,13 +551,12 @@ fn fingerprints(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
     let enrolled = match &state.reader {
         Some(Reader::Enrolled(fingers)) => fingers.clone(),
         _ => {
-            hint(ui, theme, "No fingerprint reader was found.");
+            hint(ui, "No fingerprint reader was found.");
             return;
         }
     };
     hint(
         ui,
-        theme,
         "A fingerprint unlocks the lock screen and answers administrator prompts. Logging in still takes your password, which is what unlocks your files.",
     );
     if enrolled.is_empty() {
@@ -589,7 +586,6 @@ fn codes(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
     section(ui, theme, "Verification codes");
     hint(
         ui,
-        theme,
         "Logging in asks for a code from an authenticator app after your password.",
     );
     if let Some(recovery) = &state.recovery {
@@ -700,16 +696,11 @@ fn start_codes(state: &mut SigninUi) {
 fn keys(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
     section(ui, theme, "Security keys");
     if !state.account.homed {
-        hint(
-            ui,
-            theme,
-            "Security keys need an account made by LosOS setup.",
-        );
+        hint(ui, "Security keys need an account made by LosOS setup.");
         return;
     }
     hint(
         ui,
-        theme,
         "A FIDO2 security key (a passkey on a key) unlocks your account at login and on the lock screen in place of your password: plug it in, enter its PIN and touch it.",
     );
     ui.label(match state.account.keys {
@@ -752,7 +743,6 @@ fn keys(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
     });
     hint(
         ui,
-        theme,
         "Setting up a key replaces the one set up before. Your password keeps working.",
     );
 }

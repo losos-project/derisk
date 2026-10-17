@@ -139,6 +139,42 @@ pub enum Action {
         #[serde(default)]
         visible: Option<bool>,
     },
+    /// Show, hide (`Some`) or toggle (`None`) the list of keyboard
+    /// shortcuts.
+    ShortcutHelp {
+        /// Desired visibility.
+        #[serde(default)]
+        visible: Option<bool>,
+    },
+    /// Show, hide (`Some`) or toggle (`None`) the tour of the desktop that
+    /// the first login starts with.
+    Tutorial {
+        /// Desired visibility.
+        #[serde(default)]
+        visible: Option<bool>,
+    },
+    /// Minimize every window on the workspace to show the desktop, or,
+    /// when the desktop is showing that way, bring those windows back.
+    ShowDesktop,
+    /// Go to the workspace `by` places along, opening a new one past the
+    /// last; `carry_window` takes the focused window there too.
+    StepWorkspace {
+        /// How many workspaces along: negative goes back.
+        by: i64,
+        /// Move the focused window along.
+        #[serde(default)]
+        carry_window: bool,
+    },
+    /// Save a picture of the screen to the Pictures folder (performed by
+    /// the host).
+    Screenshot,
+    /// Ask on screen whether to log out, restart or power off, as an
+    /// agent's request does: only the person can accept. What the session
+    /// keys use, so one stray key never ends the session.
+    ConfirmSession {
+        /// Operation.
+        op: SessionOp,
+    },
     /// Show, hide (`Some`) or toggle (`None`) the on-screen keyboard.
     Keyboard {
         /// Desired visibility.
@@ -293,6 +329,20 @@ impl Action {
             } => "Hide the overview".into(),
             Self::Overview { visible: None } => "Toggle the overview".into(),
             Self::Palette { .. } => "Toggle the command palette".into(),
+            Self::ShortcutHelp { .. } => "Show the keyboard shortcuts".into(),
+            Self::ShowDesktop => "Show the desktop".into(),
+            Self::Tutorial { .. } => "Take the tour of the desktop".into(),
+            Self::StepWorkspace { by, carry_window } => format!(
+                "{} {} workspace",
+                if *carry_window {
+                    "Take the window to the"
+                } else {
+                    "Go to the"
+                },
+                if *by < 0 { "previous" } else { "next" }
+            ),
+            Self::Screenshot => "Take a screenshot".into(),
+            Self::ConfirmSession { op } => format!("Ask before {op:?}"),
             Self::Keyboard {
                 visible: Some(true),
             } => "Show the on-screen keyboard".into(),
@@ -356,6 +406,11 @@ pub enum Effect {
         /// Window.
         window: u64,
     },
+    /// Capture the screen and save it as a picture.
+    Screenshot,
+    /// The tour was finished or skipped: remember it, so the next login
+    /// goes straight to the desktop.
+    TutorialSeen,
     /// Tell the program that registered `source` that one of its palette
     /// rows was picked.
     PaletteCommand {

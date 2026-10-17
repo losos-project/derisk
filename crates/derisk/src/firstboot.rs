@@ -5,8 +5,9 @@
 //! so it can be started on every boot; otherwise it asks for a language, a
 //! keyboard layout, a time zone, a network and the first account (see
 //! [`derisk::setup`]), saves them through localectl, timedatectl and homectl,
-//! and exits, and the login screen takes the seat with that one user filled
-//! in.
+//! and exits. The display manager then logs that account straight in with
+//! the password it was just given ([`crate::first_login`]); every later
+//! login goes through the login screen.
 
 use std::{
     process::{Command as Process, Stdio},
@@ -23,9 +24,12 @@ use derisk::{
 use egui::{RichText, Ui};
 use mcsapi::widgets::Theme;
 use mcsapi_compositor::{Command, egui};
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::wizard_host::{self, Flow};
+use crate::{
+    first_login,
+    wizard_host::{self, Flow},
+};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -184,6 +188,22 @@ impl Setup {
             events,
         });
         self.go(Step::Applying);
+    }
+
+    /// Leaves the display manager the account just made, so the first
+    /// login skips the login screen. Written now, as setup quits, rather than
+    /// when the account was made, so it is seconds old when the display
+    /// manager takes it however long "All set" stayed on screen. Without it
+    /// the login screen simply asks.
+    fn leave_login(&self) {
+        let path = std::path::Path::new(first_login::PATH);
+        // One left behind by a setup that crashed is not this account's.
+        let _ = std::fs::remove_file(path);
+        if let Err(error) =
+            first_login::write(path, &self.account.user_name, &self.account.password)
+        {
+            warn!(%error, "cannot leave the first login to the display manager");
+        }
     }
 
     fn language_page(&mut self, ui: &mut Ui) {
@@ -369,7 +389,7 @@ impl Setup {
         wizard::error(ui, "setup-error", &mut applying.error);
         if applying.done {
             ui.add_space(8.0);
-            ui.label(RichText::new("All set. Log in with your new account.").strong());
+            ui.label(RichText::new("All set. Continue to your desktop.").strong());
         }
     }
 }
@@ -431,6 +451,9 @@ impl Flow for Setup {
             }
             (Nav::Next, Step::Applying) => {
                 info!("setup finished");
+                if !self.dry_run {
+                    self.leave_login();
+                }
                 out.push(Command::Quit);
             }
             (Nav::Next, _) => self.go(step.next()),

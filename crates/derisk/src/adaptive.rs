@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use mcsapi::Layout;
 use serde::{Deserialize, Serialize};
 
-use crate::{decorations::TitleBar, snap::SnapConfig};
+use crate::snap::SnapConfig;
 
 /// The broad class of device the shell is running on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -33,8 +33,6 @@ pub struct Profile {
     /// Height of the touch navigation bar along the bottom edge (see
     /// [`crate::mobile`]); 0 where there is none.
     pub nav_bar: i32,
-    /// Window title bar metrics.
-    pub title_bar: TitleBar,
     /// Snap trigger distances.
     pub snap: SnapConfig,
     /// Whether the primary input is touch.
@@ -62,15 +60,6 @@ impl Profile {
                 gap: 0,
                 top_bar: 32,
                 nav_bar: 56,
-                // No title bars: every app fills the screen, the status bar
-                // names it, and Back, the overview and its close buttons do
-                // what the title bar buttons did.
-                title_bar: TitleBar {
-                    height: 0,
-                    button: 0,
-                    spacing: 0,
-                    padding: 0,
-                },
                 snap: SnapConfig {
                     edge: 24,
                     corner: 0,
@@ -83,14 +72,6 @@ impl Profile {
                 gap: 10,
                 top_bar: 32,
                 nav_bar: 0,
-                // Buttons stay a fingertip wide with their slop (see
-                // TitleBar::hit), while the bar itself loses 8 px.
-                title_bar: TitleBar {
-                    height: 32,
-                    button: 16,
-                    spacing: 10,
-                    padding: 12,
-                },
                 snap: SnapConfig {
                     edge: 24,
                     corner: 128,
@@ -103,7 +84,6 @@ impl Profile {
                 gap: 8,
                 top_bar: 28,
                 nav_bar: 0,
-                title_bar: TitleBar::default(),
                 snap: SnapConfig::default(),
                 touch,
             },

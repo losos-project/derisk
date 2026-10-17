@@ -41,32 +41,34 @@ use std::{
 
 use derisk::{
     action::{Action, Effect},
+    backlight::{self, PasswordDim},
     conversation::Source,
-    decorations::Button,
     desktop::{self, DesktopEntry},
     effects::{Effects, SettingsWatch},
     geom::{inset, rect},
-    greetd::{Login, Request},
+    greetd::{Login, Phase, Request},
     idle::{self, Event as IdleEvent},
     ipc::{self, LiveRequest},
     keyboard::{Output as Typed, Predictor},
-    keys::{self, Key, Mods, SuperTap},
+    keys::{Key, Mods, Sequence, Step, SuperTap},
     lock::LockScreen,
     overview::Battery,
     palette, privacy,
+    privacy_display::{self, Area as CoverArea, PrivacyDisplay, Report as FacesReport},
     shell::{Mode, PointerOutcome, Shell, WindowMachine},
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
+    tutorial,
     ui::{
-        ChoiceInput, PolkitInput, ShellUi, WindowPictures, set_touch_style, show_choice, show_lock,
-        show_polkit,
+        ChoiceInput, KeyHint, PolkitInput, ShellUi, TitleDragPhase, WindowPictures,
+        set_touch_style, show_choice, show_lock, show_polkit,
     },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
     window_motion::{Shown, WindowMotion},
 };
-use derisk_settings::{Power, Privacy, Shortcuts};
+use derisk_settings::{KeyName, Power, Privacy, Shortcuts};
 use mcsapi::WindowId;
 use tracing::{debug, info, warn};
 
@@ -78,7 +80,7 @@ use mcsapi_compositor::{
     self as compositor, AppId, Apps, Blur, Capture, ClientRequest, Command, Compositor, Edges,
     Input, InstanceId, KeyInput, KeyRoute, Keysym, Modifiers, Motion, OutputTiming, Placement,
     Press, Remote, Reserved, Role, RuntimeClient, TextField, Theme, WindowHint, WorkspaceInfo,
-    a11y::{Origin, Snapshot, Subtree},
+    a11y::{Snapshot, Subtree},
     accesskit::{self, NodeId},
     egui,
 };
@@ -161,6 +163,11 @@ pub struct Session {
     launches: u64,
     commands: Vec<Command>,
     super_tap: SuperTap,
+    /// A multi-key shortcut typed so far (`Super+W`, waiting for `Left`).
+    sequence: Sequence,
+    /// Keys whose press the shell took for a shortcut: their releases are
+    /// the shell's too, so a window never sees a release without a press.
+    swallowed: Vec<Keysym>,
     start: Instant,
     /// A power off, reboot or log out waiting for the screen to shut, and
     /// when it was carried out.
@@ -185,6 +192,19 @@ pub struct Session {
     /// last wrote them.
     words: Option<PathBuf>,
     words_saved: Instant,
+    /// Where finishing the tour is remembered, and whether this login has
+    /// looked for that yet: once the startup animation ends, a login that
+    /// has not seen the tour starts it.
+    tutorial_mark: Option<PathBuf>,
+    tutorial_checked: bool,
+    /// The backlight, turned down while the lock screen or a polkit dialog
+    /// has a password typed into it, and while the privacy display covers
+    /// the screen at maximum protection.
+    password_dim: PasswordDim,
+    /// The privacy display, and the face counter it runs while one of its
+    /// conditions holds.
+    privacy_display: PrivacyDisplay,
+    faces: Option<FacesWatch>,
     /// Whether a focused text field brought the on-screen keyboard up, so
     /// leaving the field takes it down again; one the person opened stays.
     keyboard_for_field: bool,
@@ -200,6 +220,12 @@ pub struct Session {
     trees: HashMap<u64, (mpsc::Sender<String>, TreeQuery)>,
     /// Agents waiting for a screenshot, and whether they want it inline.
     shots: HashMap<u64, (mpsc::Sender<String>, bool)>,
+    /// Captures the person asked for with Print, and the pictures being
+    /// saved from them: where each landed, or why not.
+    pictures: (
+        Vec<u64>,
+        Vec<mpsc::Receiver<std::result::Result<PathBuf, String>>>,
+    ),
     /// Accessibility nodes programs registered for their windows, with
     /// the agent connection that owns them.
     registered: HashMap<WindowId, (u64, Subtree)>,
@@ -270,10 +296,6 @@ enum TreeQuery {
         window: Option<u64>,
     },
 }
-
-/// Node IDs of the title-bar buttons the shell paints, in the space above
-/// [`computer::REGISTERED_ID_LIMIT`] so they never meet registered nodes.
-const TITLE_BAR_NODES: u64 = u64::MAX - 8;
 
 /// Core-app actions waiting for the compositor to launch their app, shared
 /// between [`Session`] (which queues them) and [`CoreApps`] (which takes
@@ -377,6 +399,8 @@ impl Session {
             launches: 0,
             commands: Vec::new(),
             super_tap: SuperTap::default(),
+            sequence: Sequence::default(),
+            swallowed: Vec::new(),
             start: Instant::now(),
             ending: Vec::new(),
             ended: None,
@@ -392,6 +416,11 @@ impl Session {
             settings: SettingsWatch::new(derisk_settings::default_path()),
             phone,
             words,
+            tutorial_mark: tutorial::mark_path(),
+            tutorial_checked: false,
+            password_dim: PasswordDim::system(),
+            privacy_display: PrivacyDisplay::default(),
+            faces: None,
             words_saved: Instant::now(),
             keyboard_for_field: false,
             shortcuts: Shortcuts::default(),
@@ -402,6 +431,7 @@ impl Session {
             requests: 0,
             trees: HashMap::new(),
             shots: HashMap::new(),
+            pictures: (Vec::new(), Vec::new()),
             registered: HashMap::new(),
             listeners: HashMap::new(),
             theme_env: Vec::new(),
@@ -568,6 +598,85 @@ impl Session {
         // The keyboard learns no words typed here, and comes up on a
         // touchscreen as it does for any password field.
         compositor::Shell::text_input(self, Some(TextField { password: true }));
+    }
+
+    /// Turns the backlight down while a password is typed into the lock
+    /// screen or a polkit dialog, and back up once it is not.
+    fn dim_for_password(&mut self) {
+        let covered_dim = self.watch_privacy();
+        let login = &self.lock.login;
+        let locked = self.lock.is_locked();
+        let secret = matches!(login.phase(), Phase::Prompt { secret: true, .. });
+        let dialogs = self.polkit.iter().map(|p| &p.dialog);
+        let field = backlight::Field {
+            shown: locked || !self.polkit.is_empty() || covered_dim,
+            typed: covered_dim
+                || (locked && secret && !login.answer.is_empty())
+                || dialogs
+                    .clone()
+                    .any(|d| d.secret() && d.editable() && !d.answer.is_empty()),
+            checking: (locked && *login.phase() == Phase::Waiting)
+                || dialogs.clone().any(|d| d.ask().is_some() && !d.editable()),
+        };
+        if let Some((name, level)) = self.password_dim.update(field, Instant::now())
+            && let Err(error) = backlight::set(&name, level)
+        {
+            warn!(%error, "cannot set the backlight");
+        }
+    }
+
+    /// Runs the privacy display for this frame: starts or stops the face
+    /// counter with its conditions, takes its counts, and sets what the
+    /// shell covers. Returns whether maximum protection wants the
+    /// backlight down.
+    fn watch_privacy(&mut self) -> bool {
+        let now = Instant::now();
+        if let Some(watch) = self.faces.as_mut() {
+            for report in watch.reports.try_iter() {
+                self.privacy_display.report(report, now);
+            }
+            if !watch.running() {
+                self.privacy_display.camera_stopped();
+                self.faces = None;
+            }
+        }
+        if self.ui.take_show_anyway() {
+            self.privacy_display.show_anyway();
+        }
+        let locked = self.lock.is_locked();
+        let focused = self
+            .shell
+            .focused()
+            .and_then(|w| self.shell.window_label(w))
+            .map(|(app, _)| app);
+        let situation = privacy_display::Situation {
+            password: locked || !self.polkit.is_empty(),
+            // Locked, no app is on screen whatever had the focus.
+            focused_app: focused.filter(|_| !locked),
+            // From the stack rather than what was drawn, which is a frame
+            // behind: a pop-up's first frame is already covered.
+            notifications: self
+                .notifications
+                .stack()
+                .shown(self.settings.current().notifications.do_not_disturb)
+                .next()
+                .is_some(),
+        };
+        let frame =
+            self.privacy_display
+                .update(&self.settings.current().privacy_display, &situation, now);
+        match (frame.camera, self.faces.is_some()) {
+            (true, false) => {
+                self.faces = FacesWatch::start();
+                if self.faces.is_none() {
+                    self.privacy_display.camera_stopped();
+                }
+            }
+            (false, true) => self.faces = None,
+            _ => {}
+        }
+        self.shell.privacy_cover = frame.cover;
+        frame.dim
     }
 
     fn polkit_dialog(&mut self, cookie: &str) -> Option<&mut derisk::polkit::AuthDialog> {
@@ -897,42 +1006,9 @@ impl Session {
         self.listeners.remove(&conn);
     }
 
-    /// The title-bar buttons of each visible window, which the shell
-    /// paints itself, so screen readers and agents can press them.
-    fn title_bar_nodes(&self) -> Vec<Subtree> {
-        let bar = self.shell.profile().title_bar;
-        self.shell
-            .placements()
-            .into_iter()
-            .map(|p| {
-                let nodes: Vec<(NodeId, accesskit::Node)> = bar
-                    .buttons(p.frame)
-                    .map(|(button, area)| {
-                        let mut node = accesskit::Node::new(accesskit::Role::Button);
-                        node.set_label(match button {
-                            Button::Close => "Close",
-                            Button::Minimize => "Minimize",
-                            Button::Maximize => "Maximize",
-                        });
-                        node.set_bounds(accesskit::Rect {
-                            x0: f64::from(area.loc.x),
-                            y0: f64::from(area.loc.y),
-                            x1: f64::from(area.loc.x + area.size.w),
-                            y1: f64::from(area.loc.y + area.size.h),
-                        });
-                        node.add_action(accesskit::Action::Click);
-                        (NodeId(TITLE_BAR_NODES + button_index(button)), node)
-                    })
-                    .collect();
-                Subtree {
-                    window: p.window,
-                    roots: nodes.iter().map(|(id, _)| *id).collect(),
-                    nodes,
-                    origin: Origin::Shell,
-                }
-            })
-            .collect()
-    }
+    // Each window's title-bar buttons were accessibility nodes here, since
+    // the shell painted them itself. The buttons are in the top bar now,
+    // which is egui and names its own.
 
     /// Applies actions from any source and carries out their effects.
     fn dispatch(&mut self, actions: Vec<Action>) {
@@ -946,6 +1022,58 @@ impl Session {
             info!("action failed: {e}");
         }
         self.palette_opened();
+    }
+
+    /// Tells the person where each screenshot they took landed.
+    fn poll_pictures(&mut self) {
+        let mut saved = Vec::new();
+        self.pictures.1.retain(|rx| match rx.try_recv() {
+            Ok(result) => {
+                saved.push(result);
+                false
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        });
+        for result in saved {
+            let (summary, body) = match result {
+                Ok(path) => (
+                    "Screenshot saved",
+                    path.file_name()
+                        .map(|n| format!("In Pictures/Screenshots as {}", n.to_string_lossy()))
+                        .unwrap_or_default(),
+                ),
+                Err(e) => ("Couldn't save the screenshot", e),
+            };
+            self.notifications
+                .notify_local(summary, &body, Instant::now());
+        }
+    }
+
+    /// Forgets a multi-key shortcut typed so far, and its hint.
+    fn cancel_sequence(&mut self) {
+        self.sequence.cancel();
+        self.show_sequence();
+    }
+
+    /// Shows what may follow the chords typed so far, or nothing.
+    fn show_sequence(&mut self) {
+        let typed = self.sequence.typed();
+        self.ui.key_hint = (!typed.is_empty()).then(|| KeyHint {
+            typed: typed
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
+            next: self
+                .shortcuts
+                .continuations(typed)
+                .map(|(shortcut, rest)| {
+                    let keys = rest.iter().map(ToString::to_string).collect::<Vec<_>>();
+                    (keys.join(" "), shortcut.label())
+                })
+                .collect(),
+        });
     }
 
     /// Re-indexes home on a background thread each time the palette opens,
@@ -1149,6 +1277,22 @@ impl Session {
                         );
                     }
                 }
+                Effect::TutorialSeen => {
+                    if let Some(mark) = &self.tutorial_mark {
+                        let written = mark
+                            .parent()
+                            .map_or(Ok(()), std::fs::create_dir_all)
+                            .and_then(|()| std::fs::write(mark, ""));
+                        if let Err(e) = written {
+                            warn!(path = %mark.display(), error = %e, "cannot remember the tour was seen");
+                        }
+                    }
+                }
+                Effect::Screenshot => {
+                    self.requests += 1;
+                    self.pictures.0.push(self.requests);
+                    self.commands.push(Command::Capture(self.requests));
+                }
                 Effect::Open { path } => {
                     if self.execute {
                         self.launches += 1;
@@ -1308,7 +1452,7 @@ impl compositor::Shell for Session {
             return;
         };
         // Gray if the machine is not in the last list yet: the colour can
-        // wait, the name in the title bar cannot.
+        // wait, the name in the top bar cannot.
         let label = self
             .machines
             .as_ref()
@@ -1392,9 +1536,19 @@ impl compositor::Shell for Session {
     /// minute.
     fn tick(&mut self) {
         self.poll_idle();
+        self.dim_for_password();
+        if !self.tutorial_checked && self.startup_done() && !self.lock.is_locked() {
+            self.tutorial_checked = true;
+            if self.tutorial_mark.as_ref().is_some_and(|m| !m.exists()) {
+                self.dispatch(vec![Action::Tutorial {
+                    visible: Some(true),
+                }]);
+            }
+        }
         // Every frame, so a banner goes when its time is up rather than
         // up to a second later.
         self.notifications.expire(Instant::now());
+        self.poll_pictures();
         // Every frame, before the host asks where the windows are.
         self.move_windows();
         if !self.ending.is_empty() && self.ui.has_shut() {
@@ -1459,6 +1613,7 @@ impl compositor::Shell for Session {
         if let Some(settings) = self.settings.poll() {
             self.shell.effects = Effects::from_settings(&settings);
             self.shortcuts = settings.shortcuts;
+            self.ui.shortcuts = settings.shortcuts;
             self.power = settings.power;
             self.wallpaper.configure(&settings.wallpaper);
             self.lock_wallpaper
@@ -1508,6 +1663,8 @@ impl compositor::Shell for Session {
             || self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
+            || self.shell.tutorial_visible()
+            || self.shell.privacy_cover == Some(CoverArea::Screen)
             || self
                 .ui
                 .bar_rect()
@@ -1558,6 +1715,11 @@ impl compositor::Shell for Session {
     }
 
     fn key(&mut self, key: &KeyInput) -> KeyRoute {
+        // Tracked before anything can return early, so a release behind
+        // the lock screen still lets go of Super+drag.
+        if matches!(key.sym, Keysym::Super_L | Keysym::Super_R) {
+            self.shell.set_move_modifier(key.pressed);
+        }
         // Every key goes to the lock screen's field: no shortcut, and no
         // client.
         if self.lock.is_locked() {
@@ -1575,10 +1737,22 @@ impl compositor::Shell for Session {
         }
         let is_super = matches!(key.sym, Keysym::Super_L | Keysym::Super_R);
         if self.super_tap.key(is_super, key.pressed) {
-            self.dispatch(vec![Action::Overview { visible: None }]);
+            // A tap while a sequence waits takes it back, rather than
+            // opening the overview over a half-typed shortcut.
+            if self.sequence.is_pending() {
+                self.cancel_sequence();
+            } else {
+                self.dispatch(vec![Action::Overview { visible: None }]);
+            }
             return KeyRoute::Consume;
         }
         if is_super {
+            return KeyRoute::Consume;
+        }
+        if !key.pressed
+            && let Some(i) = self.swallowed.iter().position(|s| *s == key.sym)
+        {
+            self.swallowed.swap_remove(i);
             return KeyRoute::Consume;
         }
         // The confirmation dialog takes every key until it is answered.
@@ -1597,19 +1771,55 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Consume;
         }
-        let mods = Mods {
-            logo: key.mods.logo,
-            shift: key.mods.shift,
-            ctrl: key.mods.ctrl,
-            alt: key.mods.alt,
-        };
-        if let Some(action) =
-            layout_key(key.sym).and_then(|k| keys::binding_with(&self.shortcuts, mods, k))
-        {
-            if key.pressed {
-                self.dispatch(vec![action]);
+        if key.pressed {
+            let mods = Mods {
+                logo: key.mods.logo,
+                shift: key.mods.shift,
+                ctrl: key.mods.ctrl,
+                alt: key.mods.alt,
+            };
+            let step = match layout_key(key.sym) {
+                Some(k) => self.sequence.press(&self.shortcuts, mods, k),
+                // Shift, Ctrl and the like between two chords of a sequence
+                // are how the next chord is typed, not the end of it.
+                None if self.sequence.is_pending() => return KeyRoute::Consume,
+                None => Step::Unbound,
+            };
+            if step != Step::Unbound {
+                // A release lost to a focus change must not pile up.
+                if self.swallowed.len() >= 8 {
+                    self.swallowed.remove(0);
+                }
+                self.swallowed.push(key.sym);
+                self.show_sequence();
             }
-            return KeyRoute::Consume;
+            match step {
+                Step::Action(action) => {
+                    self.dispatch(vec![action]);
+                    return KeyRoute::Consume;
+                }
+                Step::Pending | Step::Cancelled => return KeyRoute::Consume,
+                Step::Unbound => {}
+            }
+        }
+        // The tour takes the keys: arrows and Enter step through it.
+        if self.shell.tutorial_visible() {
+            if key.pressed && key.sym == Keysym::Escape {
+                self.dispatch(vec![Action::Tutorial {
+                    visible: Some(false),
+                }]);
+                return KeyRoute::Consume;
+            }
+            return KeyRoute::Chrome;
+        }
+        if self.shell.shortcut_help_visible() {
+            if key.pressed && key.sym == Keysym::Escape {
+                self.dispatch(vec![Action::ShortcutHelp {
+                    visible: Some(false),
+                }]);
+                return KeyRoute::Consume;
+            }
+            return KeyRoute::Chrome;
         }
         if self.shell.palette_visible() {
             if key.pressed && key.sym == Keysym::Escape {
@@ -1720,15 +1930,32 @@ impl compositor::Shell for Session {
             {
                 self.send_auth(request);
             }
+            self.ui.show_privacy_cover(ui, &self.shell);
             return;
         }
         let actions = self.ui.show(ui, &self.shell, elapsed_ms);
         self.dispatch(actions);
+        // Dragging the focused window's title in the top bar moves the
+        // window, as dragging its title bar did. The press is the bar's, so
+        // the drag arrives from egui rather than the compositor's pointer.
+        for drag in self.ui.take_title_drags() {
+            let at = (drag.at.x.round() as i32, drag.at.y.round() as i32);
+            match drag.phase {
+                TitleDragPhase::Start => self.shell.grab_title(at),
+                TitleDragPhase::Move => {
+                    self.shell.pointer_motion(at);
+                }
+                TitleDragPhase::End => {
+                    self.shell.pointer_up();
+                }
+            }
+        }
         self.show_notifications(ui);
         self.show_polkit(ui);
         if self.polkit.is_empty() {
             self.show_choice(ui);
         }
+        self.ui.show_privacy_cover(ui, &self.shell);
         // What the on-screen keyboard typed for windows goes to the focused
         // one. It goes through the same synthetic-input path agents use, so
         // the keyboard can't confirm what only a direct tap may (the
@@ -1834,9 +2061,7 @@ impl compositor::Shell for Session {
         if self.lock.is_locked() {
             return Vec::new();
         }
-        let mut subtrees = self.title_bar_nodes();
-        subtrees.extend(self.registered.values().map(|(_, s)| s.clone()));
-        subtrees
+        self.registered.values().map(|(_, s)| s.clone()).collect()
     }
 
     fn access_action(
@@ -1847,20 +2072,6 @@ impl compositor::Shell for Session {
         value: Option<&str>,
     ) {
         if self.lock.is_locked() {
-            return;
-        }
-        if node.0 >= TITLE_BAR_NODES {
-            if action != accesskit::Action::Click {
-                return;
-            }
-            let w = Some(window.get());
-            let action = match node.0 - TITLE_BAR_NODES {
-                0 => Action::Close { window: w },
-                1 => Action::Minimize { window: w },
-                2 => Action::ToggleMaximize { window: w },
-                _ => return,
-            };
-            self.dispatch(vec![action]);
             return;
         }
         // A node a program registered: tell that program.
@@ -1886,6 +2097,27 @@ impl compositor::Shell for Session {
     }
 
     fn captured(&mut self, request: u64, frame: std::result::Result<Capture, String>) {
+        if let Some(i) = self.pictures.0.iter().position(|r| *r == request) {
+            self.pictures.0.swap_remove(i);
+            let clock = Clock::now_local();
+            let stamp = format!(
+                "{}-{:02}-{:02} {:02}-{:02}",
+                clock.year, clock.month, clock.day, clock.hour, clock.minute
+            );
+            let (tx, rx) = mpsc::channel();
+            self.pictures.1.push(rx);
+            // Encoding takes a while; keep it off the compositor thread.
+            std::thread::spawn(move || {
+                let saved = frame.and_then(|capture| {
+                    let png = computer::png(&capture)?;
+                    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+                    let dir = PathBuf::from(home).join("Pictures").join("Screenshots");
+                    computer::save_picture(&dir, &stamp, &png).map_err(|e| e.to_string())
+                });
+                let _ = tx.send(saved);
+            });
+            return;
+        }
         let Some((reply, inline)) = self.shots.remove(&request) else {
             return;
         };
@@ -2032,14 +2264,6 @@ impl compositor::Shell for Session {
         self.dispatch(vec![Action::Keyboard {
             visible: Some(show),
         }]);
-    }
-}
-
-fn button_index(button: Button) -> u64 {
-    match button {
-        Button::Close => 0,
-        Button::Minimize => 1,
-        Button::Maximize => 2,
     }
 }
 
@@ -2219,6 +2443,61 @@ fn sleep_unless_stopped(delay: Duration, stopping: &AtomicBool) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     !stopping.load(Ordering::SeqCst)
+}
+
+/// `derisk-faces watch` running for the privacy display, its counts read on
+/// a thread of their own into `reports`.
+struct FacesWatch {
+    child: Child,
+    reports: mpsc::Receiver<FacesReport>,
+}
+
+impl FacesWatch {
+    fn start() -> Option<Self> {
+        let [program, command] = privacy_display::HELPER;
+        // Beside derisk's own executable first, as derisk-gpui is found, so
+        // a session started without the system's PATH still finds it.
+        let beside = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.with_file_name(program))
+            .filter(|path| path.is_file());
+        let mut child = ProcessCommand::new(beside.as_deref().unwrap_or(program.as_ref()))
+            .arg(command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .inspect_err(|e| warn!("{program}: {e}: the privacy display cannot see"))
+            .ok()?;
+        let stdout = child.stdout.take()?;
+        // A few counts a second; when the session has not taken the last
+        // ones, a newer count replaces nothing and is dropped rather than
+        // holding the camera's reader up.
+        let (send, reports) = mpsc::sync_channel(8);
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if let Some(report) = FacesReport::parse(&line)
+                    && let Err(mpsc::TrySendError::Disconnected(_)) = send.try_send(report)
+                {
+                    return;
+                }
+            }
+        });
+        Some(Self { child, reports })
+    }
+
+    fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+impl Drop for FacesWatch {
+    /// Stopping the helper closes the camera; the reader thread ends at the
+    /// end of its output.
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// swayidle running for the session, its lines read on a thread of their
@@ -2491,6 +2770,7 @@ fn serve_agent(stream: UnixStream, remote: &Remote<Session>) {
 
 /// Layout-independent key for shortcuts, from the unmodified keysym.
 fn layout_key(sym: Keysym) -> Option<Key> {
+    let other = Key::Other;
     Some(match sym {
         Keysym::Left => Key::Arrow(Direction::Left),
         Keysym::Right => Key::Arrow(Direction::Right),
@@ -2500,11 +2780,28 @@ fn layout_key(sym: Keysym) -> Option<Key> {
         Keysym::Tab | Keysym::ISO_Left_Tab => Key::Tab,
         Keysym::Escape => Key::Escape,
         Keysym::space => Key::Space,
+        Keysym::BackSpace => other(KeyName::Backspace),
+        Keysym::Delete | Keysym::KP_Delete => other(KeyName::Delete),
+        Keysym::Home => other(KeyName::Home),
+        Keysym::End => other(KeyName::End),
+        Keysym::Prior => other(KeyName::PageUp),
+        Keysym::Next => other(KeyName::PageDown),
+        Keysym::Print | Keysym::Sys_Req => other(KeyName::Print),
+        _ if (Keysym::F1.raw()..=Keysym::F12.raw()).contains(&sym.raw()) => {
+            other(KeyName::Function((sym.raw() - Keysym::F1.raw() + 1) as u8))
+        }
         _ => {
             let c = sym.key_char()?.to_ascii_lowercase();
             match c {
                 '0'..='9' => Key::Digit(c as u8 - b'0'),
                 'a'..='z' => Key::Letter(c),
+                // Shifted, these are `?`, `<`, `>`, `_` and `+` on US
+                // layouts; the chord names the key, so map them back.
+                '/' | '?' => other(KeyName::Slash),
+                ',' | '<' => other(KeyName::Comma),
+                '.' | '>' => other(KeyName::Period),
+                '-' | '_' => other(KeyName::Minus),
+                '=' | '+' => other(KeyName::Equal),
                 _ => return None,
             }
         }

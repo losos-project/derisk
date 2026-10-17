@@ -79,6 +79,24 @@ impl Center {
         self.stack.notify(incoming, now)
     }
 
+    /// Shows a notification from the shell itself, such as where a
+    /// screenshot was saved.
+    pub fn notify_local(&mut self, summary: &str, body: &str, now: Instant) -> u32 {
+        self.notify(
+            Incoming {
+                app_name: "derisk".into(),
+                replaces_id: 0,
+                app_icon: String::new(),
+                summary: summary.into(),
+                body: body.into(),
+                actions: Vec::new(),
+                hints: Default::default(),
+                expire_timeout: -1,
+            },
+            now,
+        )
+    }
+
     /// Closes `id` for `reason`, telling the app unless it was gone.
     pub fn close(&mut self, id: u32, reason: Reason) {
         if let Some(reason) = self.stack.close(id, reason) {

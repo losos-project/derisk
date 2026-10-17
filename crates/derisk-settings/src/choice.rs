@@ -607,7 +607,6 @@ fn option_row(
     icon: &str,
     name: &str,
     detail: &str,
-    theme: &Theme,
 ) -> egui::Response {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
@@ -620,7 +619,10 @@ fn option_row(
             );
         }
         let response = ui.radio(selected, name);
-        ui.label(egui::RichText::new(detail).small().color(theme.border));
+        ui.label(crate::layout::note(
+            &mcsapi_components::Tokens::current(ui.ctx()),
+            detail,
+        ));
         response
     })
     .inner
@@ -651,7 +653,7 @@ pub fn browser_page(
         let enabled = browser.installed() || installing.is_none();
         let clicked = ui
             .add_enabled_ui(enabled, |ui| {
-                option_row(ui, selected, &browser.icon, &browser.name, detail, theme).clicked()
+                option_row(ui, selected, &browser.icon, &browser.name, detail).clicked()
             })
             .inner;
         if clicked {
@@ -679,7 +681,9 @@ pub fn search_page(
     ui: &mut egui::Ui,
     defaults: &mut Defaults,
     state: &mut ChoiceUi,
-    theme: &Theme,
+    // Taken as browser_page takes it, so both screens are drawn alike; the
+    // colours come from the installed tokens.
+    _theme: &Theme,
 ) {
     ui.label(
         "Choose the search engine the command palette sends web searches to. \
@@ -688,7 +692,7 @@ pub fn search_page(
     ui.add_space(8.0);
     for &engine in &state.engines {
         let selected = defaults.search == Some(engine);
-        if option_row(ui, selected, "", engine.name(), engine.summary(), theme).clicked() {
+        if option_row(ui, selected, "", engine.name(), engine.summary()).clicked() {
             defaults.search = Some(engine);
         }
     }

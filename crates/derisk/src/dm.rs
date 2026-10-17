@@ -16,6 +16,11 @@
 //!    session command as the user;
 //! 4. waits for the session to end, closes it, and goes back to 1.
 //!
+//! The round after first-boot setup skips 1 and 2: setup leaves a ticket with
+//! the account it just made ([`crate::first_login`]), and the display manager
+//! authenticates that user with it and starts the session the greeter would
+//! have, so the first login goes straight to the desktop.
+//!
 //! The greeter is the same program greetd would run, so the code that draws
 //! the login screen and the lock screen stays shared and unprivileged, and the
 //! root half stays small enough to read.
@@ -38,13 +43,16 @@ use std::{
 };
 
 use derisk::{
-    greetd::{self, Request, Response},
+    greetd::{self, AuthMessageType, Request, Response},
     password_age::PasswordAge,
     systemd,
 };
 use tracing::{error, info};
 
-use crate::pam::{self, Auth, Pam};
+use crate::{
+    first_login, greeter as greeter_command,
+    pam::{self, Auth, Pam},
+};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -200,8 +208,165 @@ pub fn run(options: Options) -> Result {
     }
 }
 
-/// One greeter, and the session it asks for, if any.
+/// One login, by the greeter or by first-boot setup's ticket, and the
+/// session it asks for, if any.
 fn round(options: &Options, greeter: &Account) -> Result {
+    let pending = match first_login(options) {
+        Some(pending) => Some(pending),
+        None => greet(options, greeter)?,
+    };
+    let Some(Pending {
+        pam,
+        username,
+        start: Some((cmd, env)),
+    }) = pending
+    else {
+        return Ok(());
+    };
+    let Some(user) = account(&username) else {
+        return Err("an authenticated user has no account".into());
+    };
+    // Whose session it is goes to logind, which records it with the session;
+    // the log says only that one started, since the name came from the
+    // greeter's text field.
+    info!("starting a session");
+    apply_password_age(&username);
+    let worker = spawn_session(pam, &user, options.vt, "user", &cmd, &env, true)?;
+    wait(worker);
+    info!("the session ended");
+    Ok(())
+}
+
+/// The login first-boot setup's ticket stands for, if it left one and PAM
+/// takes its password: authenticated through the same service as the login
+/// screen, so a homed home area is unlocked as usual, with the session the
+/// greeter would have started. Anything less, and the login screen asks.
+fn first_login(options: &Options) -> Option<Pending> {
+    let ticket = first_login::take(Path::new(first_login::PATH), 0)?;
+    let Some((cmd, env)) = greeter_command::session_of(&options.greeter) else {
+        error!("first-boot setup left a login, but the greeter's command names no session");
+        return None;
+    };
+    let auth = pam::authenticate(
+        &options.service,
+        &ticket.user,
+        Some(options.vt),
+        // Setup made the password a minute ago; if the policy disagrees,
+        // the login screen is where it gets changed.
+        pam::Expired::Change,
+        Box::new(Scripted::new(&ticket)),
+    );
+    match auth {
+        Auth::Ok(pam) => {
+            info!("logging in the account first-boot setup made");
+            Some(Pending {
+                pam,
+                username: ticket.user.clone(),
+                start: Some((cmd, env)),
+            })
+        }
+        _ => {
+            error!("first-boot setup's login was refused; showing the login screen");
+            None
+        }
+    }
+}
+
+/// PAM's conversation answered from a first-login ticket, with no one at
+/// the screen: the password for the first secret prompt and the user name
+/// for a visible one, nothing for anything else. A second secret prompt
+/// (a new password, a security key's PIN) gets no answer, so PAM fails
+/// and the login screen asks instead.
+///
+/// It speaks greetd's protocol as the greeter would, so [`pam::authenticate`]
+/// runs unchanged, and without a thread: the display manager forks
+/// sessions, which is only safe while it is single-threaded.
+struct Scripted {
+    user: String,
+    password: Option<String>,
+    /// What PAM's side wrote, until a whole message is in.
+    written: Vec<u8>,
+    /// The answers, waiting to be read.
+    answers: Vec<u8>,
+}
+
+impl Scripted {
+    fn new(ticket: &first_login::Ticket) -> Self {
+        Self {
+            user: ticket.user.clone(),
+            password: Some(ticket.password().to_owned()),
+            written: Vec::new(),
+            answers: Vec::new(),
+        }
+    }
+
+    /// Answers every whole message written so far.
+    fn answer(&mut self) {
+        while self.written.len() >= 4 {
+            let len = u32::from_ne_bytes([
+                self.written[0],
+                self.written[1],
+                self.written[2],
+                self.written[3],
+            ]) as usize;
+            if self.written.len() < 4 + len {
+                return;
+            }
+            let frame: Vec<u8> = self.written.drain(..4 + len).collect();
+            let Ok(Response::AuthMessage {
+                auth_message_type, ..
+            }) = greetd::read_response(&mut frame.as_slice())
+            else {
+                continue;
+            };
+            let response = match auth_message_type {
+                AuthMessageType::Secret => self.password.take(),
+                AuthMessageType::Visible => Some(self.user.clone()),
+                AuthMessageType::Info | AuthMessageType::Error => None,
+            };
+            let request = Request::PostAuthMessageResponse { response };
+            let _ = greetd::write_request(&mut self.answers, &request);
+        }
+    }
+}
+
+impl io::Write for Scripted {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.written.extend_from_slice(buf);
+        self.answer();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl io::Read for Scripted {
+    // Nothing left to read is the end: PAM then sees the other side gone.
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = buf.len().min(self.answers.len());
+        buf[..n].copy_from_slice(&self.answers[..n]);
+        self.answers[..n].fill(0);
+        self.answers.drain(..n);
+        Ok(n)
+    }
+}
+
+impl Drop for Scripted {
+    fn drop(&mut self) {
+        self.answers.fill(0);
+        self.written.fill(0);
+        if let Some(password) = self.password.take() {
+            let mut bytes = password.into_bytes();
+            bytes.fill(0);
+        }
+    }
+}
+
+/// One greeter, and who it authenticated and the session it asked for, if
+/// it got that far.
+fn greet(options: &Options, greeter: &Account) -> Result<Option<Pending>> {
     fs::create_dir_all(&options.runtime_dir)?;
     fs::set_permissions(&options.runtime_dir, fs::Permissions::from_mode(0o711))?;
     let socket = options
@@ -245,39 +410,17 @@ fn round(options: &Options, greeter: &Account) -> Result {
         }
     };
     let _ = fs::remove_file(&socket);
-    let pending = match stream {
+    match stream {
         Some(stream) => {
             stream.set_nonblocking(false)?;
             let pending = serve(options, stream);
             wait(worker);
-            pending
+            Ok(pending)
         }
-        None => {
-            // Most likely it cannot start at all; retrying at once would
-            // only fill the journal.
-            return Err("the greeter exited before it connected".into());
-        }
-    };
-    let Some(Pending {
-        pam,
-        username,
-        start: Some((cmd, env)),
-    }) = pending
-    else {
-        return Ok(());
-    };
-    let Some(user) = account(&username) else {
-        return Err("an authenticated user has no account".into());
-    };
-    // Whose session it is goes to logind, which records it with the session;
-    // the log says only that one started, since the name came from the
-    // greeter's text field.
-    info!("starting a session");
-    apply_password_age(&username);
-    let worker = spawn_session(pam, &user, options.vt, "user", &cmd, &env, true)?;
-    wait(worker);
-    info!("the session ended");
-    Ok(())
+        // Most likely it cannot start at all; retrying at once would only
+        // fill the journal.
+        None => Err("the greeter exited before it connected".into()),
+    }
 }
 
 /// Brings `user`'s homed record up to the system's password age, now that
@@ -615,5 +758,33 @@ mod tests {
         assert_eq!(argv[1], "-c");
         assert!(argv[2].ends_with("exec \"$@\""));
         assert_eq!(&argv[3..], ["sh", "derisk", "greeter"]);
+    }
+
+    #[test]
+    fn a_ticket_answers_the_password_once_and_nothing_else() {
+        let path = std::env::temp_dir().join(format!("derisk-dm-ticket-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        first_login::write(&path, "ada", "correct horse").unwrap();
+        let ticket = first_login::take(&path, unsafe { libc::geteuid() }).unwrap();
+        let mut channel = Scripted::new(&ticket);
+        let mut ask = |kind, text: &str| {
+            let message = Response::AuthMessage {
+                auth_message_type: kind,
+                auth_message: text.into(),
+            };
+            greetd::write_response(&mut channel, &message).unwrap();
+            match greetd::read_request(&mut channel).unwrap() {
+                Request::PostAuthMessageResponse { response } => response,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(ask(AuthMessageType::Visible, "login:"), Some("ada".into()));
+        assert_eq!(ask(AuthMessageType::Info, "Welcome"), None);
+        assert_eq!(
+            ask(AuthMessageType::Secret, "Password:"),
+            Some("correct horse".into())
+        );
+        // A second secret (a new password, a PIN) is someone else's to give.
+        assert_eq!(ask(AuthMessageType::Secret, "New password:"), None);
     }
 }

@@ -2,7 +2,8 @@
 //!
 //! The compositor renders three passes per output:
 //!
-//! 1. [`ShellUi::paint_decorations`] below client surfaces (title bars).
+//! 1. [`ShellUi::paint_decorations`] below client surfaces (shadows and
+//!    borders).
 //! 2. Client surfaces, at [`crate::shell::WindowPlacement::client`].
 //! 3. [`ShellUi::show`] above them: top bar with global menu and tray, snap
 //!    preview and Snap Assist, the overview with widgets, the command
@@ -19,11 +20,11 @@
 
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use derisk_settings::{BarPosition, WallpaperKind};
+use derisk_settings::{BarPosition, Group, Shortcut, Shortcuts, WallpaperKind};
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2,
-    Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui,
-    UiBuilder, accesskit::Role, epaint::RectShape, pos2, vec2,
+    Align, Align2, Color32, FontId, Id, Key, Layout, Modifiers, Order, Painter, Pos2, Rect,
+    RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui, UiBuilder,
+    accesskit::Role, epaint::RectShape, pos2, vec2,
 };
 use mcsapi::{Geometry, WindowId, toolkit::egui, widgets::Theme};
 use mcsapi_components::{
@@ -51,6 +52,7 @@ use crate::{
     shell::{DropTarget, Shell, WindowPlacement},
     systemd::SessionOp,
     time::Clock,
+    tutorial,
     wallpaper::{Visibility, WallpaperPainter},
     widgets::Board,
 };
@@ -191,8 +193,33 @@ fn elide(text: &str, width: f32, size: f32) -> String {
     }
 }
 
+/// A step of dragging the focused window's title in the top bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TitleDrag {
+    /// Which step.
+    pub phase: TitleDragPhase,
+    /// Where the pointer was.
+    pub at: Pos2,
+}
+
+/// Where a drag of the top bar's title is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TitleDragPhase {
+    /// The pointer moved far enough to start dragging.
+    Start,
+    /// It moved on.
+    Move,
+    /// It was let go.
+    End,
+}
+
 /// Width of the accent ring around the focused window, in logical pixels.
 pub const FOCUS_RING: f32 = 2.0;
+
+/// Width of the label-coloured border around a virtual machine's window,
+/// in logical pixels: wider than the focus ring, so it still reads as a
+/// label with the ring drawn over it.
+pub const MACHINE_BORDER: f32 = 3.0;
 
 /// How thick the line the screen shuts into is.
 const SHUT_LINE: f32 = 4.0;
@@ -213,6 +240,48 @@ fn card<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// The keys that may follow a multi-key shortcut's first chords, in a card
+/// at the bottom of the screen, as Emacs' which-key and Zed show them.
+fn key_hint(ui: &Ui, theme: &Theme, shell: &Shell, hint: &KeyHint) {
+    let output = to_rect(shell.output());
+    let muted = theme.foreground.gamma_multiply(0.6);
+    egui::Area::new(Id::new("derisk-key-hint"))
+        .order(Order::Tooltip)
+        .interactable(false)
+        .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -(output.height() * 0.08)))
+        .show(ui.ctx(), |ui| {
+            ui.set_max_width(320.0);
+            card(ui, theme, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&hint.typed).monospace().strong());
+                    ui.label(RichText::new("then").color(muted));
+                });
+                ui.add_space(4.0);
+                for (keys, label) in &hint.next {
+                    key_row(ui, theme, 96.0, keys, label);
+                }
+                ui.add_space(4.0);
+                ui.label(RichText::new("Esc to cancel").small().color(muted));
+            });
+        });
+}
+
+/// One shortcut in a list: its keys in a column of `width`, then what
+/// they do.
+fn key_row(ui: &mut Ui, theme: &Theme, width: f32, keys: &str, label: &str) {
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            vec2(width, 18.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_width(width);
+                ui.label(RichText::new(keys).monospace().color(theme.accent));
+            },
+        );
+        ui.label(label);
+    });
+}
+
 /// What every window on screen shows, for the overview's cards to draw
 /// instead of an icon. The compositor host hands it over each frame the
 /// overview is open (mcsapi-compositor's `WindowPictures`).
@@ -221,6 +290,15 @@ pub struct WindowPictures {
     pub texture: TextureId,
     /// Where an area of the screen (logical) lies in the texture.
     pub uv: Box<dyn Fn(Rect) -> Rect>,
+}
+
+/// What may follow the chords of a multi-key shortcut typed so far.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyHint {
+    /// The chords pressed so far, as written in Settings.
+    pub typed: String,
+    /// Each way to go on: the keys left to press, and what they do.
+    pub next: Vec<(String, &'static str)>,
 }
 
 /// Persistent UI state for the shell chrome.
@@ -258,6 +336,10 @@ pub struct ShellUi {
     shut: bool,
     /// What the windows show, while the host provides it.
     pub window_pictures: Option<WindowPictures>,
+    /// A multi-key shortcut under way, set by the host.
+    pub key_hint: Option<KeyHint>,
+    /// The shortcuts as bound, for the list Super+/ shows; set by the host.
+    pub shortcuts: Shortcuts,
     /// Window being dragged in the overview, toward a workspace.
     overview_drag: Option<WindowId>,
     tray: Option<(u64, Vec<TextureHandle>)>,
@@ -287,8 +369,19 @@ pub struct ShellUi {
     /// Where the top bar took the pointer in the last frame; `None` while it
     /// is hidden.
     bar_rect: Option<Rect>,
+    /// What the focused window's title in the top bar was dragged through
+    /// since the host last asked.
+    title_drags: Vec<TitleDrag>,
     /// Where the top bar's search field was drawn last frame.
     search_rect: Option<Rect>,
+    /// Where the top bar's overview button and the focused window's
+    /// buttons and title were drawn last frame, for the tour to point at.
+    overview_rect: Option<Rect>,
+    controls_rect: Option<Rect>,
+    /// The tour's card on screen, and whether the tour showed last frame
+    /// (opening it again starts from the first card).
+    tutorial_step: usize,
+    tutorial_open: bool,
     /// Move keyboard focus into the top bar next frame (Super+B).
     focus_bar: bool,
     /// Decoded app icons by theme name or path, `None` when the theme has
@@ -304,6 +397,8 @@ pub struct ShellUi {
     /// Where the notification cards were drawn last frame, for the host to
     /// give them the pointer.
     notification_rects: Vec<Rect>,
+    /// "Show anyway" was pressed on the cover, for the host to take.
+    show_anyway: bool,
 }
 
 /// Pixels app icons are decoded at: crisp up to 32 points at 2x, the largest
@@ -485,6 +580,8 @@ impl ShellUi {
             shutting: None,
             shut: false,
             window_pictures: None,
+            key_hint: None,
+            shortcuts: Shortcuts::default(),
             overview_drag: None,
             tray: None,
             palette: PaletteUi::default(),
@@ -501,8 +598,13 @@ impl ShellUi {
             backspace_repeat: None,
             bar_shown: 1.0,
             bar_rect: None,
+            title_drags: Vec::new(),
             focus_bar: false,
             search_rect: None,
+            overview_rect: None,
+            controls_rect: None,
+            tutorial_step: 0,
+            tutorial_open: false,
             icons: RefCell::default(),
             relay: None,
             // What is focused already is ringed from the start.
@@ -515,6 +617,7 @@ impl ShellUi {
                 f64::NEG_INFINITY,
             ),
             notification_rects: Vec::new(),
+            show_anyway: false,
         }
     }
 
@@ -685,6 +788,13 @@ impl ShellUi {
         self.bar_rect
     }
 
+    /// The drags of the focused window's title in the top bar since the
+    /// last call, for the host to move the window with (see
+    /// [`Shell::grab_title`]).
+    pub fn take_title_drags(&mut self) -> Vec<TitleDrag> {
+        std::mem::take(&mut self.title_drags)
+    }
+
     /// Moves keyboard focus to the top bar's first button on the next
     /// frame, so it can be used without a pointer: Tab and Shift+Tab walk
     /// it, Enter or Space press, Escape returns to the window.
@@ -732,43 +842,33 @@ impl ShellUi {
         self.reply.as_deref()
     }
 
-    /// Paints server-side title bars, buttons on the left, bottom to top.
+    /// Paints each window's shadow and border, bottom to top.
     pub fn paint_decorations(&self, painter: &Painter, shell: &Shell) {
         for p in shell.placements() {
             self.paint_decoration(painter, shell, &p);
         }
     }
 
-    /// Paints one window's title bar and border.
+    /// Paints one window's shadow and border.
     ///
     /// Hosts that interleave decorations with client surfaces (so a window
-    /// above covers the title bar of one below) call this per placement.
+    /// above covers the border of one below) call this per placement.
+    ///
+    /// There is no title bar: the client has the whole frame, and the top
+    /// bar shows the focused window's title and buttons. So the border is
+    /// drawn just outside the frame, where the surface cannot cover it.
     pub fn paint_decoration(&self, painter: &Painter, shell: &Shell, p: &WindowPlacement) {
-        let bar = shell.profile().title_bar;
-        // Phones have no title bars; a full-screen app needs no border.
-        if bar.height == 0 {
+        // A phone's one window fills the screen and needs no border; nor
+        // does a window that fills the work area, which would only frame
+        // the screen.
+        if shell.is_phone() || p.frame == shell.work_area() {
             return;
         }
         let theme = &self.theme;
-        // A window that fills the work area meets the screen edges and the
-        // top bar: an outline, rounded corners or a shadow there would only
-        // frame the screen and show slivers of wallpaper in the corners.
-        let fills = p.frame == shell.work_area();
-        // Client surfaces are drawn square by the compositor, so only the
-        // title bar's top corners round.
-        let r = if fills {
-            0
-        } else {
-            shell.effects.windows.corner_radius.min(20)
-        };
-        let radius = CornerRadius {
-            nw: r,
-            ne: r,
-            sw: 0,
-            se: 0,
-        };
-        // A soft shadow separates overlapping windows.
-        if shell.look().shadows && !fills {
+        let frame = to_rect(p.frame);
+        // A soft shadow separates overlapping windows. Client surfaces are
+        // drawn square, so the shadow is too.
+        if shell.look().shadows {
             painter.add(
                 egui::epaint::Shadow {
                     offset: [0, 6],
@@ -776,85 +876,34 @@ impl ShellUi {
                     spread: 0,
                     color: Color32::from_black_alpha(if p.focused { 150 } else { 90 }),
                 }
-                .as_shape(to_rect(p.frame), radius),
+                .as_shape(frame, 0),
             );
         }
-        // A window from a virtual machine wears its machine's label: the
-        // whole title bar in that colour, as Qubes draws it, so where a
-        // window came from is the first thing seen about it. Unfocused, the
-        // colour fades toward the background, as the plain bar does.
-        let machine = shell.window_machine(p.window);
-        let label = machine.map(|m| derisk_machines::colour(m.label));
-        let bar_fill = match (label, p.focused) {
-            (Some(colour), true) => colour,
-            (Some(colour), false) => colour.lerp_to_gamma(theme.background, 0.45),
-            (None, true) => theme.surface,
-            (None, false) => theme.background,
-        };
-        painter.rect_filled(to_rect(bar.bar(p.frame)), radius, bar_fill);
-        if !fills {
-            painter.rect_stroke(
-                to_rect(p.frame),
-                radius,
+        // A window from a virtual machine wears its machine's label all the
+        // way round, as Qubes draws it, so where a window came from shows
+        // even when it is not focused and the top bar names another.
+        // Unfocused, the colour fades toward the background.
+        let stroke = match shell.window_machine(p.window) {
+            Some(machine) => {
+                let colour = derisk_machines::colour(machine.label);
                 Stroke::new(
-                    1.0,
-                    match (label, p.focused) {
-                        (Some(colour), _) => colour,
-                        (None, true) => theme.accent,
-                        (None, false) => theme.border,
+                    MACHINE_BORDER,
+                    if p.focused {
+                        colour
+                    } else {
+                        colour.lerp_to_gamma(theme.background, 0.45)
                     },
-                ),
-                StrokeKind::Inside,
-            );
-        }
-        for (button, area) in bar.buttons(p.frame) {
-            let r = to_rect(area);
-            let name = match button {
-                Button::Close => "window-close",
-                Button::Minimize => "window-minimize",
-                Button::Maximize => "window-maximize",
-            };
-            // Greyscale Papirus buttons on a faint disc.
-            painter.circle_filled(
-                r.center(),
-                r.width() / 2.0,
-                theme.border.gamma_multiply(0.35),
-            );
-            let icon_color = match label {
-                Some(_) => on(bar_fill),
-                None if p.focused => theme.foreground,
-                None => theme.border,
-            };
-            icons::paint(painter, r.shrink(r.width() * 0.15), name, icon_color);
-        }
-        let title_area = to_rect(bar.title(p.frame));
-        let (app, title) = shell.window_label(p.window).unwrap_or_default();
-        let look = shell.apps.look(app);
-        let size = (bar.height as f32 * 0.42).max(11.0);
-        let title = if title.is_empty() { &look.name } else { title };
-        // The machine's name leads the title, so the colour is never the
-        // only way to tell: not everyone sees it, and two labels can look
-        // alike.
-        let title = match machine {
-            Some(machine) => format!("[{}] {title}", machine.name),
-            None => title.to_owned(),
+                )
+            }
+            None => Stroke::new(1.0, theme.border),
         };
-        self.paint_icon_label(
-            painter,
-            title_area.center(),
-            title_area.width(),
-            &look,
-            &title,
-            size,
-            label.map_or(theme.foreground, |_| on(bar_fill)),
-        );
+        painter.rect_stroke(frame, 0, stroke, StrokeKind::Outside);
     }
 
     /// Rings the focused window in the accent, just outside its frame.
     ///
-    /// The decoration's own border sits under the client surface, which
-    /// covers all of it but the title bar, so the ring is chrome: drawn
-    /// above every surface, under the bars and the palette. Phones and a
+    /// The ring is chrome, drawn above every surface, under the bars and
+    /// the palette, so a window above never hides which one has focus. Phones and a
     /// window filling the work area have no frame to ring.
     ///
     /// When focus moves to another window its ring traces itself in, as
@@ -872,7 +921,6 @@ impl ShellUi {
         if traced <= 0.0 {
             return;
         }
-        let r = shell.effects.windows.corner_radius.min(20);
         let painter = ctx.layer_painter(egui::LayerId::new(
             Order::Background,
             Id::new("derisk-focus-ring"),
@@ -887,21 +935,12 @@ impl ShellUi {
             // The stroke's middle line, so it lands where the finished
             // ring is drawn.
             let half = FOCUS_RING / 2.0;
-            let line = motion::outline(to_rect(p.frame).expand(half), f32::from(r) + half, traced);
+            let line = motion::outline(to_rect(p.frame).expand(half), 0.0, traced);
             painter.add(egui::Shape::line(line, stroke));
             return;
         }
-        painter.rect_stroke(
-            to_rect(p.frame),
-            CornerRadius {
-                nw: r,
-                ne: r,
-                sw: 0,
-                se: 0,
-            },
-            stroke,
-            StrokeKind::Outside,
-        );
+        // Square, like the surface it rings.
+        painter.rect_stroke(to_rect(p.frame), 0, stroke, StrokeKind::Outside);
     }
 
     /// The dot a finished request folded the palette into carries the
@@ -988,6 +1027,19 @@ impl ShellUi {
             self.palette(ui, shell, &mut actions);
         }
         self.palette.open = shell.palette_visible();
+        if shell.shortcut_help_visible() {
+            self.shortcut_help(ui, shell, &mut actions);
+        }
+        if shell.tutorial_visible() && frame.done {
+            if !self.tutorial_open {
+                self.tutorial_step = 0;
+            }
+            self.tutorial(ui, shell, &mut actions);
+        }
+        self.tutorial_open = shell.tutorial_visible();
+        if let Some(hint) = &self.key_hint {
+            key_hint(ui, &self.theme, shell, hint);
+        }
         if let Some(op) = shell.pending_confirmation() {
             self.confirmation(ui, shell, op, &mut actions);
         }
@@ -1121,7 +1173,11 @@ impl ShellUi {
             .show(ui.ctx(), |ui| {
                 card(ui, &self.theme, |ui| {
                     ui.set_max_width(420.0);
-                    let title = format!("An agent asked to {verb}");
+                    let title = if shell.confirmation_from_agent() {
+                        format!("An agent asked to {verb}")
+                    } else {
+                        format!("Do you want to {verb}?")
+                    };
                     ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
                         node.set_role(Role::AlertDialog);
                         node.set_label(title.clone());
@@ -1155,6 +1211,224 @@ impl ShellUi {
                     });
                 });
             });
+    }
+
+    /// Every shortcut as bound, grouped, over a dimmed screen (Super+/).
+    /// Escape or a click outside closes it.
+    fn shortcut_help(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        let screen = to_rect(shell.output());
+        let dim = ui.interact(screen, Id::new("derisk-shortcut-help-dim"), Sense::click());
+        ui.ctx()
+            .layer_painter(egui::LayerId::new(
+                Order::Foreground,
+                Id::new("derisk-shortcut-help-dim"),
+            ))
+            .rect_filled(screen, 0, Color32::from_black_alpha(120));
+        let mut close = dim.clicked();
+        let columns = if screen.width() < 900.0 { 1 } else { 2 };
+        let width = (screen.width() - 48.0).min(if columns == 1 { 460.0 } else { 860.0 });
+        let fixed = [
+            ("Super+1…9", "Go to a workspace"),
+            ("Super+Shift+1…9", "Move the window to a workspace"),
+            ("Super+Ctrl+Left / Right", "Previous or next workspace"),
+            ("Super+Ctrl+Shift+Left / Right", "Take the window along"),
+            ("Super+arrows", "Snap, maximize or minimize"),
+            ("Alt+Tab", "Switch windows"),
+            ("Alt+F4", "Close window"),
+            ("Super+B", "Move into the top bar"),
+        ];
+        egui::Area::new(Id::new("derisk-shortcut-help"))
+            .order(Order::Tooltip)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ui.ctx(), |ui| {
+                card(ui, &self.theme, |ui| {
+                    ui.set_width(width);
+                    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                        node.set_role(Role::Dialog);
+                        node.set_label("Keyboard shortcuts");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Keyboard shortcuts").size(18.0).strong());
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            close |= ui.button("Close").clicked();
+                        });
+                    });
+                    ui.label(
+                        RichText::new(
+                            "Keys separated by a space are pressed one after the other. \
+                             Change them in Settings, Shortcuts.",
+                        )
+                        .color(self.theme.foreground.gamma_multiply(0.6)),
+                    );
+                    ui.add_space(8.0);
+                    let theme = self.theme;
+                    let row = |ui: &mut Ui, keys: &str, label: &str| {
+                        key_row(ui, &theme, 200.0, keys, label);
+                    };
+                    egui::ScrollArea::vertical()
+                        .max_height(screen.height() - 160.0)
+                        .show(ui, |ui| {
+                            ui.columns(columns, |cols| {
+                                for (i, group) in Group::ALL.into_iter().enumerate() {
+                                    let ui = &mut cols[i * columns / Group::ALL.len()];
+                                    ui.label(RichText::new(group.label()).strong());
+                                    for (shortcut, keys) in self.shortcuts.bound() {
+                                        if shortcut.group() == group {
+                                            row(ui, &keys.to_string(), shortcut.label());
+                                        }
+                                    }
+                                    if group == Group::Windows {
+                                        for (keys, label) in fixed {
+                                            row(ui, keys, label);
+                                        }
+                                    }
+                                    ui.add_space(10.0);
+                                }
+                            });
+                        });
+                });
+            });
+        if close {
+            actions.push(Action::ShortcutHelp {
+                visible: Some(false),
+            });
+        }
+    }
+
+    /// The tour of the desktop: one card at a time, pointing at the part of
+    /// the desktop it is about with a ring, over a dimmed screen. The arrow
+    /// keys and Enter step through it; Escape or Skip ends it.
+    fn tutorial(&mut self, ui: &mut Ui, shell: &Shell, actions: &mut Vec<Action>) {
+        let steps = tutorial::steps(shell.is_phone());
+        self.tutorial_step = self.tutorial_step.min(steps.len() - 1);
+        let step = steps[self.tutorial_step];
+        let screen = to_rect(shell.output());
+        let nav = {
+            let area = to_rect(shell.work_area());
+            Rect::from_x_y_ranges(screen.x_range(), area.bottom()..=screen.bottom())
+        };
+        let target = match step.target {
+            tutorial::Target::Nothing => None,
+            tutorial::Target::TopBar => self.bar_rect,
+            tutorial::Target::WindowControls => self.controls_rect.or(self.bar_rect),
+            tutorial::Target::Search => self.search_rect.or(self.bar_rect),
+            tutorial::Target::Overview => self.overview_rect.or(self.bar_rect),
+            tutorial::Target::NavBar => Some(nav).filter(|r| r.height() > 0.0),
+        }
+        .map(|r| r.expand(4.0).intersect(screen));
+
+        // The screen dims around what the card is about, and a click
+        // anywhere but the card does nothing: the tour has the pointer.
+        let _ = ui.interact(screen, Id::new("derisk-tutorial-dim"), Sense::click());
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            Order::Foreground,
+            Id::new("derisk-tutorial-dim"),
+        ));
+        let shade = Color32::from_black_alpha(150);
+        match target {
+            Some(t) => {
+                for r in [
+                    Rect::from_x_y_ranges(screen.x_range(), screen.top()..=t.top()),
+                    Rect::from_x_y_ranges(screen.x_range(), t.bottom()..=screen.bottom()),
+                    Rect::from_x_y_ranges(screen.left()..=t.left(), t.y_range()),
+                    Rect::from_x_y_ranges(t.right()..=screen.right(), t.y_range()),
+                ] {
+                    painter.rect_filled(r, 0, shade);
+                }
+                painter.rect_stroke(
+                    t,
+                    6,
+                    Stroke::new(FOCUS_RING, self.theme.accent),
+                    StrokeKind::Outside,
+                );
+            }
+            None => {
+                painter.rect_filled(screen, 0, shade);
+            }
+        }
+
+        // The card sits below what it points at, or above a target at the
+        // bottom edge, or in the middle when it points at nothing.
+        let width = (screen.width() - 32.0).min(380.0);
+        let (anchor, offset) = match target {
+            Some(t) if t.center().y < screen.center().y => {
+                let x = t.center().x.clamp(
+                    screen.left() + 16.0 + width / 2.0,
+                    screen.right() - 16.0 - width / 2.0,
+                );
+                (
+                    Align2::CENTER_TOP,
+                    vec2(x - screen.center().x, t.bottom() + 16.0),
+                )
+            }
+            Some(t) => (
+                Align2::CENTER_BOTTOM,
+                vec2(0.0, t.top() - 16.0 - screen.bottom()),
+            ),
+            None => (Align2::CENTER_CENTER, vec2(0.0, 0.0)),
+        };
+        let last = self.tutorial_step + 1 == steps.len();
+        let (mut back, mut next, mut skip) = (false, false, false);
+        egui::Area::new(Id::new("derisk-tutorial"))
+            .order(Order::Tooltip)
+            .anchor(anchor, offset)
+            .show(ui.ctx(), |ui| {
+                // Before the card, which takes all the width it is given.
+                ui.set_max_width(width);
+                card(ui, &self.theme, |ui| {
+                    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                        node.set_role(Role::Dialog);
+                        node.set_label(step.title);
+                    });
+                    ui.label(
+                        RichText::new(format!("{} of {}", self.tutorial_step + 1, steps.len()))
+                            .small()
+                            .color(self.theme.foreground.gamma_multiply(0.6)),
+                    );
+                    ui.label(RichText::new(step.title).size(18.0).strong());
+                    ui.add_space(4.0);
+                    ui.label(step.body);
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if !last {
+                            skip = ui.button("Skip tour").clicked();
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let label = if last { "Done" } else { "Next" };
+                            let primary = ui.add(
+                                egui::Button::new(
+                                    RichText::new(label).color(on(self.theme.accent)),
+                                )
+                                .fill(self.theme.accent),
+                            );
+                            next = primary.clicked();
+                            if self.tutorial_step > 0 {
+                                back = ui.button("Back").clicked();
+                            }
+                        });
+                    });
+                });
+            });
+        let (forward, backward) = ui.ctx().input(|i| {
+            (
+                i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::Enter),
+                i.key_pressed(Key::ArrowLeft),
+            )
+        });
+        if next || forward {
+            if last {
+                skip = true;
+            } else {
+                self.tutorial_step += 1;
+            }
+        } else if (back || backward) && self.tutorial_step > 0 {
+            self.tutorial_step -= 1;
+        }
+        if skip {
+            actions.push(Action::Tutorial {
+                visible: Some(false),
+            });
+        }
     }
 
     fn drag_preview(&self, ui: &Ui, shell: &Shell) {
@@ -1255,6 +1529,8 @@ impl ShellUi {
         if self.bar_shown != target {
             ui.ctx().request_repaint();
         }
+        self.overview_rect = None;
+        self.controls_rect = None;
         if self.bar_shown <= 0.0 {
             self.bar_rect = None;
             return;
@@ -1269,30 +1545,43 @@ impl ShellUi {
         let bar = home.translate(vec2(0.0, offset));
         self.bar_rect = Some(bar);
         let opacity = frame.shell_opacity.max(0.0);
-        self.frost(bar, 0, self.look.top_bar * opacity);
-        ui.painter().rect_filled(
-            bar,
-            0,
-            self.theme
+        let focused = shell.focused();
+        // The bar is tinted for the focused window, since windows have no
+        // title bars of their own: a virtual machine's window fills it with
+        // its machine's label, solid, as Qubes colours a title bar, and the
+        // shell draws it, so no window can paint a label it does not have.
+        // Any other window lifts it to the surface colour.
+        let machine = focused.and_then(|w| shell.window_machine(w));
+        let label = machine.map(|m| derisk_machines::colour(m.label));
+        let fill = match (label, focused) {
+            (Some(colour), _) => colour.gamma_multiply(opacity),
+            (None, Some(_)) => self
+                .theme
+                .surface
+                .gamma_multiply(self.look.top_bar * opacity),
+            (None, None) => self
+                .theme
                 .background
                 .gamma_multiply(self.look.top_bar * opacity),
-        );
-        let focused = shell.focused();
+        };
+        let ink = label.map_or(self.theme.foreground, on);
+        if label.is_none() {
+            self.frost(bar, 0, self.look.top_bar * opacity);
+        }
+        ui.painter().rect_filled(bar, 0, fill);
         ui.scope_builder(
             UiBuilder::new()
                 .id_salt("derisk-top-bar")
                 .max_rect(bar.shrink2(vec2(10.0, 2.0)))
                 .layout(Layout::left_to_right(Align::Center)),
             |ui| {
-                ui.visuals_mut().override_text_color = Some(self.theme.foreground);
+                ui.visuals_mut().override_text_color = Some(ink);
                 ui.spacing_mut().item_spacing.x = 12.0;
                 let overview = ui
-                    .add(
-                        icons::button(ui.ctx(), "view-app-grid", 16.0, self.theme.foreground)
-                            .frame(false),
-                    )
+                    .add(icons::button(ui.ctx(), "view-app-grid", 16.0, ink).frame(false))
                     .on_hover_text("Overview");
                 name(ui, &overview, Role::Button, "Overview");
+                self.overview_rect = Some(overview.rect);
                 if std::mem::take(&mut self.focus_bar) {
                     overview.request_focus();
                 }
@@ -1306,10 +1595,12 @@ impl ShellUi {
                     14.0,
                     self.theme.border,
                 );
+                // The background, not the surface: the bar is the surface
+                // colour while a window has the focus.
                 let search = prefs.search.then(|| {
                     ui.add(
                         search
-                            .fill(self.theme.surface)
+                            .fill(self.theme.background)
                             .stroke(Stroke::new(1.0, self.theme.border))
                             .corner_radius(8),
                     )
@@ -1335,15 +1626,8 @@ impl ShellUi {
                 if search.is_some_and(|s| s.clicked()) {
                     actions.push(Action::Palette { visible: None });
                 }
-                if let Some(w) = focused.filter(|_| prefs.app_name) {
-                    let (app, _) = shell.window_label(w).unwrap_or_default();
-                    let look = shell.apps.look(app);
-                    let side = (height * 0.6).round();
-                    let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    self.paint_app_icon(ui.painter(), r, &look);
-                    ui.spacing_mut().item_spacing.x = 12.0;
-                    ui.label(RichText::new(look.name.as_ref()).strong());
+                if let Some(w) = focused {
+                    self.window_controls(ui, shell, w, machine, ink, actions);
                 }
                 for menu in shell.menus.bar(focused.map(|w| w.get())) {
                     menu_button(ui, &menu, focused.map(|w| w.get()), actions);
@@ -1384,6 +1668,115 @@ impl ShellUi {
                 });
             },
         );
+    }
+
+    /// The focused window's buttons and title, which its title bar had:
+    /// Close, Minimize and Maximize on the left as they were, then its icon
+    /// and title. The title is where the window is moved from (see
+    /// [`ShellUi::title_rect`]), and a double click on it maximizes.
+    fn window_controls(
+        &mut self,
+        ui: &mut Ui,
+        shell: &Shell,
+        window: WindowId,
+        machine: Option<&crate::shell::WindowMachine>,
+        ink: Color32,
+        actions: &mut Vec<Action>,
+    ) {
+        let height = ui.available_height();
+        let controls_left = ui.cursor().left();
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for button in Button::ORDER {
+            let (icon, label, shortcut) = match button {
+                Button::Close => ("window-close", "Close", Shortcut::Close),
+                Button::Minimize => ("window-minimize", "Minimize", Shortcut::Minimize),
+                Button::Maximize => ("window-maximize", "Maximize", Shortcut::Maximize),
+            };
+            let hint = match self.shortcuts.get(shortcut) {
+                Some(keys) => format!("{label} ({keys})"),
+                None => label.to_owned(),
+            };
+            let response = ui
+                .add(icons::button(ui.ctx(), icon, 14.0, ink).frame(false))
+                .on_hover_text(hint);
+            name(ui, &response, Role::Button, label);
+            if response.clicked() {
+                let window = Some(window.get());
+                actions.push(match button {
+                    Button::Close => Action::Close { window },
+                    Button::Minimize => Action::Minimize { window },
+                    Button::Maximize => Action::ToggleMaximize { window },
+                });
+            }
+        }
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.add_space(8.0);
+        let (app, title) = shell.window_label(window).unwrap_or_default();
+        let look = shell.apps.look(app);
+        let start = ui.cursor().left();
+        if shell.effects.top_bar.app_name {
+            let side = (height * 0.7).round();
+            let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+            self.paint_app_icon(ui.painter(), r, &look);
+        }
+        let title = if title.is_empty() { &look.name } else { title };
+        // The machine's name leads the title, so the colour is never the
+        // only way to tell: not everyone sees it, and two labels can look
+        // alike.
+        let title = match machine {
+            Some(machine) => format!("[{}] {title}", machine.name),
+            None => title.to_owned(),
+        };
+        let room = (ui.available_width() * 0.4).clamp(80.0, 480.0);
+        let text = ui.add(
+            egui::Label::new(RichText::new(elide(&title, room, 14.0)).strong())
+                .selectable(false)
+                .sense(Sense::hover()),
+        );
+        name(ui, &text, Role::Label, title.clone());
+        // The icon, the title and the bar's height above and below them are
+        // the handle, so it is not a thin strip of text to aim at.
+        let handle = Rect::from_x_y_ranges(start..=text.rect.right(), ui.max_rect().y_range());
+        self.controls_rect = Some(Rect::from_x_y_ranges(
+            controls_left..=handle.right(),
+            handle.y_range(),
+        ));
+        let grip = ui
+            .interact(
+                handle,
+                Id::new("derisk-window-title"),
+                Sense::click_and_drag(),
+            )
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        if grip.double_clicked() {
+            actions.push(Action::ToggleMaximize {
+                window: Some(window.get()),
+            });
+        }
+        let at = grip.interact_pointer_pos();
+        let phase = if grip.drag_started() {
+            Some(TitleDragPhase::Start)
+        } else if grip.drag_stopped() {
+            Some(TitleDragPhase::End)
+        } else if grip.dragged() {
+            Some(TitleDragPhase::Move)
+        } else {
+            None
+        };
+        if let Some(phase) = phase {
+            // egui starts a drag a few pixels after the press: the window
+            // keeps its offset from where the press was.
+            let at = match phase {
+                TitleDragPhase::Start => ui.ctx().input(|i| i.pointer.press_origin()),
+                _ => None,
+            }
+            .or(at)
+            .or_else(|| ui.ctx().input(|i| i.pointer.latest_pos()));
+            if let Some(at) = at {
+                self.title_drags.push(TitleDrag { phase, at });
+            }
+        }
+        ui.spacing_mut().item_spacing.x = 12.0;
     }
 
     /// The phone's top bar: a status bar with the time, the focused app and
@@ -3229,6 +3622,102 @@ impl ShellUi {
     pub fn notification_rects(&self) -> &[Rect] {
         &self.notification_rects
     }
+
+    /// Whether "Show anyway" was pressed on the cover since the last call.
+    pub fn take_show_anyway(&mut self) -> bool {
+        std::mem::take(&mut self.show_anyway)
+    }
+
+    /// Draws the privacy display's cover over what [`Shell::privacy_cover`]
+    /// says someone else may be looking at: the whole screen, under a card
+    /// saying why with a way past it, or each notification pop-up alone.
+    /// The sheet is the theme's background and opaque: frosted glass still
+    /// lets light text through to a second pair of eyes, which is what the
+    /// cover is for. Above everything else the shell draws, the lock screen
+    /// included.
+    pub fn show_privacy_cover(&mut self, ui: &mut Ui, shell: &Shell) {
+        let Some(area) = shell.privacy_cover else {
+            return;
+        };
+        let ctx = ui.ctx().clone();
+        let shown = motion::appear(&ctx, Id::new("derisk-privacy-cover"), 0.0, f(8), ease::OUT);
+        let sheet = self.theme.background.to_opaque().gamma_multiply(shown);
+        let muted = self.theme.foreground.gamma_multiply(0.7);
+        let screen = to_rect(shell.output());
+        // One area for the sheet and the card on it, so the card is always
+        // drawn over its sheet.
+        egui::Area::new(Id::new("derisk-privacy-cover"))
+            .order(Order::Debug)
+            .fixed_pos(screen.min)
+            .constrain(false)
+            .interactable(area == crate::privacy_display::Area::Screen)
+            .show(&ctx, |ui| match area {
+                crate::privacy_display::Area::Screen => {
+                    // Nothing under the sheet takes a click while it shows.
+                    let _ = ui.interact(screen, Id::new("derisk-privacy-sheet"), Sense::click());
+                    ui.painter().rect_filled(screen, 0, sheet);
+                    let width = (screen.width() - 32.0).min(360.0);
+                    let at = Rect::from_center_size(screen.center(), vec2(width, 0.0));
+                    ui.scope_builder(
+                        UiBuilder::new().max_rect(Rect::from_x_y_ranges(
+                            at.x_range(),
+                            at.top() - 80.0..=screen.bottom(),
+                        )),
+                        |ui| {
+                            ui.multiply_opacity(shown);
+                            card(ui, &self.theme, |ui| {
+                                ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                                    node.set_role(Role::Alert);
+                                    node.set_label("Someone else may be looking");
+                                });
+                                ui.label(
+                                    RichText::new("Someone else may be looking")
+                                        .size(18.0)
+                                        .strong(),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(
+                                        "The camera sees a second face, so the screen is \
+                                         covered until they look away.",
+                                    )
+                                    .color(muted),
+                                );
+                                ui.add_space(12.0);
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if ui.button("Show anyway").clicked() {
+                                            self.show_anyway = true;
+                                        }
+                                    });
+                                });
+                            });
+                        },
+                    );
+                }
+                crate::privacy_display::Area::Notifications => {
+                    // Each pop-up's card, at its corners; the rest of the
+                    // screen stays as it is.
+                    let radius = self.tokens.radius;
+                    for &rect in &self.notification_rects {
+                        ui.painter().rect_filled(rect, radius, sheet);
+                        ui.painter().rect_stroke(
+                            rect,
+                            radius,
+                            Stroke::new(1.0, self.theme.border.gamma_multiply(shown)),
+                            StrokeKind::Inside,
+                        );
+                        ui.painter().text(
+                            rect.center(),
+                            Align2::CENTER_CENTER,
+                            "Hidden while someone else may be looking",
+                            egui::FontId::proportional(13.0),
+                            muted.gamma_multiply(shown),
+                        );
+                    }
+                }
+            });
+    }
 }
 
 /// How wide a notification card is off a phone.
@@ -3261,7 +3750,7 @@ pub enum NotificationInput {
 /// The focused window, when it has a frame to ring: not on a phone, and
 /// not filling the work area.
 fn ringed(shell: &Shell) -> Option<WindowPlacement> {
-    if shell.profile().title_bar.height == 0 {
+    if shell.is_phone() {
         return None;
     }
     shell
@@ -3445,7 +3934,7 @@ fn palette_row(
         );
     }
     let mid = r.center().y;
-    // Apps show their own icon in color, as in title bars; every other row
+    // Apps show their own icon in color, as in the top bar; every other row
     // is an action with a greyscale Papirus icon.
     let app = entry.actions.iter().find_map(|a| match a {
         Action::Launch { app } | Action::LaunchAction { app, .. } => Some(app),

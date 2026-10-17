@@ -1,6 +1,5 @@
 use derisk::{
     action::{Action, Effect},
-    decorations::{Button, Hit, TitleBar},
     geom::rect,
     shell::{DropTarget, Error, MAX_WORKSPACES, Mode, PointerOutcome, Shell},
     snap::SnapZone,
@@ -35,12 +34,13 @@ fn windows_tile_automatically_inside_the_work_area() {
 }
 
 #[test]
-fn dragging_a_title_bar_to_the_left_edge_snaps_and_offers_snap_assist() {
+fn super_dragging_a_window_to_the_left_edge_snaps_and_offers_snap_assist() {
     let mut shell = desktop();
     let (a, _) = shell.map_window("a", "A");
     let (b, _) = shell.map_window("b", "B");
     let f = frame_of(&shell, b);
-    let grab = (f.loc.x + f.size.w / 2, f.loc.y + 10);
+    let grab = (f.loc.x + f.size.w / 2, f.loc.y + f.size.h / 2);
+    shell.set_move_modifier(true);
     assert!(matches!(
         shell.pointer_down(grab, 0).unwrap(),
         PointerOutcome::Handled { .. }
@@ -75,12 +75,63 @@ fn dragging_a_snapped_window_away_restores_a_floating_frame() {
             zone: SnapZone::Left,
         })
         .unwrap();
-    let f = frame_of(&shell, a);
-    let grab = (f.loc.x + 300, f.loc.y + 10);
-    shell.pointer_down(grab, 0).unwrap();
+    // From its title in the top bar: above the window, and off to the
+    // side of a window snapped left.
+    shell.grab_title((1500, 10));
     shell.pointer_motion((900, 500));
     shell.pointer_up();
-    assert!(matches!(shell.mode(a), Some(Mode::Floating { .. })));
+    let Some(Mode::Floating { frame }) = shell.mode(a) else {
+        panic!("floats");
+    };
+    // It hangs below the pointer, centred on it.
+    let frame: mcsapi::Geometry = frame.into();
+    assert!(frame.loc.y > 500);
+    assert_eq!(frame.loc.x + frame.size.w / 2, 900);
+}
+
+#[test]
+fn dragging_a_floating_window_by_its_title_keeps_its_offset() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    shell.apply(Action::Float { window: None }).unwrap();
+    let before = frame_of(&shell, a);
+    shell.grab_title((100, 10));
+    shell.pointer_motion((160, 50));
+    shell.pointer_up();
+    let after = frame_of(&shell, a);
+    assert_eq!(
+        (after.loc.x - before.loc.x, after.loc.y - before.loc.y),
+        (60, 40)
+    );
+}
+
+#[test]
+fn a_dragged_window_stays_below_the_top_bar() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    shell.apply(Action::Float { window: None }).unwrap();
+    let f = frame_of(&shell, a);
+    let inside = (f.loc.x + 20, f.loc.y + f.size.h / 2);
+    shell.set_move_modifier(true);
+    shell.pointer_down(inside, 0).unwrap();
+    shell.pointer_motion((inside.0, 0));
+    shell.pointer_up();
+    assert_eq!(frame_of(&shell, a).loc.y, shell.work_area().loc.y);
+}
+
+#[test]
+fn phones_have_no_window_to_move() {
+    let mut phone = Shell::new(rect(0, 0, 392, 872), true);
+    let (a, _) = phone.map_window("a", "A");
+    phone.set_move_modifier(true);
+    let f = frame_of(&phone, a);
+    assert!(matches!(
+        phone.pointer_down((f.loc.x + 10, f.loc.y + 10), 0).unwrap(),
+        PointerOutcome::Client { .. }
+    ));
+    phone.grab_title((100, 10));
+    phone.pointer_motion((200, 400));
+    assert_eq!(phone.pointer_up(), None);
 }
 
 #[test]
@@ -94,50 +145,27 @@ fn small_drags_and_client_clicks_do_not_move_windows() {
         PointerOutcome::Client { window, .. } if window == a
     ));
     shell.pointer_up();
-    let grab = (f.loc.x + 100, f.loc.y + 10);
-    shell.pointer_down(grab, 1000).unwrap();
-    shell.pointer_motion((grab.0 + 2, grab.1 + 2));
+    shell.set_move_modifier(true);
+    shell.pointer_down(inside, 1000).unwrap();
+    shell.pointer_motion((inside.0 + 2, inside.1 + 2));
     shell.pointer_up();
     assert_eq!(shell.mode(a), Some(Mode::Tiled));
+    // Letting go of Super gives clicks back to the window.
+    shell.set_move_modifier(false);
+    assert!(matches!(
+        shell.pointer_down(inside, 2000).unwrap(),
+        PointerOutcome::Client { .. }
+    ));
 }
 
 #[test]
-fn title_bar_buttons_sit_on_the_left() {
-    let bar = TitleBar::default();
-    let frame = rect(100, 100, 800, 600);
-    let buttons: Vec<_> = bar.buttons(frame).collect();
-    assert_eq!(
-        buttons.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
-        Button::ORDER
-    );
-    for (_, g) in &buttons {
-        assert!(g.loc.x < frame.loc.x + frame.size.w / 4);
-    }
-    let close = buttons[0].1;
-    let center = (
-        close.loc.x + close.size.w / 2,
-        close.loc.y + close.size.h / 2,
-    );
-    assert_eq!(bar.hit(frame, center), Some(Hit::Button(Button::Close)));
-    assert_eq!(bar.hit(frame, (850, 110)), Some(Hit::Title));
-    assert_eq!(bar.hit(frame, (850, 500)), Some(Hit::Client));
-}
-
-#[test]
-fn close_button_click_emits_close_effect() {
+fn the_client_has_the_whole_frame() {
     let mut shell = desktop();
-    let (a, _) = shell.map_window("a", "A");
-    let f = frame_of(&shell, a);
-    let (_, close) = TitleBar::default().buttons(f).next().unwrap();
-    let outcome = shell
-        .pointer_down((close.loc.x + 7, close.loc.y + 7), 0)
-        .unwrap();
-    assert_eq!(
-        outcome,
-        PointerOutcome::Handled {
-            effects: vec![Effect::Close { window: a.get() }]
-        }
-    );
+    shell.map_window("a", "A");
+    shell.map_window("b", "B");
+    for p in shell.placements() {
+        assert_eq!(p.client, p.frame, "no title bar above the client");
+    }
 }
 
 #[test]
@@ -676,4 +704,109 @@ fn an_untrusted_machines_window_cannot_be_kept_on_top() {
         .set_window_machine(other, machine(Label::Red))
         .unwrap();
     assert!(!shell.is_on_top(other));
+}
+
+#[test]
+fn show_desktop_hides_every_window_and_brings_them_back() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    shell.apply(Action::ShowDesktop).unwrap();
+    assert!(shell.is_minimized(a) && shell.is_minimized(b));
+    assert_eq!(shell.focused(), None);
+    shell.apply(Action::ShowDesktop).unwrap();
+    assert!(!shell.is_minimized(a) && !shell.is_minimized(b));
+    assert_eq!(shell.focused(), Some(b));
+}
+
+#[test]
+fn stepping_workspaces_and_carrying_a_window_along() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    // Nothing past the last workspace without a window to take there.
+    shell
+        .apply(Action::StepWorkspace {
+            by: 1,
+            carry_window: false,
+        })
+        .unwrap();
+    assert_eq!(shell.active_workspace(), 1);
+    shell
+        .apply(Action::StepWorkspace {
+            by: 1,
+            carry_window: true,
+        })
+        .unwrap();
+    assert_eq!(shell.active_workspace(), 2);
+    assert_eq!(shell.focused(), Some(b));
+    shell
+        .apply(Action::StepWorkspace {
+            by: -1,
+            carry_window: false,
+        })
+        .unwrap();
+    assert_eq!(shell.active_workspace(), 1);
+    assert_eq!(shell.focused(), Some(a));
+}
+
+#[test]
+fn session_keys_ask_on_screen_as_the_person() {
+    let mut shell = desktop();
+    assert_eq!(
+        shell
+            .apply(Action::ConfirmSession {
+                op: SessionOp::PowerOff
+            })
+            .unwrap(),
+        []
+    );
+    assert_eq!(shell.pending_confirmation(), Some(SessionOp::PowerOff));
+    assert!(!shell.confirmation_from_agent());
+    assert_eq!(
+        shell.apply(Action::Confirm { accept: true }).unwrap(),
+        [Effect::Session {
+            op: SessionOp::PowerOff
+        }]
+    );
+}
+
+#[test]
+fn the_tour_covers_the_desktop_and_is_remembered_when_it_ends() {
+    let mut shell = desktop();
+    shell
+        .apply(Action::Palette {
+            visible: Some(true),
+        })
+        .unwrap();
+    assert_eq!(
+        shell
+            .apply(Action::Tutorial {
+                visible: Some(true)
+            })
+            .unwrap(),
+        vec![]
+    );
+    assert!(shell.tutorial_visible());
+    assert!(
+        !shell.palette_visible(),
+        "nothing covers what the tour shows"
+    );
+    assert_eq!(
+        shell
+            .apply(Action::Tutorial {
+                visible: Some(false)
+            })
+            .unwrap(),
+        vec![Effect::TutorialSeen]
+    );
+    // Closing it again remembers nothing new.
+    assert_eq!(
+        shell
+            .apply(Action::Tutorial {
+                visible: Some(false)
+            })
+            .unwrap(),
+        vec![]
+    );
 }

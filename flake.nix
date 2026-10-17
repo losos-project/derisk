@@ -46,6 +46,9 @@
               # interfaces they are built against.
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./plugins)
               ./crates/derisk-plugin/wit
+              # libfacedetection's C++ source, built into the privacy
+              # display's face counter.
+              ./crates/libfacedetection-sys/vendor
             ];
           };
 
@@ -91,6 +94,9 @@
               # palette plugins, but links it with lld from PATH rather than
               # a bundled rust-lld.
               pkgs.lld
+              # libfacedetection-sys generates its bindings with bindgen,
+              # which needs libclang and the C++ headers' paths.
+              pkgs.rustPlatform.bindgenHook
             ];
             buildInputs = buildLibs;
             LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
@@ -157,7 +163,9 @@
               // {
                 pname = "derisk";
                 cargoArtifacts = releaseDeps;
-                cargoExtraArgs = "--locked -p derisk -p derisk-portal --features derisk/host";
+                # derisk-faces: the privacy display's face counter, which the
+                # session runs from PATH beside derisk.
+                cargoExtraArgs = "--locked -p derisk -p derisk-portal -p derisk-faces --features derisk/host";
                 doCheck = false;
                 postInstall = ''
                   install -Dm644 -t $out/share/systemd/user crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/*

@@ -204,8 +204,11 @@ impl SystemUi {
     }
 }
 
-fn hint(ui: &mut egui::Ui, theme: &Theme, text: &str) {
-    ui.label(egui::RichText::new(text).small().color(theme.border));
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(crate::layout::note(
+        &mcsapi_components::Tokens::current(ui.ctx()),
+        text,
+    ));
 }
 
 const RED: egui::Color32 = egui::Color32::from_rgb(248, 113, 113);
@@ -226,7 +229,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
 
     ui.heading(egui::RichText::new("Security report").color(theme.foreground));
     match &snapshot.report {
-        None => hint(ui, theme, "This system has no security report."),
+        None => hint(ui, "This system has no security report."),
         Some(checks) => {
             let failed = checks.iter().filter(|c| !c.passed).count();
             ui.label(if failed == 0 {
@@ -269,14 +272,12 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
     if !reset.supported {
         hint(
             ui,
-            theme,
             "This machine cannot be reset from here: the request is kept in UEFI firmware, and this machine did not start with UEFI.",
         );
         return;
     }
     hint(
         ui,
-        theme,
         "Erases every account, every file and every setting, then restarts. The system itself stays as it is now, with its updates.",
     );
     if let Some(error) = &state.error {
