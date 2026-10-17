@@ -40,6 +40,8 @@
               ./crates/derisk/data
               ./crates/derisk-portal/data
               ./crates/derisk-apps/data
+              # The store's AppStream fixture, which its tests include_str!.
+              ./crates/derisk-store/tests/data
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
               # The palette's and the overview's plugins, which
               # derisk-plugin's build script compiles to WebAssembly, and the

@@ -375,11 +375,10 @@ pub fn task_failure(stderr: &str) -> Option<&str> {
             .filter(|line| !line.is_empty())
     };
     lines()
-        .filter(|line| {
+        .rfind(|line| {
             !line.starts_with("Failed to acquire password")
                 && !line.starts_with("(Use --enforce-password-policy=")
         })
-        .next_back()
         .or_else(|| lines().next_back())
 }
 
