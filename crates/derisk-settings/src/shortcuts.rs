@@ -375,7 +375,9 @@ macro_rules! shortcuts {
 
 // The single chords follow GNOME's and Windows' habits where one exists
 // (Super+L locks, Super+E opens files, Super+D shows the desktop, Alt+F10
-// maximizes, Ctrl+Alt+T opens a terminal). The sequences group what has no
+// maximizes), and a tiling desktop's for the terminal: Super+Enter, as i3
+// and sway bind it, with the main-pane swap it used to do moved to
+// Super+Shift+Enter. The sequences group what has no
 // such habit under one prefix each: Super+W for where a window goes,
 // Super+O for opening an app, Super+X for the session, as Windows' Super+X
 // menu holds shut down and sign out.
@@ -399,7 +401,7 @@ shortcuts! {
     /// Focus the previous window.
     FocusPrevious = "focus_previous", Windows, "Focus previous window", "Super+K";
     /// Move the focused window to the main pane.
-    Promote = "promote", Windows, "Move to main pane", "Super+Enter";
+    Promote = "promote", Windows, "Move to main pane", "Super+Shift+Enter";
     /// Close the focused window.
     Close = "close", Windows, "Close window", "Super+Q";
     /// Minimize the focused window.
@@ -429,7 +431,7 @@ shortcuts! {
     /// Open Settings.
     Settings = "settings", Apps, "Settings", "Super+I";
     /// Open a terminal.
-    Terminal = "terminal", Apps, "Terminal", "Ctrl+Alt+T";
+    Terminal = "terminal", Apps, "Terminal", "Super+Enter";
     /// Open the Text Editor.
     Editor = "editor", Apps, "Text Editor", "Super+O E";
     /// Open the System Monitor.
@@ -467,16 +469,34 @@ pub enum Resolved {
     Unbound,
 }
 
+/// Which defaults a settings file's shortcut lines were written against,
+/// as `shortcut.edition = N`. The Settings app writes every shortcut when it
+/// saves, defaults included, so a default that changes would otherwise never
+/// reach anyone who has saved once. Files from before the line are edition 1.
+pub const EDITION: u8 = 2;
+
+/// Defaults that an edition replaced: a file older than the edition that
+/// holds exactly the old keys gets the new default instead, since they were
+/// never chosen, only saved.
+const RETIRED: [(u8, Shortcut, &str); 2] = [
+    // Super+Enter went to the terminal, as tiling desktops bind it, and the
+    // main-pane swap moved up a Shift.
+    (2, Shortcut::Promote, "Super+Enter"),
+    (2, Shortcut::Terminal, "Ctrl+Alt+T"),
+];
+
 /// The keys for each rebindable shortcut. `None` turns one off.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Shortcuts {
     keys: [Option<Keys>; Shortcut::ALL.len()],
+    edition: u8,
 }
 
 impl Default for Shortcuts {
     fn default() -> Self {
         Self {
             keys: Shortcut::ALL.map(|s| Some(s.default_keys())),
+            edition: EDITION,
         }
     }
 }
@@ -556,8 +576,34 @@ impl Shortcuts {
             .collect()
     }
 
+    /// Reads the file's shortcut lines as `edition`'s, until a
+    /// `shortcut.edition` line says otherwise; [`Self::upgrade`] then brings
+    /// them up to [`EDITION`].
+    pub(crate) fn read_as(&mut self, edition: u8) {
+        self.edition = edition;
+    }
+
+    /// Replaces the defaults retired since the file's edition, where the
+    /// file still holds them, and marks it current.
+    pub(crate) fn upgrade(&mut self) {
+        for (since, shortcut, old) in RETIRED {
+            if self.edition < since && self.get(shortcut) == Keys::parse(old) {
+                self.set(shortcut, Some(shortcut.default_keys()));
+            }
+        }
+        self.edition = EDITION;
+    }
+
     /// Sets `shortcut.<id>` from its text: keys or `none`.
     pub(crate) fn set_text(&mut self, id: &str, value: &str) -> bool {
+        if id == "edition" {
+            return value
+                .parse()
+                .ok()
+                .filter(|e| (1..=EDITION).contains(e))
+                .map(|e| self.edition = e)
+                .is_some();
+        }
         let Some(shortcut) = Shortcut::from_id(id) else {
             return false;
         };
@@ -570,14 +616,15 @@ impl Shortcuts {
             .is_some()
     }
 
-    /// `shortcut.<id> = <keys>` lines for every shortcut.
+    /// `shortcut.<id> = <keys>` lines for every shortcut, after the
+    /// edition they were written against.
     pub(crate) fn to_text(self) -> String {
-        Shortcut::ALL
-            .into_iter()
-            .map(|s| match self.get(s) {
-                Some(keys) => format!("shortcut.{} = {keys}\n", s.id()),
-                None => format!("shortcut.{} = none\n", s.id()),
-            })
+        let lines = Shortcut::ALL.into_iter().map(|s| match self.get(s) {
+            Some(keys) => format!("shortcut.{} = {keys}\n", s.id()),
+            None => format!("shortcut.{} = none\n", s.id()),
+        });
+        std::iter::once(format!("shortcut.edition = {EDITION}\n"))
+            .chain(lines)
             .collect()
     }
 }
@@ -637,5 +684,43 @@ mod tests {
         let clashes = s.clashes();
         assert!(clashes.contains(&Shortcut::Close));
         assert!(clashes.contains(&Shortcut::SnapLeft));
+    }
+
+    #[test]
+    fn an_old_file_gets_the_new_terminal_and_promote_keys() {
+        // What the Settings app saved before the edition line: the old
+        // defaults, written out like every other shortcut.
+        let old = "shortcut.promote = Super+Enter\nshortcut.terminal = Ctrl+Alt+T\n";
+        let (settings, warnings) = crate::Settings::parse(old);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let s = settings.shortcuts;
+        assert_eq!(s.get(Shortcut::Terminal), Keys::parse("Super+Enter"));
+        assert_eq!(s.get(Shortcut::Promote), Keys::parse("Super+Shift+Enter"));
+        assert_eq!(s.clashes(), []);
+    }
+
+    #[test]
+    fn an_old_file_keeps_what_was_chosen() {
+        let old = "shortcut.promote = Super+P\nshortcut.terminal = Super+Shift+Enter\n";
+        let s = crate::Settings::parse(old).0.shortcuts;
+        assert_eq!(s.get(Shortcut::Promote), Keys::parse("Super+P"));
+        assert_eq!(s.get(Shortcut::Terminal), Keys::parse("Super+Shift+Enter"));
+    }
+
+    #[test]
+    fn a_current_file_is_read_as_written() {
+        // Once a file carries the edition, the old keys are a choice.
+        let mut chosen = Shortcuts::default();
+        chosen.set(Shortcut::Terminal, Keys::parse("Ctrl+Alt+T"));
+        let text = chosen.to_text();
+        assert!(text.starts_with("shortcut.edition = 2\n"), "{text}");
+        let mut read = Shortcuts::default();
+        read.read_as(1);
+        for line in text.lines() {
+            let (key, value) = line.split_once(" = ").unwrap();
+            assert!(read.set_text(key.strip_prefix("shortcut.").unwrap(), value));
+        }
+        read.upgrade();
+        assert_eq!(read, chosen);
     }
 }
