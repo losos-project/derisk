@@ -12,9 +12,12 @@
 //!   app's display, so its windows come to the desktop through
 //!   [`crate::display`], and returns once it has started.
 
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
-use crate::{Error, Exit, Hypervisor, Program, Result};
+use crate::{Error, Exit, Hypervisor, Program, Result, setup::TEMPLATE_DIR};
 
 /// Where `losos-guest-run` is: the guest template's system profile, then
 /// where the Linux tools CD puts it in another distribution. The agent's own
@@ -45,6 +48,7 @@ fn guest_run(args: &[&str]) -> Program {
         args: all,
         env: Vec::new(),
         capture_output: true,
+        input: Vec::new(),
     }
 }
 
@@ -114,7 +118,7 @@ impl Hypervisor {
     }
 
     /// Waits up to `wait` for the guest program `pid` to exit.
-    fn wait(&self, machine: &str, pid: u32, wait: Duration, what: &str) -> Result<Exit> {
+    pub(crate) fn wait(&self, machine: &str, pid: u32, wait: Duration, what: &str) -> Result<Exit> {
         let deadline = Instant::now() + wait;
         loop {
             if let Some(exit) = self.exit(machine, pid)? {
@@ -145,6 +149,35 @@ pub fn parse_apps(list: &str) -> impl Iterator<Item = GuestApp> + '_ {
     })
 }
 
+/// The apps a template's guest has when it is new, in the file the OS ships
+/// beside the template's image: `<template>.apps` under
+/// [`TEMPLATE_DIR`] in the first of `data_dirs` that has one, in
+/// `losos-guest-run --list`'s format. It is how a machine that has never
+/// run offers its apps before its guest could be asked, and how a machine
+/// made to hold one kind of app (Flatpak's, say) is found by what it holds.
+/// `None` when no template of that name ships a list.
+pub fn template_apps(data_dirs: &[PathBuf], template: &str) -> Option<Vec<GuestApp>> {
+    // A name pm accepts cannot climb out of the directory, but this one
+    // came from a domain definition anyone with libvirt's ear could write.
+    if template.is_empty() || template.contains('/') || template.starts_with('.') {
+        return None;
+    }
+    data_dirs.iter().find_map(|dir| {
+        let list =
+            derisk_sys::fs::read_to_string(dir.join(TEMPLATE_DIR).join(format!("{template}.apps")))
+                .ok()?;
+        Some(parse_apps(&list).collect())
+    })
+}
+
+/// `apps` in `losos-guest-run --list`'s format, which [`parse_apps`] reads
+/// back: how the desktop keeps a machine's apps while it is off.
+pub fn list_apps(apps: &[GuestApp]) -> String {
+    apps.iter()
+        .map(|app| format!("{}\t{}\n", app.id, app.name))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +206,51 @@ mod tests {
         assert_eq!(out.status.code(), Some(127));
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("LosOS tools CD"), "{err}");
+    }
+
+    #[test]
+    fn a_template_ships_its_apps_beside_its_image() {
+        let root = std::env::temp_dir().join(format!(
+            "derisk-machines-template-apps-{}",
+            derisk_sys::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(b.join(TEMPLATE_DIR)).unwrap();
+        std::fs::write(
+            b.join(TEMPLATE_DIR).join("losos-flatpak.apps"),
+            "io.github.kolunmi.Bazaar\tBazaar\n",
+        )
+        .unwrap();
+        let dirs = [a, b];
+        assert_eq!(
+            template_apps(&dirs, "losos-flatpak").unwrap(),
+            [GuestApp {
+                id: "io.github.kolunmi.Bazaar".into(),
+                name: "Bazaar".into()
+            }]
+        );
+        assert_eq!(template_apps(&dirs, "losos-guest"), None);
+        assert_eq!(
+            template_apps(&dirs, "../b/losos/machines/losos-flatpak"),
+            None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_list_reads_back_as_it_was() {
+        let apps = vec![
+            GuestApp {
+                id: "org.gnome.Maps".into(),
+                name: "Maps".into(),
+            },
+            GuestApp {
+                id: "foot".into(),
+                name: "Foot".into(),
+            },
+        ];
+        assert_eq!(parse_apps(&list_apps(&apps)).collect::<Vec<_>>(), apps);
     }
 
     #[test]
