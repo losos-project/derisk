@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod backup;
 pub mod bluetooth;
 pub mod choice;
 pub mod flatpak;
@@ -83,6 +84,8 @@ pub enum Page {
     Notifications,
     /// Dimming, locking, suspend, low power mode, and the power mode.
     Power,
+    /// Backups of the home to a LosOS box ([`backup`]).
+    Backups,
     /// The browser and search engine choice screens; listed only while the
     /// policy turns one on ([`choice`]).
     DefaultApps,
@@ -94,7 +97,7 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
@@ -107,6 +110,7 @@ impl Page {
         Self::SignIn,
         Self::Notifications,
         Self::Power,
+        Self::Backups,
         Self::DefaultApps,
         Self::System,
         Self::About,
@@ -127,6 +131,7 @@ impl Page {
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
             Self::Power => "Power",
+            Self::Backups => "Backups",
             Self::DefaultApps => "Default apps",
             Self::System => "System",
             Self::About => "About",
@@ -148,6 +153,7 @@ impl Page {
             Self::SignIn => "Your password and the other ways you can sign in.",
             Self::Notifications => "Banners, sounds and what the lock screen shows.",
             Self::Power => "When the screen dims and locks, and when the computer sleeps.",
+            Self::Backups => "Copies of your files and repositories on a LosOS box.",
             Self::DefaultApps => "The browser and search engine the desktop opens.",
             Self::System => "The security report and resetting this computer.",
             Self::About => "This version of Settings and where it keeps them.",
@@ -174,6 +180,7 @@ pub struct SettingsApp {
     bluetooth: bluetooth::BluetoothUi,
     profiles: profiles::ProfilesUi,
     system: system::SystemUi,
+    backup: backup::BackupUi,
     /// Theme IDs offered on the Appearance page, read once when opened.
     themes: Vec<String>,
     /// Which choice screens are on, read once when opened.
@@ -253,6 +260,7 @@ impl SettingsApp {
             bluetooth: bluetooth::BluetoothUi::default(),
             profiles: profiles::ProfilesUi::default(),
             system: system::SystemUi::default(),
+            backup: backup::BackupUi::default(),
             saved,
             page: Page::default(),
             status: error.as_ref().map(ToString::to_string),
@@ -384,6 +392,9 @@ impl SettingsApp {
         if self.page == Page::System {
             return system::page(ui, &mut self.system, theme);
         }
+        if self.page == Page::Backups {
+            return backup::page(ui, &mut self.backup, theme);
+        }
         if self.page == Page::DefaultApps {
             let state = self.choice.get_or_insert_with(choice::ChoiceUi::default);
             if self.policy.browser {
@@ -493,6 +504,7 @@ impl SettingsApp {
                 | Page::Network
                 | Page::Bluetooth
                 | Page::DefaultApps
+                | Page::Backups
                 | Page::System => {}
                 Page::Shortcuts => pages::shortcuts(ui, &mut s.shortcuts, &mut self.drafts, theme),
                 Page::Desktop => {
