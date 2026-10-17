@@ -4136,11 +4136,7 @@ pub fn paint_wallpaper(painter: &Painter, screen: Rect, theme: &Theme) {
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(1, 2, 3);
     painter.add(egui::Shape::mesh(mesh));
-    let glow = screen.center() + vec2(screen.width() * 0.22, screen.height() * 0.18);
-    for i in 0..12 {
-        let r = screen.height() * (0.55 - i as f32 * 0.04);
-        painter.circle_filled(glow, r, theme.accent.gamma_multiply(0.012));
-    }
+    painter.add(egui::Shape::mesh(glow_mesh(screen, theme.accent)));
     let mark = screen.right_bottom() - vec2(64.0, 56.0);
     painter.circle_filled(mark, 18.0, theme.accent.gamma_multiply(0.35));
     painter.text(
@@ -4150,6 +4146,69 @@ pub fn paint_wallpaper(painter: &Painter, screen: Rect, theme: &Theme) {
         FontId::proportional(22.0),
         theme.background.gamma_multiply(0.9),
     );
+}
+
+/// The wallpaper's glow: twelve faint accent circles, each smaller than the
+/// last, around a point right of and below the centre. Painted as twelve
+/// circles it covered the screen almost three times over every frame, more
+/// than everything else on an idle desktop together, so it is one mesh of
+/// rings instead, each ring the colour those circles stacked to there, and
+/// every pixel is drawn once.
+fn glow_mesh(screen: Rect, accent: Color32) -> egui::Mesh {
+    const CIRCLES: usize = 12;
+    const SEGMENTS: usize = 128;
+    let glow = screen.center() + vec2(screen.width() * 0.22, screen.height() * 0.18);
+    let radius = |i: usize| screen.height() * (0.55 - i as f32 * 0.04);
+    let layer = accent.gamma_multiply(0.012);
+    let alpha = f32::from(layer.a()) / 255.0;
+    // `layers` of the premultiplied colour blended over each other are the
+    // colour times 1 + (1 - a) + (1 - a)² + ... for that many terms.
+    let stacked = |layers: usize| {
+        let gain = if alpha > 0.0 {
+            (1.0 - (1.0 - alpha).powi(layers as i32)) / alpha
+        } else {
+            layers as f32
+        };
+        let [r, g, b, a] = layer
+            .to_array()
+            .map(|c| (f32::from(c) * gain).round() as u8);
+        Color32::from_rgba_premultiplied(r, g, b, a)
+    };
+    let point = |r: f32, k: usize| {
+        let t = k as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        glow + vec2(t.cos(), t.sin()) * r
+    };
+    let mut mesh = egui::Mesh::default();
+    for i in 0..CIRCLES {
+        let color = stacked(i + 1);
+        let outer = radius(i);
+        // The innermost circle is a disc; the rest are rings out to the
+        // next circle in.
+        let inner = (i + 1 < CIRCLES).then(|| radius(i + 1));
+        let base = mesh.vertices.len() as u32;
+        if let Some(inner) = inner {
+            for k in 0..SEGMENTS {
+                mesh.colored_vertex(point(outer, k), color);
+                mesh.colored_vertex(point(inner, k), color);
+            }
+            for k in 0..SEGMENTS as u32 {
+                let next = (k + 1) % SEGMENTS as u32;
+                let (o, n) = (base + 2 * k, base + 2 * next);
+                mesh.add_triangle(o, o + 1, n);
+                mesh.add_triangle(o + 1, n + 1, n);
+            }
+        } else {
+            mesh.colored_vertex(glow, color);
+            for k in 0..SEGMENTS {
+                mesh.colored_vertex(point(outer, k), color);
+            }
+            for k in 0..SEGMENTS as u32 {
+                let next = (k + 1) % SEGMENTS as u32;
+                mesh.add_triangle(base, base + 1 + k, base + 1 + next);
+            }
+        }
+    }
+    mesh
 }
 
 /// The lock screen and the greeter share one look: a background over the

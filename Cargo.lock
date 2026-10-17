@@ -142,6 +142,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "alacritty_terminal"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bda177466b9524d59f1b12f0dd30b68696788e9992a7e959021c4a0ed96fcf59"
+dependencies = [
+ "base64",
+ "bitflags 2.13.2",
+ "home",
+ "libc",
+ "log",
+ "miow",
+ "parking_lot",
+ "piper",
+ "polling",
+ "regex-automata",
+ "rustix 1.1.5",
+ "rustix-openpty",
+ "signal-hook",
+ "unicode-width 0.2.2",
+ "vte",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1578,6 +1602,15 @@ dependencies = [
 
 [[package]]
 name = "ctor"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83cf0d42651b16c6dfe68685716d18480d18a9c39c62d76e8cf3eb6ed5d8bcbf"
+dependencies = [
+ "dtor",
+]
+
+[[package]]
+name = "ctor"
 version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
@@ -1833,6 +1866,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "derisk-terminal"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "crossbeam-channel",
+ "fontdb",
+ "glow",
+ "glutin",
+ "glutin-winit",
+ "mcsapi-theme",
+ "miette",
+ "raw-window-handle",
+ "rustix 1.1.5",
+ "serde_json",
+ "smithay-clipboard",
+ "softbuffer",
+ "swash",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "winit",
+]
+
+[[package]]
 name = "derisk-web"
 version = "0.1.0"
 dependencies = [
@@ -1921,7 +1978,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2048,6 +2105,12 @@ dependencies = [
  "libc",
  "linux-raw-sys 0.9.4",
 ]
+
+[[package]]
+name = "dtor"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
 name = "dunce"
@@ -2359,7 +2422,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3006,7 +3069,7 @@ dependencies = [
  "chrono",
  "collections",
  "core-video",
- "ctor",
+ "ctor 1.0.13",
  "derive_more",
  "embed-resource",
  "etagere",
@@ -3151,7 +3214,7 @@ dependencies = [
  "core-graphics 0.24.0",
  "core-text",
  "core-video",
- "ctor",
+ "ctor 1.0.13",
  "dispatch2",
  "foreign-types",
  "futures",
@@ -3462,6 +3525,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest",
+]
+
+[[package]]
+name = "home"
+version = "0.5.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4024,9 +4096,9 @@ checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -4284,7 +4356,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "egui",
  "gpui",
@@ -4298,7 +4370,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -4307,7 +4379,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "gpui",
  "libc",
@@ -4323,7 +4395,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4341,12 +4413,12 @@ dependencies = [
 [[package]]
 name = "mcsapi-hardened-malloc"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "miette",
  "thiserror 2.0.21",
@@ -4355,7 +4427,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "miette",
  "thiserror 2.0.21",
@@ -4364,7 +4436,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "egui",
  "mcsapi",
@@ -4374,7 +4446,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-component"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "collections",
  "gpui",
@@ -4387,7 +4459,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-icons"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "serde",
  "strum",
@@ -4396,7 +4468,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-menu"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "gpui",
 ]
@@ -4404,7 +4476,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4420,7 +4492,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "chrono",
  "documented",
@@ -4445,7 +4517,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-ui-macros"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#2ac08a18a9bf9647f69bdc4d0420086b768d1ad6"
+source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -4573,6 +4645,15 @@ checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
 dependencies = [
  "libc",
  "wasi",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "miow"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
+dependencies = [
  "windows-sys 0.61.2",
 ]
 
@@ -4773,7 +4854,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5555,6 +5636,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "palette-power"
+version = "0.1.0"
+dependencies = [
+ "derisk-palette-sdk",
+]
+
+[[package]]
 name = "palette-session"
 version = "0.1.0"
 dependencies = [
@@ -5807,7 +5895,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "pm-signing"
 version = "0.1.0"
-source = "git+https://github.com/losos-project/pm#84e10460a1787136cfc149169fbc3129e06367b8"
+source = "git+https://github.com/losos-project/pm#ad96360eeb0e29d6ad63c972170570f1797a4918"
 dependencies = [
  "miette",
  "ring",
@@ -6544,7 +6632,18 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "rustix-openpty"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1de16c7c59892b870a6336f185dc10943517f1327447096bbb7bb32cd85e2393"
+dependencies = [
+ "errno",
+ "libc",
+ "rustix 1.1.5",
 ]
 
 [[package]]
@@ -6747,10 +6846,11 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash 0.2.0",
  "indexmap",
  "itoa",
  "memchr",
@@ -6861,6 +6961,16 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "signal-hook"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b29ffa27d3d59a049bb328258de100f8012848d1b08d444e08bbc02ac468435e"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
 
 [[package]]
 name = "signal-hook-registry"
@@ -7117,6 +7227,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "softbuffer"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aac18da81ebbf05109ab275b157c22a653bb3c12cf884450179942f81bcbf6c3"
+dependencies = [
+ "as-raw-xcb-connection",
+ "bytemuck",
+ "fastrand",
+ "js-sys",
+ "memmap2",
+ "ndk",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "raw-window-handle",
+ "redox_syscall 0.5.18",
+ "rustix 1.1.5",
+ "tiny-xlib",
+ "tracing",
+ "wasm-bindgen",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-sys",
+ "web-sys",
+ "windows-sys 0.61.2",
+ "x11rb",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7325,7 +7466,7 @@ version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c2499c2d826531388872b2268718aed907a39bd785ab0dcfe57fab26283f92e"
 dependencies = [
- "skrifa 0.40.0",
+ "skrifa 0.44.0",
  "yazi",
  "zeno",
 ]
@@ -7442,10 +7583,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7464,7 +7605,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7621,6 +7762,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tiny-xlib"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90a0ca3ee6a69f2ad28fd11621a4c3f03b371f366be500b64df260c4ffbafb4"
+dependencies = [
+ "as-raw-xcb-connection",
+ "ctor 0.10.1",
+ "libloading",
+ "pkg-config",
+ "tracing",
+]
+
+[[package]]
 name = "tinystr"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7639,9 +7793,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
 dependencies = [
  "bytes",
  "libc",
@@ -8195,6 +8349,19 @@ checksum = "fb067e4cbd1ff067d1df46c9194b5de0e98efd2810bbc95c5d5e5f25a3231150"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "bitflags 2.13.2",
+ "cursor-icon",
+ "log",
+ "memchr",
 ]
 
 [[package]]
@@ -9176,7 +9343,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
