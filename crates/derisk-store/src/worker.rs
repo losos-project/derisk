@@ -5,14 +5,15 @@
 //! catalogue takes a second or two, an install minutes, and in the flatpak
 //! machine each first has to boot it. So the app hands orders to these
 //! threads and reads their events each frame: one thread carries out the
-//! orders, one at a time, and another loads icons, so a long install never
-//! holds up the pictures of the page being scrolled.
+//! orders, one at a time, another loads icons, so a long install never
+//! holds up the pictures of the page being scrolled, and a third asks for
+//! ratings and reviews, which come from the network and not from flatpak.
 
 use std::sync::Arc;
 
 use mcsapi_ui::egui::ColorImage;
 
-use crate::{catalog::Catalog, flatpak::Installed};
+use crate::{catalog::Catalog, flatpak::Installed, reviews::Reviews};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use stub::Worker;
@@ -64,6 +65,11 @@ pub(crate) enum Event {
         file: String,
         image: Option<ColorImage>,
     },
+    /// An app's ratings and reviews, or why they could not be had.
+    Reviews {
+        id: String,
+        reviews: Result<Reviews, String>,
+    },
 }
 
 /// A browser has no flatpak and no threads to run it on: nothing is ever
@@ -84,6 +90,10 @@ mod stub {
         }
 
         pub fn icon(&self, _: &str, _: u32) -> bool {
+            false
+        }
+
+        pub fn reviews(&self, _: &str) -> bool {
             false
         }
 
@@ -108,6 +118,7 @@ mod threads {
         appstream::{self, Language},
         catalog::Catalog,
         flatpak::{self, Flatpak, LIST, REMOTE, UPDATES},
+        reviews,
     };
 
     /// The app's end of the threads. Dropping it ends them at their next look
@@ -115,20 +126,26 @@ mod threads {
     pub(crate) struct Worker {
         orders: Sender<Order>,
         icons: Sender<(String, u32)>,
+        reviews: Sender<String>,
         events: Receiver<Event>,
     }
 
     impl Worker {
         /// Starts the threads on flatpak where [`place`] finds it.
         pub fn start() -> Worker {
-            Self::start_with(place)
+            Self::start_with(place, reviews::fetch)
         }
 
         /// Starts the threads on the flatpak `place` gives, called on the
-        /// threads since finding a machine asks libvirt.
-        pub fn start_with(place: impl FnOnce() -> Arc<dyn Flatpak> + Send + 'static) -> Worker {
+        /// threads since finding a machine asks libvirt, with reviews from
+        /// `fetch`.
+        pub fn start_with(
+            place: impl FnOnce() -> Arc<dyn Flatpak> + Send + 'static,
+            fetch: reviews::Fetch,
+        ) -> Worker {
             let (orders, orders_rx) = bounded(16);
             let (icons, icons_rx) = bounded::<(String, u32)>(256);
+            let (reviews, reviews_rx) = bounded::<String>(16);
             let (events_tx, events) = bounded(512);
             let spawned = std::thread::Builder::new()
                 .name("derisk-store".into())
@@ -146,6 +163,7 @@ mod threads {
                         scope.spawn(move || {
                             icon_loop(flatpak.as_ref(), &icons_rx, events, installation)
                         });
+                        scope.spawn(move || reviews_loop(&reviews_rx, events, fetch));
                         order_loop(flatpak.as_ref(), &orders_rx, events, installation);
                     });
                 });
@@ -155,6 +173,7 @@ mod threads {
             Worker {
                 orders,
                 icons,
+                reviews,
                 events,
             }
         }
@@ -170,9 +189,29 @@ mod threads {
             self.icons.try_send((file.to_owned(), size)).is_ok()
         }
 
+        /// Asks for app `id`'s ratings and reviews; false when the queue is
+        /// full, and the app should ask again on a later frame.
+        pub fn reviews(&self, id: &str) -> bool {
+            self.reviews.try_send(id.to_owned()).is_ok()
+        }
+
         /// Whatever the threads have said since the last call.
         pub fn events(&self) -> impl Iterator<Item = Event> + '_ {
             self.events.try_iter()
+        }
+    }
+
+    /// Fetches the ratings and reviews asked for, one app at a time.
+    fn reviews_loop(ids: &Receiver<String>, events: &Sender<Event>, fetch: reviews::Fetch) {
+        let locale = reviews::locale(&appstream::session_locale());
+        while let Ok(id) = ids.recv() {
+            let reviews = fetch(&id, &locale);
+            if let Err(error) = &reviews {
+                tracing::warn!(%id, %error, "cannot read the app's reviews");
+            }
+            if events.send(Event::Reviews { id, reviews }).is_err() {
+                return;
+            }
         }
     }
 

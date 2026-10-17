@@ -105,17 +105,23 @@ pub struct Language {
     language: String,
 }
 
+/// The session's locale name, `pt_BR.UTF-8` or `de`, from the variables
+/// gettext reads, in its order; empty when none is set.
+pub fn session_locale() -> String {
+    let value = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .filter_map(|name| derisk_sys::env::var(name).ok())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default();
+    // LANGUAGE is a colon-separated list; the first is the one wanted.
+    value.split(':').next().unwrap_or_default().to_owned()
+}
+
 impl Language {
     /// From `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` or `LANG`, the first set.
     /// `C` and `POSIX` mean untranslated.
     pub fn from_env() -> Self {
-        let value = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
-            .into_iter()
-            .filter_map(|name| derisk_sys::env::var(name).ok())
-            .find(|value| !value.is_empty())
-            .unwrap_or_default();
-        // LANGUAGE is a colon-separated list; the first is the one wanted.
-        Self::new(value.split(':').next().unwrap_or_default())
+        Self::new(&session_locale())
     }
 
     /// From a locale name such as `pt_BR.UTF-8` or `de`.

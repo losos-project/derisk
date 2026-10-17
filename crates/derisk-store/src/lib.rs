@@ -14,6 +14,7 @@ pub mod appstream;
 pub mod catalog;
 pub mod category;
 pub mod flatpak;
+pub mod reviews;
 mod worker;
 
 pub use app::{APP_ID, StoreApp};

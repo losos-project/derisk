@@ -8,6 +8,7 @@ use derisk_store::{
     appstream::{self, Block, Kind, Language},
     category::{self, section_name},
     flatpak::{self, Flatpak},
+    reviews::{Ratings, Review, Reviews},
 };
 use mcsapi_ui::{App as _, Theme, egui, run_frame};
 
@@ -307,6 +308,27 @@ impl Flatpak for Fake {
     }
 }
 
+/// Reviews as ODRS would give them, without asking it.
+fn canned(id: &str, locale: &str) -> Result<Reviews, String> {
+    assert!(!locale.is_empty());
+    if id == "org.example.Missing" {
+        return Err("not found".into());
+    }
+    Ok(Reviews {
+        ratings: Some(Ratings {
+            stars: [1, 0, 2, 5, 9],
+        }),
+        reviews: vec![Review {
+            summary: "Plays well".into(),
+            text: "Fast, and the pieces are easy to tell apart.".into(),
+            stars: 5,
+            author: "Sam".into(),
+            date: 1_790_000_000,
+            version: "1.2".into(),
+        }],
+    })
+}
+
 fn frame(store: &mut StoreApp, context: &egui::Context) {
     let mut output = run_frame(store, context, egui::RawInput::default(), &Theme::default());
     output.textures_delta.clear();
@@ -325,7 +347,7 @@ fn settle(store: &mut StoreApp, context: &egui::Context) {
 #[test]
 fn loads_the_catalogue_and_installs_in_the_machine() {
     let fake = Arc::new(Fake::default());
-    let mut store = StoreApp::on(fake.clone());
+    let mut store = StoreApp::with_reviews(fake.clone(), canned);
     let context = egui::Context::default();
     settle(&mut store, &context);
     assert_eq!(store.catalog().unwrap().apps().len(), 5);
@@ -391,7 +413,7 @@ fn the_browser_demo_and_the_catalog_draw_a_frame() {
             Err("no".into())
         }
     }
-    let mut store = StoreApp::on(Arc::new(Nothing));
+    let mut store = StoreApp::with_reviews(Arc::new(Nothing), canned);
     let context = egui::Context::default();
     settle(&mut store, &context);
     assert!(store.catalog().is_none());
@@ -414,4 +436,47 @@ fn a_job_in_the_machine_reports_its_end() {
         (Some(1), "error: No remote refs found\n")
     );
     assert_eq!(parse_progress("done ?\n"), (Some(1), ""));
+}
+
+#[test]
+fn reads_what_odrs_answers() {
+    use derisk_store::reviews::{fetch_body, locale, parse_ratings, parse_reviews};
+    let ratings = parse_ratings(
+        r#"{"star0": 0, "star1": 37, "star2": 41, "star3": 29, "star4": 30, "star5": 54, "total": 191}"#,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(ratings.stars, [37, 41, 29, 30, 54]);
+    assert_eq!(ratings.total(), 191);
+    let average = ratings.average().unwrap();
+    assert!((average - 596.0 / 191.0).abs() < 1e-4, "{average}");
+    assert_eq!(parse_ratings(r#"{"star0": 3, "total": 3}"#).unwrap(), None);
+    assert!(parse_ratings("<html>").is_err());
+
+    let reviews = parse_reviews(
+        r#"[
+            {"summary": " Does not load any maps ", "description": "Never loads.", "rating": 40,
+             "user_display": "Daniel", "date_created": 1791042655.0, "version": "51.1", "reported": 0},
+            {"summary": "spam", "description": "spam", "rating": 100, "reported": 2},
+            {"summary": "", "description": "", "rating": 60},
+            {"description": "Just text", "rating": 0, "user_display": null}
+        ]"#,
+    )
+    .unwrap();
+    assert_eq!(reviews.len(), 2);
+    assert_eq!(reviews[0].summary, "Does not load any maps");
+    assert_eq!(reviews[0].stars, 2);
+    assert_eq!(reviews[0].author, "Daniel");
+    assert_eq!(reviews[0].date, 1_791_042_655);
+    assert_eq!(reviews[1].stars, 1);
+    assert_eq!(reviews[1].author, "");
+
+    assert_eq!(locale("de_DE.UTF-8"), "de_DE");
+    assert_eq!(locale("C.UTF-8"), "en_US");
+    assert_eq!(locale(""), "en_US");
+    let body: serde_json::Value =
+        serde_json::from_str(&fetch_body("org.gnome.Maps", "en_US")).unwrap();
+    assert_eq!(body["app_id"], "org.gnome.Maps");
+    assert_eq!(body["user_hash"].as_str().unwrap(), "0".repeat(40));
+    assert_eq!(derisk_store::reviews::stars(3.6), "★★★★☆");
 }

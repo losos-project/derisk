@@ -14,6 +14,7 @@ use crate::{
     catalog::{App, Catalog},
     category::{self, Category},
     flatpak::Installed,
+    reviews::{Ratings, Review, Reviews, stars},
 };
 
 use crate::worker::{Event, Order, Worker};
@@ -51,6 +52,13 @@ enum Icon {
     Missing,
 }
 
+/// An app's ratings and reviews, once asked for.
+enum Said {
+    Asked,
+    Ready(Reviews),
+    Failed(String),
+}
+
 /// The release feed, worked out once per catalogue: app IDs, newest
 /// release first.
 #[derive(Default)]
@@ -80,6 +88,8 @@ pub struct StoreApp {
     /// The last search and its results, by ID.
     results: Option<(String, Vec<String>)>,
     icons: HashMap<String, Icon>,
+    /// Ratings and reviews, by app ID, for the pages opened so far.
+    said: HashMap<String, Said>,
     /// An app waiting for the person to confirm its removal.
     confirm: Option<String>,
 }
@@ -120,7 +130,18 @@ impl StoreApp {
     /// where flatpak is.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn on(flatpak: Arc<dyn crate::flatpak::Flatpak>) -> Self {
-        Self::with_worker(Worker::start_with(move || flatpak))
+        Self::with_worker(Worker::start_with(move || flatpak, crate::reviews::fetch))
+    }
+
+    /// The store on `flatpak`, with reviews from `fetch` (given an app ID
+    /// and a locale) instead of ODRS: for tests, which ask nothing of the
+    /// network.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_reviews(
+        flatpak: Arc<dyn crate::flatpak::Flatpak>,
+        fetch: crate::reviews::Fetch,
+    ) -> Self {
+        Self::with_worker(Worker::start_with(move || flatpak, fetch))
     }
 
     fn with_worker(worker: Worker) -> Self {
@@ -141,6 +162,7 @@ impl StoreApp {
             query: String::new(),
             results: None,
             icons: HashMap::new(),
+            said: HashMap::new(),
             confirm: None,
         }
     }
@@ -258,6 +280,13 @@ impl StoreApp {
                         None => Icon::Missing,
                     };
                     self.icons.insert(file, icon);
+                }
+                Event::Reviews { id, reviews } => {
+                    let said = match reviews {
+                        Ok(reviews) => Said::Ready(reviews),
+                        Err(error) => Said::Failed(error),
+                    };
+                    self.said.insert(id, said);
                 }
             }
         }
@@ -871,6 +900,16 @@ impl StoreApp {
                         }
                     }
                 });
+                // What the app is and what people think of it come first;
+                // its release notes are for those who already know it.
+                if !app.component.description.is_empty() {
+                    ui.add_space(12.0);
+                    ui.heading("About");
+                    notes(ui, &app.component.description, usize::MAX);
+                }
+                ui.add_space(12.0);
+                ui.heading("Ratings and reviews");
+                self.reviews(ui, id);
                 let releases: Vec<_> = app
                     .component
                     .releases
@@ -891,11 +930,6 @@ impl StoreApp {
                                 }
                             });
                     }
-                }
-                if !app.component.description.is_empty() {
-                    ui.add_space(12.0);
-                    ui.heading("About");
-                    notes(ui, &app.component.description, usize::MAX);
                 }
                 ui.add_space(12.0);
                 ui.heading("Details");
@@ -941,6 +975,41 @@ impl StoreApp {
             });
         if let Some(page) = open {
             self.go(page);
+        }
+    }
+
+    /// App `id`'s ratings and reviews, asking for them the first time.
+    fn reviews(&mut self, ui: &mut egui::Ui, id: &str) {
+        if !self.said.contains_key(id) && self.worker.reviews(id) {
+            self.said.insert(id.to_owned(), Said::Asked);
+        }
+        match self.said.get(id) {
+            None if cfg!(target_arch = "wasm32") => {
+                ui.weak("Reviews are read from the Open Desktop Ratings Service, which a browser cannot reach from here.");
+            }
+            None | Some(Said::Asked) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak("Reading what people say…");
+                });
+            }
+            Some(Said::Failed(error)) => {
+                ui.weak("Ratings and reviews could not be read just now.")
+                    .on_hover_text(error);
+            }
+            Some(Said::Ready(said)) => {
+                match &said.ratings {
+                    Some(ratings) => self::ratings(ui, ratings),
+                    None => {
+                        ui.weak("Nobody has rated it yet.");
+                    }
+                }
+                let now = now();
+                for review in &said.reviews {
+                    ui.add_space(8.0);
+                    self::review(ui, review, now);
+                }
+            }
         }
     }
 
@@ -1099,11 +1168,77 @@ impl UiApp for StoreApp {
         }
         // The threads answer between frames; look again soon while
         // anything is owed, and now and then otherwise.
-        let waiting = self.doing.is_some() || self.icons.values().any(|i| matches!(i, Icon::Asked));
+        let waiting = self.doing.is_some()
+            || self.icons.values().any(|i| matches!(i, Icon::Asked))
+            || self.said.values().any(|s| matches!(s, Said::Asked));
         let every = if waiting { 150 } else { 2000 };
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(every));
     }
+}
+
+/// An app's average and how many people gave each number of stars, as
+/// bars in the accent colour.
+fn ratings(ui: &mut egui::Ui, ratings: &Ratings) {
+    let total = ratings.total();
+    let Some(average) = ratings.average() else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(RichText::new(format!("{average:.1}")).size(32.0).strong());
+            ui.label(stars(average));
+            ui.weak(if total == 1 {
+                "1 rating".to_owned()
+            } else {
+                format!("{total} ratings")
+            });
+        });
+        ui.add_space(16.0);
+        ui.vertical(|ui| {
+            let visuals = ui.visuals().clone();
+            for n in (1..=5).rev() {
+                let count = ratings.stars[n - 1];
+                ui.horizontal(|ui| {
+                    ui.label(format!("{n} ★"));
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(160.0, 8.0), Sense::hover());
+                    let painter = ui.painter();
+                    painter.rect_filled(rect, 4.0, visuals.extreme_bg_color);
+                    let mut filled = rect;
+                    filled.set_width(rect.width() * count as f32 / total as f32);
+                    painter.rect_filled(filled, 4.0, visuals.selection.bg_fill);
+                    ui.weak(count.to_string());
+                });
+            }
+        });
+    });
+}
+
+/// One review: its stars and summary, who wrote it and when, and what they
+/// wrote.
+fn review(ui: &mut egui::Ui, review: &Review, now: i64) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(stars(f32::from(review.stars)));
+            if !review.summary.is_empty() {
+                ui.strong(&review.summary);
+            }
+        });
+        let mut by = vec![if review.author.is_empty() {
+            "Someone".to_owned()
+        } else {
+            review.author.clone()
+        }];
+        by.push(ago(now, review.date));
+        if !review.version.is_empty() {
+            by.push(format!("version {}", review.version));
+        }
+        ui.weak(by.join(" · "));
+        if !review.text.is_empty() {
+            ui.add(egui::Label::new(&review.text).wrap());
+        }
+    });
 }
 
 /// The button that does what the page is for, filled in the accent colour.

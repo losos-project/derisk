@@ -67,3 +67,19 @@ fn sorts_all_of_flathub() {
     println!("{guessed:#?}");
     assert!(catalog.apps().len() > 1000);
 }
+
+/// Asks the real ODRS for a well-known app's ratings and reviews.
+#[test]
+#[ignore = "asks odrs.gnome.org"]
+fn odrs_answers() {
+    let said = derisk_store::reviews::fetch("org.gnome.Maps", "en_US").unwrap();
+    let ratings = said.ratings.expect("Maps has ratings");
+    assert!(ratings.total() > 0);
+    assert!(!said.reviews.is_empty());
+    eprintln!(
+        "{:.1} from {} ratings; first review: {:?}",
+        ratings.average().unwrap(),
+        ratings.total(),
+        said.reviews[0].summary
+    );
+}
