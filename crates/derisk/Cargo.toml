@@ -17,6 +17,9 @@ derisk-login.workspace = true
 derisk-machines.workspace = true
 # The palette's plugin host; every palette row comes from a plugin.
 derisk-plugin.workspace = true
+# The client of the file index the palette searches files' text in; the
+# index itself is derisk-index's own service.
+derisk-index.workspace = true
 derisk-icons.workspace = true
 derisk-settings.workspace = true
 mcsapi.workspace = true

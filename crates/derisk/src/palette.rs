@@ -10,7 +10,8 @@
 //! - session commands (lock, suspend, log out, ...), tray items and failed
 //!   user units,
 //! - a browser's tabs and extensions, virtual machines and the apps in
-//!   them, files, and
+//!   them, files by name, files by what is in them (from `derisk-index`,
+//!   the user service indexing home), and
 //! - for the typed text itself, the assistant, Sonne's agent, an address to
 //!   open and a web search.
 //!
@@ -47,7 +48,9 @@ use std::{
     sync::OnceLock,
 };
 
-pub use derisk_plugin::palette::{App, AppAction, Category, File, Plugins, Position, View};
+pub use derisk_plugin::palette::{
+    App, AppAction, Category, File, FileMatch, Plugins, Position, View,
+};
 use derisk_plugin::palette::{
     Desk, Hook, Input, MenuCommand, Registration, TrayItem, Window, Workspace,
 };
@@ -250,8 +253,24 @@ pub fn file(path: &Path, home: Option<&Path>) -> File {
     }
 }
 
+/// What the file index found, as the files plugin sees it, shown under
+/// `home` as `~/...`.
+pub fn file_match(found: &derisk_index::Match, home: Option<&Path>) -> FileMatch {
+    FileMatch {
+        file: File {
+            path: found.path.display().to_string(),
+            shown: derisk_index::shown(&found.path, home),
+            folder: found.folder,
+        },
+        line: found.line,
+        snippet: found.snippet.clone(),
+    }
+}
+
 /// The desktop as the palette's plugins see it, without the files, which
-/// [`Catalog`] adds only for a plugin that reads them.
+/// [`Catalog`] adds only for a plugin that reads them, and without what the
+/// file index found for the typed text, which the caller adds once it has
+/// answered.
 pub fn view(shell: &Shell, apps: &[App]) -> View {
     let focused = shell.focused();
     let mut windows = Vec::new();
@@ -342,6 +361,7 @@ pub fn view(shell: &Shell, apps: &[App]) -> View {
             .collect(),
         failed_units: shell.failed_units.clone(),
         files: Vec::new(),
+        file_matches: Vec::new(),
         search_engine: shell.effects.search.map(|e| e.name().to_owned()),
         registered: shell
             .palette_sources
@@ -492,10 +512,13 @@ impl Catalog {
     }
 
     /// The rows for `query`, asked again only when it or the view changed.
-    /// Only a query with no scope prefix has any.
+    /// Only a query with no scope prefix has any, apart from a files query
+    /// (`/` or `~`), which has the file rows of the plugins reading what
+    /// the file index found.
     pub fn rows(&mut self, plugins: &Plugins, view: &View, query: &str) -> &Rows {
         let (scope, text) = scope(query);
-        if scope != Scope::All || text.is_empty() {
+        let files = scope == Scope::Files;
+        if !(scope == Scope::All || files) || text.is_empty() {
             self.query = None;
             self.rows = Rows::default();
             return &self.rows;
@@ -503,17 +526,23 @@ impl Catalog {
         if self
             .query
             .as_ref()
-            .is_some_and(|(q, v)| q == text && v == view)
+            .is_some_and(|(q, v)| q == query && v == view)
         {
             return &self.rows;
         }
-        let answers = plugins.each(|_, p| p.has(Hook::Query), |p| plugins.query(p, view, text));
+        let answers = plugins.each(
+            |_, p| p.has(Hook::Query) && (!files || p.reads(Input::Contents)),
+            |p| plugins.query(p, view, text),
+        );
         let mut rows = Rows::default();
         for row in answers.into_iter().flat_map(|(_, rows)| rows) {
             let position = row.position;
             let Some(entry) = Entry::from_plugin(row) else {
                 continue;
             };
+            if files && entry.category != Category::File {
+                continue;
+            }
             if entry.category == Category::Ask {
                 rows.ask.get_or_insert(entry);
             } else if position == Position::Top {
@@ -522,7 +551,7 @@ impl Catalog {
                 rows.bottom.push(entry);
             }
         }
-        self.query = Some((text.to_owned(), view.clone()));
+        self.query = Some((query.to_owned(), view.clone()));
         self.rows = rows;
         &self.rows
     }
@@ -564,6 +593,11 @@ pub fn ask(text: &str) -> Entry {
 /// top rows, the catalog's `hits`, the assistant otherwise (only when it
 /// understood, or nothing else matched, to say why), then the query's
 /// bottom rows.
+///
+/// The query's file rows (what the file index found) go with the catalog's
+/// file rows instead, after them, and one opening a file the catalog
+/// already lists is left out: the catalog's row matched by name, which
+/// ranks it better than the index can.
 pub fn list<'a>(
     entries: &'a [Entry],
     hits: &[usize],
@@ -579,17 +613,35 @@ pub fn list<'a>(
     // they can be opened on their own: a sentence matches no title, so the
     // search alone would not.
     let named = first.map_or_else(Vec::new, |ask| named_apps(entries, ask));
+    let listed: Vec<&Entry> = hits
+        .iter()
+        .filter(|i| !named.contains(i))
+        .map(|&i| &entries[i])
+        .collect();
+    let (found, bottom): (Vec<&Entry>, Vec<&Entry>) = rows
+        .bottom
+        .iter()
+        .partition(|e| e.category == Category::File);
+    let found = found.into_iter().filter(|f| {
+        !listed
+            .iter()
+            .any(|e| e.category == Category::File && e.actions == f.actions)
+    });
+    // The catalog's hits come grouped by category, so its file rows are
+    // together; with none, the found files go after every hit.
+    let files_end = listed
+        .iter()
+        .rposition(|e| e.category == Category::File)
+        .map_or(listed.len(), |i| i + 1);
     first
         .into_iter()
         .chain(named.iter().map(|&i| &entries[i]))
         .chain(&rows.top)
-        .chain(
-            hits.iter()
-                .filter(|i| !named.contains(i))
-                .map(|&i| &entries[i]),
-        )
+        .chain(listed[..files_end].iter().copied())
+        .chain(found)
+        .chain(listed[files_end..].iter().copied())
         .chain(ask.filter(|_| first.is_none()))
-        .chain(&rows.bottom)
+        .chain(bottom)
         .collect()
 }
 

@@ -46,7 +46,13 @@ everything. Type to search, in a single ranked list:
   tabs (switch, close, new tab) and its extensions (enable, disable,
   options). An address typed into the palette opens in Danube, or in the
   default browser when Danube is not running.
-- **Files** under your home folder.
+- **Files** under your home folder, by name and by what is in them. A
+  file found by its text shows the line that matched and the folder it is
+  in (`~/notes · Quarterly budget: rent, …`). The text comes from
+  `derisk-index.service`, a user service that indexes home once and then
+  follows what changes; hidden files and whatever a `.gitignore` or
+  `.ignore` leaves out are skipped, and without the service the palette
+  finds files by name only (`crates/derisk-index`).
 
 Anything else goes to the assistant: `open firefox and snap it left`,
 Enter, done. When a typed sentence is something the assistant understands
@@ -96,7 +102,8 @@ own plugins: in derisk's process, with no WASI, only a one-way log (and,
 for the palette, the built-in assistant) to call, a fuel budget per call,
 capped memory, and a fresh instance every time. A plugin's manifest names
 the parts of the desktop it may see (one that does not ask for files never
-sees a file name) and the action kinds its rows or buttons may run, and,
+sees a file name, and one that does not ask for contents never sees what
+the file index found in them) and the action kinds its rows or buttons may run, and,
 for the palette, the categories of its rows; anything outside it is
 dropped. Rows that log out, reboot or power off always need the second
 Enter.
@@ -107,7 +114,9 @@ Besides the bundled ones, derisk loads plugins from
 from the same folders under `$XDG_DATA_HOME` when each carries a detached
 `.sig` (pm's format: `pm sign plugin.wasm`) from a key in
 `$XDG_CONFIG_HOME/derisk/trusted/`. A plugin cannot take a name already
-loaded for its kind.
+loaded for its kind. The palette's interface is `derisk:palette@0.2.0`
+since the view grew the file index's matches; a plugin built against
+0.1.0 no longer loads and has to be built again.
 
 Programs feed palette plugins over the agent protocol with
 `{"method":"register_palette","source":"danube","data":{...}}`; the
@@ -579,6 +588,7 @@ nothing but the workspace at the root:
 | `derisk-machines` | The libvirt machines apps run in (labels, states, starting and stopping them, running programs in them) and the Machines app. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
 | `derisk-terminal` | Terminal, the `derisk-terminal` binary, below. |
+| `derisk-index` | The file index the palette searches files' text in: the `derisk-index` user service and the session's client. |
 
 Each crate keeps everything it needs in its own directory (its README,
 LICENSE and any `data/`), and reaches its siblings only through the

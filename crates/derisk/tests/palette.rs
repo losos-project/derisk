@@ -468,6 +468,57 @@ fn files_are_indexed_and_opened_safely() {
 }
 
 #[test]
+fn files_found_by_their_text_join_the_files_found_by_name() {
+    let home = std::path::Path::new("/home/me");
+    let todo = palette::file(&home.join("notes/todo.md"), Some(home));
+    let found = |path: &str, line, snippet: Option<&str>| {
+        palette::file_match(
+            &derisk_index::Match {
+                path: home.join(path),
+                folder: false,
+                line,
+                snippet: snippet.map(str::to_owned),
+            },
+            Some(home),
+        )
+    };
+    let mut shell = shell();
+    shell.effects.search = Some(derisk_settings::choice::SearchEngine::DuckDuckGo);
+    let mut view = palette::view(&shell, &[]);
+    view.file_matches = vec![
+        found("notes/todo.md", None, None),
+        found("notes/groceries.txt", Some(3), Some("todo: buy milk")),
+    ];
+    let plugins = palette::plugins();
+    let mut catalog = palette::Catalog::default();
+    let entries = catalog
+        .entries(plugins, &view, std::slice::from_ref(&todo), false)
+        .to_vec();
+    for query in ["todo", "/todo"] {
+        let rows = catalog.rows(plugins, &view, query).clone();
+        let hits = palette::search(&entries, query, &History::default());
+        let listed = palette::list(&entries, &hits, &rows, query);
+        let files: Vec<(&str, &str)> = listed
+            .iter()
+            .filter(|e| e.category == Category::File)
+            .map(|e| (e.title.as_str(), e.detail.as_str()))
+            .collect();
+        // The catalog's row for todo.md, then the file found by its text;
+        // the index's own row for todo.md is left out.
+        assert_eq!(
+            files,
+            [
+                ("todo.md", "~/notes/todo.md"),
+                ("groceries.txt", "~/notes · todo: buy milk")
+            ],
+            "{query}"
+        );
+        let web = listed.iter().any(|e| e.category == Category::Web);
+        assert_eq!(web, query == "todo", "a files query has only files");
+    }
+}
+
+#[test]
 fn close_title_matches_beat_the_assistant() {
     let mut shell = shell();
     open_three_workspaces(&mut shell);

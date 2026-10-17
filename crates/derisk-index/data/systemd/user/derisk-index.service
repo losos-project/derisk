@@ -1,0 +1,38 @@
+[Unit]
+Description=derisk file index
+Documentation=https://github.com/dasmatus/derisk
+# Started with the desktop, so home is indexed before the palette asks;
+# a search before then is answered from what is indexed so far.
+Requires=derisk-index.socket
+After=derisk-index.socket
+# graphical-session.target, not derisk-session.target: nothing requires
+# the latter, so StopWhenUnneeded= stops it as soon as it is reached, and
+# the index would stop with it.
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=derisk-index
+Restart=on-failure
+RestartSec=5s
+Slice=background.slice
+# The first walk reads every text file in home: only when nothing else
+# wants the CPU or the disk.
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+# ~/.cache/derisk-index, the one place it writes. Home is read-only to it,
+# and it never needs the network.
+CacheDirectory=derisk-index
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateNetwork=yes
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+# tantivy keeps the index mapped; this bounds what indexing holds on top.
+MemoryHigh=512M
+
+[Install]
+WantedBy=graphical-session.target

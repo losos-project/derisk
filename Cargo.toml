@@ -38,6 +38,7 @@ derisk-install = { path = "crates/derisk-install", version = "0.1.0" }
 derisk-login = { path = "crates/derisk-login", version = "0.1.0" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
 derisk-files = { path = "crates/derisk-files", version = "0.1.0" }
+derisk-index = { path = "crates/derisk-index", version = "0.1.0", default-features = false }
 derisk-editor = { path = "crates/derisk-editor", version = "0.1.0" }
 derisk-monitor = { path = "crates/derisk-monitor", version = "0.1.0" }
 derisk-calculator = { path = "crates/derisk-calculator", version = "0.1.0" }

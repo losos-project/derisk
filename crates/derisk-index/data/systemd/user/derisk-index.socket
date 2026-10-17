@@ -1,0 +1,12 @@
+[Unit]
+Description=derisk file index socket
+Documentation=https://github.com/dasmatus/derisk
+PartOf=derisk-index.service
+
+[Socket]
+# JSON lines: the palette sends the typed text and gets the matching files.
+# Only the session user may connect.
+ListenStream=%t/derisk/index.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
