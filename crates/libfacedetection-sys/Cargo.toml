@@ -12,5 +12,5 @@ links = "facedetection"
 build = "build.rs"
 
 [build-dependencies]
-bindgen = "0.72.1"
+bindgen = "0.73.2"
 cc = "1.2.41"

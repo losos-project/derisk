@@ -79,7 +79,7 @@ wasmtime = { version = "49.0.0", default-features = false, features = [
 ] }
 # Wraps the plugins' core modules in components, in derisk-plugin's build
 # script.
-wit-component = "0.261.0"
+wit-component = "0.262.0"
 # The plugins' side of the WIT, in plugins/palette/sdk and
 # plugins/widgets/sdk.
 wit-bindgen = { version = "0.62.0", default-features = false, features = ["macros", "realloc"] }
