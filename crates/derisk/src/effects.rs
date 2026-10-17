@@ -4,10 +4,11 @@
 //! strength, per-panel opacity, when to save power); [`Effects::resolve`]
 //! combines it with the battery into a [`Look`] for this frame. In low power
 //! mode the blur, window shadows and animations go away, panels turn nearly
-//! opaque so text stays readable without the blur, and the frame rate is
-//! capped at [`LOW_POWER_MAX_FPS`]. Otherwise the session renders once per
-//! refresh of the display; the compositor turns the cap into a rate the
-//! display shows evenly, using [`Look::vrr`].
+//! opaque so text stays readable without the blur, and on a display faster
+//! than [`LOW_POWER_MIN_FPS`] the session draws fewer frames, but never
+//! fewer than that. Otherwise the session renders once per refresh of the
+//! display; the compositor turns the floor into a rate the display shows
+//! evenly, using [`Look::vrr`].
 //!
 //! ```
 //! use derisk::{effects::Effects, overview::Battery};
@@ -18,7 +19,7 @@
 //! let unplugged = effects.resolve(Some(Battery { percent: 80, charging: false, discharging: true }));
 //! assert!(plugged.blur > 0 && !plugged.low_power);
 //! assert!(unplugged.low_power && unplugged.blur == 0);
-//! assert_eq!((plugged.max_fps, unplugged.max_fps), (None, Some(30)));
+//! assert_eq!((plugged.min_fps, unplugged.min_fps), (None, Some(60)));
 //! ```
 
 use std::{
@@ -31,8 +32,11 @@ use mcsapi::Geometry;
 
 use crate::overview::Battery;
 
-/// The frame rate cap in low power mode.
-pub const LOW_POWER_MAX_FPS: u32 = 30;
+/// The fewest frames per second low power mode draws. It used to be a cap
+/// of 30, which halved the frame rate on every 60 Hz laptop; the savings
+/// now come from what each frame no longer draws (blur, shadows,
+/// animation), and only a faster display drops to a slower even rate.
+pub const LOW_POWER_MIN_FPS: u32 = 60;
 
 /// The least panel opacity in low power mode, where nothing is blurred.
 const LOW_POWER_MIN_OPACITY: f32 = 0.97;
@@ -81,8 +85,9 @@ pub struct Look {
     pub animate: bool,
     /// Whether windows cast shadows.
     pub shadows: bool,
-    /// The most frames per second; `None` renders once per refresh.
-    pub max_fps: Option<u32>,
+    /// The fewest frames per second when there may be fewer than one per
+    /// refresh; `None` renders once per refresh.
+    pub min_fps: Option<u32>,
     /// The user's variable refresh rate choice: `Some` overrides what the
     /// compositor detects, `None` keeps it.
     pub vrr: Option<bool>,
@@ -136,7 +141,7 @@ impl Effects {
             snap_assist: opacity(self.panels.snap_assist),
             animate: !low_power && !self.reduce_motion,
             shadows: !low_power && self.windows.shadows,
-            max_fps: low_power.then_some(LOW_POWER_MAX_FPS),
+            min_fps: low_power.then_some(LOW_POWER_MIN_FPS),
             vrr: match self.vrr {
                 Vrr::Automatic => None,
                 Vrr::On => Some(true),
@@ -225,7 +230,7 @@ mod tests {
         assert!(look.blur > 0);
         assert!(look.top_bar < 1.0 && look.top_bar >= 0.2);
         assert!(look.animate && look.shadows);
-        assert_eq!(look.max_fps, None);
+        assert_eq!(look.min_fps, None);
         assert_eq!(look.vrr, None);
     }
 
@@ -239,7 +244,7 @@ mod tests {
         assert!(look.low_power);
         assert_eq!(look.blur, 0);
         assert!(!look.animate && !look.shadows);
-        assert_eq!(look.max_fps, Some(LOW_POWER_MAX_FPS));
+        assert_eq!(look.min_fps, Some(LOW_POWER_MIN_FPS));
         assert!(look.top_bar >= LOW_POWER_MIN_OPACITY);
     }
 

@@ -1,0 +1,43 @@
+[package]
+name = "derisk-terminal"
+description = "derisk Terminal: a small terminal emulator drawn on the GPU, or in software where there is none"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "derisk-terminal"
+path = "src/main.rs"
+
+[dependencies]
+# The emulator itself: the VT parser, the grid, scrollback, selection and
+# the pty. What this crate adds is the window, the fonts and the drawing.
+alacritty_terminal = { version = "0.26.0", default-features = false }
+crossbeam-channel.workspace = true
+# Fonts are found the way every other app finds them, from fontconfig's
+# directories, and rasterised by swash, which reads the PUA glyphs Nerd
+# Fonts add like any other outline.
+fontdb = { version = "0.23.0", default-features = false, features = ["std", "fs", "memmap", "fontconfig"] }
+swash = { version = "0.2.10", default-features = false, features = ["std", "scale", "render"] }
+# The GPU path: OpenGL ES 3 (or desktop GL 3.3) through EGL, the stack
+# eframe already brings into the workspace.
+glow = "0.17.0"
+glutin = { version = "0.32.3", default-features = false, features = ["egl", "wayland", "x11"] }
+glutin-winit = { version = "0.5.0", default-features = false, features = ["egl", "wayland", "x11"] }
+# The software path: a shared-memory buffer the CPU fills.
+softbuffer = { version = "0.4.8", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "x11-dlopen"] }
+mcsapi-theme.workspace = true
+miette = { workspace = true, features = ["fancy"] }
+raw-window-handle = "0.6.2"
+# The pty's stop signal, polling it beside the pty itself, and telling
+# the pty its size.
+rustix = { version = "1.1.5", features = ["event", "fs", "termios"] }
+serde_json.workspace = true
+# The clipboard and the primary selection over Wayland's data device.
+smithay-clipboard = "0.7.3"
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen", "x11"] }
