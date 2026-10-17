@@ -673,10 +673,14 @@ fn save_open_apps_in(machine: &str) -> Result<(), String> {
 
 /// The second line of a machine's row.
 fn details(machine: &Machine) -> String {
-    let template = machine.template.as_ref().map_or_else(
-        || "not made by pm".to_owned(),
-        |t| format!("from {}", t.name),
-    );
+    // A machine with neither a template nor a system pm made from CDs was
+    // not made by pm at all.
+    let template = match (&machine.template, machine.system.as_deref()) {
+        (Some(t), _) => format!("from {}", t.name),
+        (None, Some("windows")) => "Windows from a CD".to_owned(),
+        (None, Some(_)) => "Linux from a CD".to_owned(),
+        (None, None) => "not made by pm".to_owned(),
+    };
     format!(
         "{} · {} · {} MiB · {} {}",
         machine.label,
@@ -821,6 +825,16 @@ mod tests {
         assert_eq!(
             details(&odd),
             "gray · not made by pm · 2048 MiB · 1 processor"
+        );
+        odd.system = Some("windows".into());
+        assert_eq!(
+            details(&odd),
+            "gray · Windows from a CD · 2048 MiB · 1 processor"
+        );
+        odd.system = Some("linux".into());
+        assert_eq!(
+            details(&odd),
+            "gray · Linux from a CD · 2048 MiB · 1 processor"
         );
         assert_eq!(
             details(&machine("work", Label::Blue)),
