@@ -502,7 +502,7 @@ pub(crate) fn top_bar(ui: &mut egui::Ui, b: &mut TopBar) {
     ui.end_row();
     ui.label("Show");
     ui.vertical(|ui| {
-        ui.checkbox(&mut b.search, "Search field");
+        ui.checkbox(&mut b.search, "Search button");
         ui.checkbox(&mut b.app_name, "Focused app's name");
         ui.checkbox(&mut b.date, "Date");
         ui.checkbox(&mut b.battery, "Battery");
