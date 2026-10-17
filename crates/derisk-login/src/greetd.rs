@@ -430,6 +430,16 @@ impl Login {
         }
     }
 
+    /// Shows `text` under the field until the next attempt, as an error
+    /// when `error`: for what the greeter did itself, such as switching to
+    /// a session that is running already.
+    pub fn tell(&mut self, text: impl Into<String>, error: bool) {
+        self.notice = Some(Notice {
+            text: text.into(),
+            error,
+        });
+    }
+
     /// The request could not be sent or answered: greetd is gone.
     pub fn disconnected(&mut self, error: &str) {
         self.answer.clear();

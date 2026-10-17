@@ -1,4 +1,4 @@
-//! Session: lock, suspend, hibernate, log out, restart and shut down. The
+//! Session: lock, switch user, suspend, hibernate, log out, restart and shut down. The
 //! ones that lose work ask for a second Enter.
 
 use derisk_palette_sdk::{Category, Entry, Guest, Hook, Manifest, View, export, json};
@@ -9,7 +9,7 @@ impl Guest for Session {
     fn describe() -> Manifest {
         Manifest::new(
             "session",
-            "Lock, suspend, hibernate, log out, restart and shut down",
+            "Lock, switch user, suspend, hibernate, log out, restart and shut down",
         )
         .hooks(&[Hook::Entries])
         .categories(&[Category::Session])
@@ -33,6 +33,13 @@ pub fn entries() -> Vec<Entry> {
             "system-lock-screen",
             "lock",
             "lock away system session",
+            false,
+        ),
+        (
+            "Switch User",
+            "system-switch-user",
+            "switch_user",
+            "switch user account log in someone else login screen",
             false,
         ),
         (

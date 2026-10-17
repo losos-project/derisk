@@ -67,6 +67,7 @@ fn clause(text: &str) -> Result<Action, NotUnderstood> {
     };
     let action = match verb {
         "lock" => session(SessionOp::Lock),
+        "switch" if has("user") || has("account") => session(SessionOp::SwitchUser),
         "suspend" | "sleep" => session(SessionOp::Suspend),
         "hibernate" => session(SessionOp::Hibernate),
         "logout" | "log" | "sign" if verb == "logout" || has("out") || has("off") => {

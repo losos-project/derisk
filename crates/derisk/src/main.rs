@@ -305,6 +305,11 @@ fn session(args: &[String]) -> Result {
             other => return Err(usage(format!("unknown session option: {other}"))),
         }
     }
+    // The Users page in Settings says why homed would refuse a new
+    // person's password while it is typed, as first-boot setup does.
+    derisk_settings::users::set_password_check(|password, user| {
+        pwquality::Checker::load()?.weakness(password, user)
+    });
     host::run(options)
 }
 

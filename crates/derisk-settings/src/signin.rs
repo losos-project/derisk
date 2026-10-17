@@ -242,14 +242,67 @@ enum Event {
 }
 
 /// A job running on its worker thread.
-struct Running {
+pub(crate) struct Running {
     label: &'static str,
     events: mpsc::Receiver<Event>,
     /// The latest line worth showing.
     last: Option<String>,
 }
 
-fn spawn(job: Job) -> Running {
+impl std::fmt::Debug for Running {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Running")
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
+impl Running {
+    /// What the status line says while it runs: its latest line, or what
+    /// it is.
+    pub(crate) fn shown(&self) -> &str {
+        self.last.as_deref().unwrap_or(self.label)
+    }
+
+    /// Takes the lines printed since the last frame. Once the job is done,
+    /// returns the status line and whether it reports a failure: the job's
+    /// last line, which is homectl's or fprintd's reason, or its exit.
+    pub(crate) fn poll(&mut self) -> Option<(String, bool)> {
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                Event::Line(line) => {
+                    let shown = enroll_message(&line).map(str::to_owned).or_else(|| {
+                        // homectl's own lines, minus its log prefixes.
+                        let line = line.trim();
+                        (!line.is_empty() && !line.starts_with("Enrolling "))
+                            .then(|| line.to_owned())
+                    });
+                    if shown.is_some() {
+                        self.last = shown;
+                    }
+                }
+                Event::Done(result) => {
+                    let last = self.last.take();
+                    return Some(match result {
+                        Ok(()) => (format!("{}: done", self.label), false),
+                        Err(e) => (last.unwrap_or(e), true),
+                    });
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Runs `job` on a worker thread, reading what it prints as it comes.
+///
+/// homectl reads secrets from its environment once. When homed refuses the
+/// one it was given (a new password its quality check rejects), homectl asks
+/// for another, and with no terminal it asks a password agent with no time
+/// limit; nothing on the desktop answers those, so the job would never end.
+/// While it runs, every question it asks is answered "cancel", and homectl
+/// exits with homed's reason as its last line.
+pub(crate) fn spawn(job: Job) -> Running {
     let (tx, events) = mpsc::channel();
     let label = job.label;
     derisk_sys::thread::detach(move || {
@@ -267,25 +320,35 @@ fn spawn(job: Job) -> Running {
                 return;
             }
         };
-        // stderr carries homectl's messages ("Please confirm presence on
-        // security token"), stdout fprintd's; both are read as they come.
-        let stderr = child.stderr.take().map(|err| {
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(err).lines().map_while(Result::ok) {
+        let pid = child.id();
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let finished = std::thread::scope(|scope| {
+            // stderr carries homectl's messages ("Please confirm presence on
+            // security token"), stdout fprintd's; both are read as they come.
+            if let Some(err) = child.stderr.take() {
+                let tx = tx.clone();
+                scope.spawn(move || {
+                    for line in BufReader::new(err).lines().map_while(Result::ok) {
+                        let _ = tx.send(Event::Line(line));
+                    }
+                });
+            }
+            scope.spawn(|| {
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    cancel_questions(pid);
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            });
+            if let Some(out) = child.stdout.take() {
+                for line in BufReader::new(out).lines().map_while(Result::ok) {
                     let _ = tx.send(Event::Line(line));
                 }
-            })
-        });
-        if let Some(out) = child.stdout.take() {
-            for line in BufReader::new(out).lines().map_while(Result::ok) {
-                let _ = tx.send(Event::Line(line));
             }
-        }
-        if let Some(stderr) = stderr {
-            let _ = stderr.join();
-        }
-        let done = match child.wait() {
+            let finished = child.wait();
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+            finished
+        });
+        let done = match finished {
             Ok(status) if status.success() => Ok(()),
             Ok(status) => Err(format!("{} failed ({status})", job.argv[0])),
             Err(e) => Err(e.to_string()),
@@ -298,6 +361,38 @@ fn spawn(job: Job) -> Running {
         last: None,
     }
 }
+
+/// Answers "cancel" to each password question process `pid` is waiting on,
+/// in the system's agent directory and the user's own
+/// ([`derisk_install::account::ask_socket`]).
+#[cfg(unix)]
+fn cancel_questions(pid: u32) {
+    use derisk_install::account;
+    let user = derisk_sys::env::var_os("XDG_RUNTIME_DIR")
+        .map(|dir| std::path::PathBuf::from(dir).join("systemd/ask-password"));
+    let dirs = std::iter::once(std::path::PathBuf::from(account::ASK_PASSWORD_DIR)).chain(user);
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_name().as_encoded_bytes().starts_with(b"ask.") {
+                continue;
+            }
+            let Ok(ask) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            if let Some(socket) = account::ask_socket(&ask, pid) {
+                let _ = std::os::unix::net::UnixDatagram::unbound()
+                    .and_then(|s| s.send_to(account::ASK_CANCEL, &socket));
+            }
+        }
+    }
+}
+
+/// A browser page runs no commands, so nothing ever asks.
+#[cfg(not(unix))]
+fn cancel_questions(_pid: u32) {}
 
 /// Setting up verification codes: the new secret, until a code from the
 /// app proves it was scanned.
@@ -342,7 +437,7 @@ impl std::fmt::Debug for SigninUi {
 
 /// Empties a field that held a secret, overwriting its bytes first: the
 /// buffer keeps its capacity, so the spaces land where the secret was.
-fn wipe(text: &mut String) {
+pub(crate) fn wipe(text: &mut String) {
     let len = text.len();
     text.clear();
     text.extend(std::iter::repeat_n(' ', len));
@@ -386,31 +481,10 @@ impl SigninUi {
         let Some(running) = &mut self.running else {
             return;
         };
-        while let Ok(event) = running.events.try_recv() {
-            match event {
-                Event::Line(line) => {
-                    let shown = enroll_message(&line).map(str::to_owned).or_else(|| {
-                        // homectl's own lines, minus its log prefixes.
-                        let line = line.trim();
-                        (!line.is_empty() && !line.starts_with("Enrolling "))
-                            .then(|| line.to_owned())
-                    });
-                    if shown.is_some() {
-                        running.last = shown;
-                    }
-                }
-                Event::Done(result) => {
-                    let label = running.label;
-                    let last = running.last.take();
-                    self.status = Some(match result {
-                        Ok(()) => (format!("{label}: done"), false),
-                        Err(e) => (last.unwrap_or(e), true),
-                    });
-                    self.running = None;
-                    self.load();
-                    return;
-                }
-            }
+        if let Some(result) = running.poll() {
+            self.status = Some(result);
+            self.running = None;
+            self.load();
         }
     }
 }
@@ -463,7 +537,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SigninUi, theme: &Theme) {
     if let Some(running) = &state.running {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label(running.last.as_deref().unwrap_or(running.label));
+            ui.label(running.shown());
         });
         ui.add_space(8.0);
         ui.ctx()

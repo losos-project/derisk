@@ -1155,7 +1155,7 @@ impl ShellUi {
             SessionOp::Logout => ("log out", "Log out"),
             SessionOp::Reboot => ("restart the computer", "Restart"),
             SessionOp::PowerOff => ("power off the computer", "Power off"),
-            SessionOp::Lock | SessionOp::Suspend | SessionOp::Hibernate => {
+            SessionOp::Lock | SessionOp::SwitchUser | SessionOp::Suspend | SessionOp::Hibernate => {
                 ("change the session", "Continue")
             }
         };
@@ -4362,12 +4362,23 @@ fn login_status(ui: &mut Ui, text: &str, error: bool, theme: &Theme) {
     ui.label(RichText::new(text).color(color));
 }
 
+/// What the person did on the lock screen this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LockInput {
+    /// Nothing to act on.
+    None,
+    /// Enter in the field: send what was typed.
+    Submit,
+    /// "Switch user": show the login screen, leaving this session locked.
+    SwitchUser,
+}
+
 /// Draws the lock screen over the whole output: the wallpaper, the clock,
 /// who is locked out, and the field answering whatever PAM asks -- the
 /// password, a security key's PIN, a new password once the old one expired.
 /// The line under it carries PAM's own messages, the fingerprint reader's
-/// among them. Returns `true` when Enter was pressed in the field, to send
-/// what was typed.
+/// among them, and, when `switch` (a display manager can show a login
+/// screen beside this session), "Switch user" goes under that.
 ///
 /// The host also stops drawing windows while locked, so nothing on the
 /// desktop shows through even if this frame were skipped.
@@ -4378,8 +4389,9 @@ pub fn show_lock(
     theme: &Theme,
     user: &str,
     picture: &mut WallpaperPainter,
-) -> bool {
-    let mut submit = false;
+    switch: bool,
+) -> LockInput {
+    let mut input = LockInput::None;
     let background = |painter: &Painter, screen: Rect| {
         picture.paint(painter, screen, theme, Visibility::default());
         // A picture can be any brightness; darken it so the clock and the
@@ -4411,17 +4423,29 @@ pub fn show_lock(
                     login_field(ui, &mut nothing, false, true, &hint);
                 }
             }
-            submit = editable && ui.input(|i| i.key_pressed(Key::Enter));
+            if editable && ui.input(|i| i.key_pressed(Key::Enter)) {
+                input = LockInput::Submit;
+            }
             ui.add_space(8.0);
             let (text, error) = lock.message();
             login_status(ui, text, error, theme);
+            if switch {
+                ui.add_space(16.0);
+                let button =
+                    egui::Button::new(RichText::new("Switch user").color(theme.foreground))
+                        .fill(theme.foreground.gamma_multiply(0.08))
+                        .corner_radius(8.0);
+                if ui.add(button).clicked() {
+                    input = LockInput::SwitchUser;
+                }
+            }
         },
     );
     // Both conversations answer between frames, the reader's whenever a
     // finger lands, so keep looking for them while locked.
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(100));
-    submit
+    input
 }
 
 /// What the person did in polkit's dialog this frame.
@@ -4636,15 +4660,92 @@ pub enum GreeterInput {
     Submit,
     /// Escape: back to the user name.
     Back,
+    /// Picked someone whose session is running already: go to it, by index
+    /// into the greeter's users.
+    Switch(usize),
+}
+
+/// Someone the greeter offers to log in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoginUser {
+    /// Their user name, which PAM is asked about.
+    pub name: String,
+    /// Their full name, or empty.
+    pub real_name: String,
+    /// Their running session on this seat, by logind ID: picking them goes
+    /// back to it, where their own lock screen asks for the password.
+    pub session: Option<String>,
+}
+
+impl LoginUser {
+    /// What the list calls them.
+    pub fn display_name(&self) -> &str {
+        if self.real_name.trim().is_empty() {
+            &self.name
+        } else {
+            &self.real_name
+        }
+    }
+}
+
+/// One person in the greeter's list: their initial in a circle, their name,
+/// and whether they are signed in. Returns the row's response.
+fn login_user(ui: &mut Ui, user: &LoginUser, picked: bool, theme: &Theme) -> egui::Response {
+    let height = 52.0;
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click());
+    let painter = ui.painter();
+    if picked || response.hovered() {
+        painter.rect_filled(rect, 10.0, theme.foreground.gamma_multiply(0.08));
+    }
+    let circle = rect.left_center() + vec2(12.0 + 16.0, 0.0);
+    painter.circle_filled(circle, 16.0, theme.accent.gamma_multiply(0.45));
+    let initial: String = user
+        .display_name()
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default();
+    painter.text(
+        circle,
+        Align2::CENTER_CENTER,
+        initial,
+        FontId::proportional(16.0),
+        theme.foreground,
+    );
+    let text_x = circle.x + 16.0 + 12.0;
+    let name_y = if user.session.is_some() {
+        rect.center().y - 8.0
+    } else {
+        rect.center().y
+    };
+    painter.text(
+        egui::pos2(text_x, name_y),
+        Align2::LEFT_CENTER,
+        user.display_name(),
+        FontId::proportional(16.0),
+        theme.foreground,
+    );
+    if user.session.is_some() {
+        painter.text(
+            egui::pos2(text_x, rect.center().y + 10.0),
+            Align2::LEFT_CENTER,
+            "Signed in",
+            FontId::proportional(12.0),
+            theme.border,
+        );
+    }
+    response
 }
 
 /// Draws `derisk greeter`: the lock screen's look, asking first who is
 /// logging in and then whatever PAM asks through greetd. `users` are offered
-/// as buttons above the field when there are several to pick from.
+/// as a list above the field when there are several to pick from, those
+/// signed in already marked so.
 pub fn show_greeter(
     ui: &mut Ui,
     login: &mut Login,
-    users: &[String],
+    users: &[LoginUser],
     screen: Rect,
     clock: &Clock,
     theme: &Theme,
@@ -4658,16 +4759,19 @@ pub fn show_greeter(
         let editable = login.editable();
         match login.phase().clone() {
             Phase::User => {
-                if users.len() > 1 {
-                    // One per line, centered under the clock like the rest.
-                    ui.vertical_centered(|ui| {
-                        for user in users {
-                            if ui.selectable_label(login.username == *user, user).clicked() {
-                                login.username = user.clone();
-                                input = GreeterInput::Submit;
-                            }
+                if users.len() > 1 || users.iter().any(|u| u.session.is_some()) {
+                    // One per line, the width of the field under them.
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    for (index, user) in users.iter().enumerate() {
+                        if login_user(ui, user, login.username == user.name, theme).clicked() {
+                            login.username = user.name.clone();
+                            input = if user.session.is_some() {
+                                GreeterInput::Switch(index)
+                            } else {
+                                GreeterInput::Submit
+                            };
                         }
-                    });
+                    }
                     ui.add_space(8.0);
                 }
                 let hint = login.hint().to_owned();
