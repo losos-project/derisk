@@ -25,8 +25,8 @@ use wasmtime::{
 };
 
 pub use crate::wit::palette::derisk::palette::types::{
-    App, AppAction, Category, Desk, Entry, File, Hook, Input, Manifest, MenuCommand, Position,
-    Registration, TrayItem, View, Window, Workspace,
+    App, AppAction, Category, Desk, Entry, File, FileMatch, Hook, Input, Manifest, MenuCommand,
+    Position, Registration, TrayItem, View, Window, Workspace,
 };
 use crate::{Interpreter, Kind, bundled, check_actions, engine::Runtime, engine::State, wit};
 
@@ -116,6 +116,7 @@ impl Default for View {
             tray: Vec::new(),
             failed_units: Vec::new(),
             files: Vec::new(),
+            file_matches: Vec::new(),
             search_engine: None,
             registered: Vec::new(),
         }
@@ -160,6 +161,9 @@ impl Plugin {
         }
         if self.reads(Input::Files) {
             out.files.clone_from(&view.files);
+        }
+        if self.reads(Input::Contents) {
+            out.file_matches.clone_from(&view.file_matches);
         }
         if self.reads(Input::SearchEngine) {
             out.search_engine.clone_from(&view.search_engine);

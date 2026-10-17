@@ -415,14 +415,20 @@ pub struct ShellUi {
 /// the shell draws them on a HiDPI screen.
 const ICON_PX: u32 = 64;
 
-/// Command palette state. The host fills [`PaletteUi::apps`] and the files
-/// ([`PaletteUi::set_files`]); the rest is kept between openings.
+/// Command palette state. The host fills [`PaletteUi::apps`], the files
+/// ([`PaletteUi::set_files`]) and what the file index found for the typed
+/// text ([`PaletteUi::file_search`], [`PaletteUi::set_file_matches`]); the
+/// rest is kept between openings.
 #[derive(Default)]
 pub struct PaletteUi {
     /// Installed apps, for the apps plugin.
     pub apps: Vec<palette::App>,
     /// Indexed files (see [`palette::index_files`]), for the files plugin.
     files: Vec<palette::File>,
+    /// What the file index last found, for the files plugin. Kept until
+    /// the answer for newer text replaces it, so the rows do not blink out
+    /// and back in on every key.
+    file_matches: Vec<palette::FileMatch>,
     /// The plugins' rows, kept until what they read changes.
     catalog: palette::Catalog,
     /// What was chosen before, for ranking.
@@ -469,6 +475,24 @@ impl PaletteUi {
             self.files = files;
             self.catalog.files_changed();
         }
+    }
+
+    /// The text to ask the file index about: the typed text while the
+    /// palette is open on a search the files plugin is asked for (no
+    /// prefix, or `/` or `~`), and `None` otherwise.
+    pub fn file_search(&self) -> Option<&str> {
+        let (scope, text) = palette::scope(&self.query);
+        (self.open
+            && !self.chat
+            && matches!(scope, palette::Scope::All | palette::Scope::Files)
+            && !text.is_empty())
+        .then_some(text)
+    }
+
+    /// What the file index found for the text [`PaletteUi::file_search`]
+    /// last gave.
+    pub fn set_file_matches(&mut self, matches: Vec<palette::FileMatch>) {
+        self.file_matches = matches;
     }
 }
 
@@ -2893,6 +2917,7 @@ impl ShellUi {
             state.done_at = None;
             state.fold = None;
             state.opened_turn = shell.conversation.last_id().unwrap_or(0);
+            state.file_matches.clear();
         }
         // `?` switches to the conversation; the rest is the request.
         if !state.chat
@@ -2903,7 +2928,8 @@ impl ShellUi {
         }
 
         let plugins = palette::plugins();
-        let view = palette::view(shell, &state.apps);
+        let mut view = palette::view(shell, &state.apps);
+        view.file_matches.clone_from(&state.file_matches);
         let (entries, hits, query_rows) = if state.chat {
             (&[][..], Vec::new(), None)
         } else {

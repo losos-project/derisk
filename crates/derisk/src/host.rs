@@ -75,6 +75,7 @@ use mcsapi::WindowId;
 use tracing::{debug, info, warn};
 
 use crate::{
+    file_search::FileSearch,
     machines::{self, MachineDisplays},
     notifications, pam, polkit_agent, power, unlock,
 };
@@ -279,6 +280,8 @@ pub struct Session {
     machines: Option<MachineDisplays>,
     /// power-profiles-daemon's profiles, offered in the palette.
     power_modes: power::PowerModes,
+    /// Searches of the file index for the palette's typed text.
+    file_search: Option<FileSearch>,
     /// Apps' notifications, which `crate::notifications` fills.
     notifications: notifications::Center,
 }
@@ -475,6 +478,7 @@ impl Session {
             locked_elsewhere: false,
             machines: MachineDisplays::start(),
             power_modes: power::PowerModes::default(),
+            file_search: FileSearch::start(),
             notifications: notifications::Center::default(),
         }
     }
@@ -1575,6 +1579,13 @@ impl compositor::Shell for Session {
         // up to a second later.
         self.notifications.expire(Instant::now());
         self.poll_pictures();
+        // Every frame, so what the index finds shows the frame after it
+        // answers.
+        if let Some(search) = &mut self.file_search
+            && let Some(found) = search.poll(self.ui.palette.file_search())
+        {
+            self.ui.palette.set_file_matches(found);
+        }
         // Every frame, before the host asks where the windows are.
         self.move_windows();
         if !self.ending.is_empty() && self.ui.has_shut() {

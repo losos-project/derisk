@@ -12,6 +12,8 @@ mod computer;
 #[cfg(feature = "host")]
 mod dm;
 #[cfg(feature = "host")]
+mod file_search;
+#[cfg(feature = "host")]
 mod first_login;
 #[cfg(feature = "host")]
 mod firstboot;

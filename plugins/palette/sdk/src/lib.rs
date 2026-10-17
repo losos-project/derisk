@@ -43,8 +43,8 @@ pub use bindings::{
     derisk::palette::{
         host::Level,
         types::{
-            App, AppAction, Category, Desk, Entry, File, Hook, Input, Manifest, MenuCommand,
-            Position, Registration, TrayItem, View, Window, Workspace,
+            App, AppAction, Category, Desk, Entry, File, FileMatch, Hook, Input, Manifest,
+            MenuCommand, Position, Registration, TrayItem, View, Window, Workspace,
         },
     },
     export,
@@ -184,6 +184,7 @@ impl Default for View {
             tray: Vec::new(),
             failed_units: Vec::new(),
             files: Vec::new(),
+            file_matches: Vec::new(),
             search_engine: None,
             registered: Vec::new(),
         }

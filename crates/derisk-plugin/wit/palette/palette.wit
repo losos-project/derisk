@@ -24,7 +24,7 @@
 // The model is pm's (losos-project/pm, `wit/plugin.wit`): a component per
 // plugin, a manifest the host holds the plugin to, fuel and memory limits,
 // and a fresh instance for every call.
-package derisk:palette@0.1.0;
+package derisk:palette@0.2.0;
 
 /// The values that cross the boundary.
 interface types {
@@ -118,6 +118,10 @@ interface types {
         /// `view.files`: names of the person's files. Only the files plugin
         /// needs them, and no other should ask.
         files,
+        /// `view.file-matches`: the person's files whose names or text
+        /// match the typed query, with the line that matched. Only the
+        /// files plugin needs them, and no other should ask.
+        contents,
         /// `view.search-engine`.
         search-engine,
         /// `view.registered`, for the sources in `manifest.sources`.
@@ -219,6 +223,19 @@ interface types {
         folder: bool,
     }
 
+    /// A file or folder whose name, folders or text match the typed query,
+    /// as derisk's file index (`derisk-index`) found it.
+    record file-match {
+        /// The file or folder.
+        file: file,
+        /// The line of its text that matched, from 1; none when its name
+        /// did.
+        line: option<u32>,
+        /// That line, cut around the first matching word, with `…` where
+        /// it was cut.
+        snippet: option<string>,
+    }
+
     /// Data a program registered for the palette over the agent socket
     /// (`register_palette`), such as a browser's tabs.
     record registration {
@@ -248,6 +265,10 @@ interface types {
         failed-units: list<string>,
         /// Indexed files. Needs `input.files`.
         files: list<file>,
+        /// Files matching the typed query, best first; empty in the view
+        /// `entries` gets, and until the index has answered. Needs
+        /// `input.contents`.
+        file-matches: list<file-match>,
         /// The chosen web search engine's name, if any. Needs
         /// `input.search-engine`.
         search-engine: option<string>,
@@ -331,6 +352,8 @@ world palette-plugin {
     /// The plugin's catalog for this view.
     export entries: func(view: view) -> list<entry>;
     /// Rows for typed `text`. Asked only for a query with no scope prefix
-    /// (`>`, `@`, `/`, `~`, `?`), which narrows the palette to the catalog.
+    /// (`>`, `@`, `/`, `~`, `?`), which narrows the palette to the catalog,
+    /// except that a plugin reading `input.contents` is asked for a files
+    /// query (`/` or `~`) too, with the prefix taken off.
     export query: func(view: view, text: string) -> list<entry>;
 }
