@@ -25,13 +25,14 @@ const PROFILE: &str = "wasm-plugin";
 
 /// The bundled palette plugins, in the order the palette asks them. Each is
 /// the package `palette-<name>` under `plugins/palette/<name>`.
-const PALETTE: [&str; 13] = [
+const PALETTE: [&str; 14] = [
     "apps",
     "windows",
     "menus",
     "commands",
     "workspaces",
     "session",
+    "power",
     "system",
     "browser",
     "machines",

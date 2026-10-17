@@ -383,7 +383,7 @@ $ sudo install -m644 crates/derisk/data/pam.d/derisk-login crates/derisk/data/pa
 ## Usage
 
 ```console
-$ cargo run --release --features host -- session --launch foot
+$ cargo run --release --features host -- session --launch derisk-terminal
 ```
 
 `derisk session` runs the desktop as a Smithay compositor nested in a window
@@ -578,6 +578,7 @@ nothing but the workspace at the root:
 | `derisk-portal` | `xdg-desktop-portal-derisk`. |
 | `derisk-machines` | The libvirt machines apps run in (labels, states, starting and stopping them, running programs in them) and the Machines app. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
+| `derisk-terminal` | Terminal, the `derisk-terminal` binary, below. |
 
 Each crate keeps everything it needs in its own directory (its README,
 LICENSE and any `data/`), and reaches its siblings only through the
@@ -638,6 +639,44 @@ $ derisk session --runtime panel:bottom:48 "my-gpui-dock"
 $ derisk session --runtime overlay "my-gpui-launcher"
 ```
 
+### Terminal
+
+`derisk-terminal` is the desktop's terminal, its own Wayland client
+(`org.derisk.terminal`). The emulation is
+[alacritty_terminal](https://crates.io/crates/alacritty_terminal)'s; the
+window, fonts and drawing are the crate's own:
+
+- The font is the theme's monospace family (`[fonts] monospace`, Hack by
+  default), its Nerd Font build first, then the symbols-only Nerd Font, so
+  the icons prompts and TUIs print draw like letters. An icon followed by a
+  blank cell may use it; anything still too big is scaled into its cells.
+  Box-drawing and block characters are drawn to the cell, so borders join.
+- Drawing is deferred: output from the shell only changes the grid, and one
+  frame is built from it when the compositor is ready for one, however much
+  was printed in between. Synchronised updates (mode 2026) are honoured.
+- The frame is drawn on the GPU in one instanced OpenGL ES 3 call. Without a
+  GPU, or where GL is only Mesa's llvmpipe, the CPU draws the same frame into
+  shared memory. `--renderer gpu|software` (or `DERISK_TERMINAL_RENDERER`)
+  picks one.
+- Colours and the font follow `$XDG_RUNTIME_DIR/derisk/theme.json`, re-read
+  when the window gains focus.
+
+Ctrl+Shift+C and Ctrl+Shift+V copy and paste, a selection is the primary
+selection (middle click pastes it), Shift+PageUp and Shift+PageDown scroll
+back, and Ctrl+plus, Ctrl+minus and Ctrl+0 change the font size.
+
+It takes foot's command line, so a desktop entry written for foot runs in it
+with only the program's name changed: a bare command or `-e COMMAND`,
+`-D`/`--working-directory`, `-a`/`--app-id` (the window's app ID, for a
+launcher that wants its own name and icon on the window) and
+`-T`/`--title`, each as `--name value` or `--name=value`.
+
+```console
+$ cargo run -p derisk-terminal
+$ cargo run -p derisk-terminal -- htop
+$ cargo run -p derisk-terminal -- --app-id=org.example.Top --title=top htop
+```
+
 ## Building
 
 Requires Rust 1.96 (wasmtime's minimum, for the palette plugins) and the system libraries mcsapi links against, for
@@ -661,7 +700,7 @@ GPU and windowing libraries. With [nix-direnv](https://github.com/nix-community/
 $ nix develop                # the dev shell
 $ nix build                  # derisk with the host feature and its portal, plus their units and portal files under share/
 $ nix build .#derisk-preview # the apps' preview window
-$ nix run . -- session --launch foot
+$ nix run . -- session --launch derisk-terminal
 $ nix flake check            # rustfmt, clippy and tests (default and host + preview)
 $ nix fmt                    # nixfmt and rustfmt
 ```
