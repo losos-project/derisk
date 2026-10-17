@@ -41,10 +41,12 @@ use std::{
 
 use derisk::{
     action::{Action, Effect},
+    animation,
     backlight::{self, PasswordDim},
     conversation::Source,
     desktop::{self, DesktopEntry},
     effects::{Effects, SettingsWatch},
+    familiarity::Familiarity,
     geom::{inset, rect},
     greetd::{Login, Phase, Request},
     idle::{self, Event as IdleEvent},
@@ -68,7 +70,7 @@ use derisk::{
     widgets,
     window_motion::{Shown, WindowMotion},
 };
-use derisk_settings::{KeyName, Power, Privacy, Shortcuts};
+use derisk_settings::{KeyName, Power, Privacy, Shortcuts, familiarity};
 use mcsapi::WindowId;
 use tracing::{debug, info, warn};
 
@@ -176,6 +178,12 @@ pub struct Session {
     /// Windows opening, gliding and snapping, and where each is drawn this
     /// frame while it does.
     window_motion: WindowMotion,
+    /// The windows' motion's time: since the session started, sped up as
+    /// the person gets used to the desktop, and its reading this frame.
+    motion_clock: animation::MotionClock,
+    motion_ms: f64,
+    /// Time spent at the desktop, which sets how fast everything moves.
+    familiarity: Familiarity,
     shown: HashMap<WindowId, Shown>,
     last_tick: Option<Instant>,
     last_sleep_check: Option<Instant>,
@@ -346,7 +354,18 @@ fn app_index(core: &[DesktopEntry], installed: &[DesktopEntry]) -> derisk::apps:
 impl Session {
     /// The clock window motion runs on, in milliseconds.
     fn motion_now(&self) -> f64 {
-        self.start.elapsed().as_secs_f64() * 1000.0
+        self.motion_ms
+    }
+
+    /// How many times as fast as the film everything moves: quicker the
+    /// longer the person has used the desktop, unless Settings ›
+    /// Appearance turned that off.
+    fn motion_speed(&self) -> f32 {
+        if self.shell.effects.settle_motion {
+            self.familiarity.speed()
+        } else {
+            1.0
+        }
     }
 
     /// Works out where each window is drawn this frame.
@@ -405,6 +424,9 @@ impl Session {
             ending: Vec::new(),
             ended: None,
             window_motion: WindowMotion::default(),
+            motion_clock: animation::MotionClock::default(),
+            motion_ms: 0.0,
+            familiarity: Familiarity::open(familiarity::default_path()),
             shown: HashMap::new(),
             last_tick: None,
             last_sleep_check: None,
@@ -1426,8 +1448,7 @@ impl Session {
     }
 
     fn startup_done(&self) -> bool {
-        let elapsed = self.start.elapsed().as_millis() as u32;
-        self.ui.startup_frame(elapsed).done
+        self.ui.startup_done()
     }
 }
 
@@ -1543,6 +1564,11 @@ impl compositor::Shell for Session {
     /// once a second, and whether the machine can hibernate every half
     /// minute.
     fn tick(&mut self) {
+        self.motion_clock.set_speed(self.motion_speed());
+        self.ui.motion_speed = self.motion_speed();
+        self.motion_ms = self
+            .motion_clock
+            .at(self.start.elapsed().as_secs_f64() * 1000.0);
         self.poll_idle();
         self.dim_for_password();
         if !self.tutorial_checked && self.startup_done() && !self.lock.is_locked() {
@@ -1580,6 +1606,10 @@ impl compositor::Shell for Session {
             return;
         }
         self.last_tick = Some(Instant::now());
+        // Only a real session counts, so trying derisk out nested in
+        // another desktop doesn't quicken the person's own.
+        let in_use = self.execute && !self.lock.is_locked() && !self.shell.dimmed;
+        self.familiarity.tick(Instant::now(), in_use);
         if let Some(machines) = &mut self.machines {
             machines.poll(&mut self.commands);
             self.shell.machines = machines
