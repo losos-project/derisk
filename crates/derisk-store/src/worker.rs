@@ -137,7 +137,7 @@ mod threads {
         }
 
         /// Starts the threads on the flatpak `place` gives, called on the
-        /// threads since finding a machine asks libvirt, with reviews from
+        /// threads since finding a machine reads the person's machines, with reviews from
         /// `fetch`.
         pub fn start_with(
             place: impl FnOnce() -> Arc<dyn Flatpak> + Send + 'static,
@@ -215,8 +215,8 @@ mod threads {
         }
     }
 
-    /// Where the store finds flatpak: in the Flatpak machine when libvirt has
-    /// one, otherwise on this computer.
+    /// Where the store finds flatpak: in the Flatpak machine when the person
+    /// has one, otherwise on this computer.
     pub fn place() -> Arc<dyn Flatpak> {
         match flatpak::Machine::find() {
             Some(machine) => Arc::new(machine),

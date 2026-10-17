@@ -51,11 +51,11 @@ const GUEST_WAIT: Duration = Duration::from_secs(15);
 const LOOK_AGAIN: Duration = Duration::from_secs(1);
 
 /// Finds the machine Flatpak runs in: the first made from [`TEMPLATE`].
-/// `None` without one, or without libvirt, when the page reads this
+/// `None` without one, or without a machines folder, when the page reads this
 /// computer's own Flatpak instead. Fits
 /// [`derisk_settings::flatpak::FindInstallation`].
 pub fn find() -> Option<Box<dyn Installation>> {
-    let hypervisor = Hypervisor::open_read_only().ok()?;
+    let hypervisor = Hypervisor::open().ok()?;
     let machine = hypervisor
         .machines()
         .ok()?
@@ -226,8 +226,8 @@ impl Installation for FlatpakMachine {
     }
 }
 
-/// Does each job for the machine `name`, with a read-write connection made
-/// at the first and kept; polkit grants it to administrators outright.
+/// Does each job for the machine `name`, with the person's machines opened
+/// at the first and kept.
 fn work(name: &str, jobs: &Receiver<Job>, done: &Sender<Done>) {
     let mut hypervisor = None;
     for job in jobs {

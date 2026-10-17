@@ -24,7 +24,7 @@ pub struct MachinesApp {
     #[cfg(not(target_arch = "wasm32"))]
     worker: Worker,
     machines: Vec<Machine>,
-    /// Why libvirt cannot be reached, while it cannot.
+    /// Why the machines cannot be read, while they cannot.
     unavailable: Option<String>,
     selected: Option<String>,
     /// What the worker is doing for the person, while it is.
@@ -83,7 +83,7 @@ impl Default for MachinesApp {
 }
 
 impl MachinesApp {
-    /// Starts watching libvirt's machines.
+    /// Starts watching the person's machines.
     pub fn new() -> Self {
         let mut app = Self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -93,7 +93,7 @@ impl MachinesApp {
             unavailable: None,
             #[cfg(target_arch = "wasm32")]
             unavailable: Some(
-                "Machines run under libvirt on the computer itself, which this demo in a \
+                "Machines run under quickemu on the computer itself, which this demo in a \
                  browser does not have."
                     .into(),
             ),
@@ -554,11 +554,11 @@ impl MachinesApp {
         let (shipped, installed) = (shipped.to_owned(), installed.to_owned());
         let text = match self.plugin {
             Plugin::Outdated { .. } => {
-                "An update brought a new version of pm's libvirt plugin. Set it up again to \
+                "An update brought a new version of pm's quickemu plugin. Set it up again to \
                  sign the new one with your key."
             }
             _ => {
-                "pm makes and removes machines through its libvirt plugin, which it runs only \
+                "pm makes and removes machines through its quickemu plugin, which it runs only \
                  once you have signed it with your own key. Setting it up copies the plugin \
                  into your pm plugins and signs it, making you a key if you have none."
             }
@@ -829,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn draws_without_libvirt() {
+    fn draws_without_a_hypervisor() {
         let context = egui::Context::default();
         let mut app = MachinesApp::new();
         app.machines = vec![machine("work", Label::Blue)];
