@@ -33,7 +33,9 @@ use mcsapi_components::{
 
 use crate::{
     action::Action,
-    animation::{DOT, LoginFrame, StartupAnimation, StartupFrame, arc, ease, f, stagger},
+    animation::{
+        DOT, LoginFrame, MotionClock, StartupAnimation, StartupFrame, arc, ease, f, stagger,
+    },
     apps::{AppLook, Apps},
     conversation::{Source, StepStatus, Turn},
     decorations::Button,
@@ -340,6 +342,10 @@ pub struct ShellUi {
     pub key_hint: Option<KeyHint>,
     /// The shortcuts as bound, for the list Super+/ shows; set by the host.
     pub shortcuts: Shortcuts,
+    /// How many times as fast as the film the chrome moves, set by the host
+    /// from how used to the desktop the person is
+    /// ([`derisk_settings::familiarity`]).
+    pub motion_speed: f32,
     /// Window being dragged in the overview, toward a workspace.
     overview_drag: Option<WindowId>,
     tray: Option<(u64, Vec<TextureHandle>)>,
@@ -347,6 +353,10 @@ pub struct ShellUi {
     pub palette: PaletteUi,
     reply: Option<String>,
     reduced_motion: bool,
+    /// The startup animation's time, the session's sped up by
+    /// [`ShellUi::motion_speed`], and where it was last frame.
+    startup_clock: MotionClock,
+    startup_ms: u32,
     look: Look,
     blurs: Vec<BlurArea>,
     /// Whether the touch-sized style is applied to the egui context.
@@ -582,11 +592,14 @@ impl ShellUi {
             window_pictures: None,
             key_hint: None,
             shortcuts: Shortcuts::default(),
+            motion_speed: 1.0,
             overview_drag: None,
             tray: None,
             palette: PaletteUi::default(),
             reply: None,
             reduced_motion,
+            startup_clock: MotionClock::default(),
+            startup_ms: 0,
             look: shell.look(),
             blurs: Vec::new(),
             touch_style: false,
@@ -818,6 +831,12 @@ impl ShellUi {
         }
     }
 
+    /// Whether the startup animation had finished by the last
+    /// [`ShellUi::show`].
+    pub fn startup_done(&self) -> bool {
+        self.startup_frame(self.startup_ms).done
+    }
+
     /// Records a panel filled with the background at `opacity` so the
     /// compositor blurs behind it. Nothing shows through an opaque or
     /// invisible panel, so those aren't blurred.
@@ -984,7 +1003,10 @@ impl ShellUi {
         self.blurs.clear();
         self.startup.reduced_motion = self.reduced_motion || !self.look.animate;
         motion::set_enabled(ui.ctx(), !self.startup.reduced_motion);
-        let frame = self.startup_frame(elapsed_ms);
+        motion::set_speed(ui.ctx(), self.motion_speed);
+        self.startup_clock.set_speed(self.motion_speed);
+        self.startup_ms = self.startup_clock.at(f64::from(elapsed_ms)) as u32;
+        let frame = self.startup_frame(self.startup_ms);
         let phone = shell.is_phone();
         if phone != self.touch_style {
             set_touch_style(ui.ctx(), phone);

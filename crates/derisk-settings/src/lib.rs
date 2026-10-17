@@ -20,6 +20,7 @@
 pub mod backup;
 pub mod bluetooth;
 pub mod choice;
+pub mod familiarity;
 pub mod flatpak;
 mod layout;
 mod model;
@@ -39,7 +40,7 @@ pub mod system;
 mod thumbs;
 mod totp;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use mcsapi_components::{Button, ButtonVariant, ErrorDialog, Tokens};
 use mcsapi_ui::{
@@ -187,6 +188,8 @@ pub struct SettingsApp {
     policy: choice::Policy,
     /// The choice screens' lists, built when first shown.
     choice: Option<choice::ChoiceUi>,
+    /// Time spent at the desktop, read when the Appearance page first shows.
+    familiar: Option<Duration>,
 }
 
 /// The documentation section on `heading` of the troubleshooting page.
@@ -275,6 +278,7 @@ impl SettingsApp {
             themes: mcsapi_theme::Library::xdg("derisk").ids(),
             policy: choice::Policy::load(),
             choice: None,
+            familiar: None,
         }
     }
 
@@ -469,6 +473,45 @@ impl SettingsApp {
                     ui.label("Reduce motion");
                     ui.checkbox(&mut a.reduce_motion, "Cross-fade instead of animating");
                     ui.end_row();
+                    // With motion reduced there is nothing to quicken.
+                    ui.label("Familiar motion");
+                    ui.add_enabled(
+                        !a.reduce_motion,
+                        egui::Checkbox::new(
+                            &mut a.settle_motion,
+                            "Speed animations up as you get used to the desktop",
+                        ),
+                    );
+                    ui.end_row();
+                    if a.settle_motion && !a.reduce_motion {
+                        let active = *self.familiar.get_or_insert_with(|| {
+                            familiarity::default_path()
+                                .map(|path| familiarity::read(&path))
+                                .unwrap_or_default()
+                        });
+                        ui.label("");
+                        ui.horizontal(|ui| {
+                            let speed = familiarity::speed(active);
+                            let text = if speed < 1.05 {
+                                "Animations run at their full length for now.".to_owned()
+                            } else {
+                                format!("Animations run {speed:.1}× as fast as at first.")
+                            };
+                            ui.label(layout::note(tokens, &text));
+                            let again = Button::new("Start over")
+                                .variant(ButtonVariant::Outline)
+                                .enabled(active > Duration::ZERO);
+                            if ui.add(again).clicked() {
+                                if let Some(path) = familiarity::default_path()
+                                    && let Err(error) = familiarity::reset(&path)
+                                {
+                                    self.status = Some(format!("Could not start over: {error}"));
+                                }
+                                self.familiar = Some(Duration::ZERO);
+                            }
+                        });
+                        ui.end_row();
+                    }
                     ui.label("Background blur");
                     ui.add(
                         egui::Slider::new(&mut a.blur, 0..=10).custom_formatter(|v, _| {
