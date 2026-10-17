@@ -32,6 +32,8 @@ mod polkit_agent;
 #[cfg(feature = "host")]
 mod power;
 #[cfg(feature = "host")]
+mod pwquality;
+#[cfg(feature = "host")]
 mod unlock;
 #[cfg(feature = "host")]
 mod wizard_host;

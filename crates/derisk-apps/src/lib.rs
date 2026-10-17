@@ -38,6 +38,8 @@ pub const MONITOR: &str = "org.derisk.monitor";
 pub const CALCULATOR: &str = "org.derisk.calculator";
 /// App ID of Machines.
 pub const MACHINES: &str = derisk_machines::APP_ID;
+/// App ID of the Store.
+pub const STORE: &str = derisk_store::APP_ID;
 
 /// A catalog entry for one core app.
 #[derive(Clone, Copy, Debug)]
@@ -97,7 +99,7 @@ impl AppInfo {
 }
 
 /// Every core app, in launcher order.
-pub const APPS: [AppInfo; 6] = [
+pub const APPS: [AppInfo; 7] = [
     AppInfo {
         id: FILES,
         name: "Files",
@@ -127,7 +129,7 @@ pub const APPS: [AppInfo; 6] = [
             "permissions",
         ],
         desktop_file: include_str!("../data/org.derisk.settings.desktop"),
-        create: || Box::new(derisk_settings::SettingsApp::default()),
+        create: || Box::new(settings()),
         action: settings_action,
     },
     AppInfo {
@@ -193,6 +195,30 @@ pub const APPS: [AppInfo; 6] = [
             })
         },
     },
+    AppInfo {
+        id: STORE,
+        name: "Store",
+        summary: "Find, install and update apps from Flathub",
+        icon: "📦",
+        keywords: &[
+            "app store",
+            "software",
+            "flathub",
+            "flatpak",
+            "install",
+            "updates",
+            "bazaar",
+        ],
+        desktop_file: include_str!("../data/org.derisk.store.desktop"),
+        create: || Box::new(derisk_store::StoreApp::new()),
+        action: |a| {
+            (a == "installed").then(|| {
+                let mut store = derisk_store::StoreApp::new();
+                store.show_installed();
+                Box::new(store) as Box<dyn App>
+            })
+        },
+    },
 ];
 
 /// An app whose only action opens a fresh instance.
@@ -214,8 +240,17 @@ fn files_action(action: &str) -> Option<Box<dyn App>> {
     )))
 }
 
+/// Settings, its Privacy page reading Flatpak's apps from the machine they
+/// run in when there is one, and this computer's own otherwise.
+fn settings() -> derisk_settings::SettingsApp {
+    let app = derisk_settings::SettingsApp::default();
+    #[cfg(not(target_arch = "wasm32"))]
+    let app = app.with_flatpak_finder(derisk_machines::flatpak::find);
+    app
+}
+
 fn settings_action(action: &str) -> Option<Box<dyn App>> {
-    use derisk_settings::{Page, SettingsApp};
+    use derisk_settings::Page;
 
     let page = match action {
         "appearance" => Page::Appearance,
@@ -234,7 +269,7 @@ fn settings_action(action: &str) -> Option<Box<dyn App>> {
         "about" => Page::About,
         _ => return None,
     };
-    let mut app = SettingsApp::default();
+    let mut app = settings();
     app.page = page;
     Some(Box::new(app))
 }

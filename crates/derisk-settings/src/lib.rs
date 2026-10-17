@@ -208,6 +208,13 @@ impl SettingsApp {
         self
     }
 
+    /// Looks for Flatpak apps with `find` before this computer's standard
+    /// places: derisk-machines finds the machine Flatpak runs in.
+    pub fn with_flatpak_finder(mut self, find: flatpak::FindInstallation) -> Self {
+        self.privacy = privacy::PrivacyUi::with_finder(find);
+        self
+    }
+
     /// Opens the Privacy page on one Flatpak app's permissions.
     pub fn show_flatpak_app(&mut self, id: &str) {
         self.page = Page::Privacy;

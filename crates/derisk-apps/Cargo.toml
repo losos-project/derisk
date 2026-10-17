@@ -14,6 +14,7 @@ derisk-files.workspace = true
 derisk-machines.workspace = true
 derisk-monitor.workspace = true
 derisk-settings.workspace = true
+derisk-store.workspace = true
 derisk-sys.workspace = true
 mcsapi-runtime.workspace = true
 mcsapi-ui.workspace = true

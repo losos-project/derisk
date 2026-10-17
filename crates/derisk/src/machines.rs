@@ -4,6 +4,11 @@
 //! apps in a machine when the settings say apps open there, a machine's own
 //! screen in a window while it has one, and what the palette and the
 //! overview show of the machines.
+//!
+//! A machine's apps stay in the palette while it is off: the session keeps
+//! the last list each machine's guest gave under `$XDG_CACHE_HOME/derisk`,
+//! and a machine that has never answered offers the list its template
+//! ships (`derisk_machines::template_apps`). Picking one starts the machine.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -16,6 +21,7 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use derisk_machines::{
     GuestApp, Hypervisor, Machine,
     display::{self, Sockets},
+    setup,
 };
 use mcsapi_compositor::{Command, Sandbox};
 use serde_json::{Value, json};
@@ -76,10 +82,17 @@ pub struct MachineDisplays {
     /// Each machine's apps, as its guest agent listed them.
     listed: Receiver<(String, Vec<GuestApp>)>,
     machines: Vec<Machine>,
-    /// The apps of each running machine that has answered.
+    /// Each machine's apps: what it listed last, running or not, or what
+    /// its template ships until it has listed its own.
     apps: HashMap<String, Vec<GuestApp>>,
+    /// When each running machine last listed its apps, since it started.
+    answered: HashMap<String, Instant>,
     /// When each running machine was last asked for its apps.
     asked: HashMap<String, Instant>,
+    /// Where each machine's last list is kept, by its UUID, so the palette
+    /// offers its apps in the next session too; `None` without a cache
+    /// directory.
+    cache: Option<PathBuf>,
     /// The waypipe client of each machine whose windows can come in.
     clients: HashMap<String, Child>,
     /// Machines whose waypipe client could not start, not tried again
@@ -157,7 +170,9 @@ impl MachineDisplays {
             listed,
             machines: Vec::new(),
             apps: HashMap::new(),
+            answered: HashMap::new(),
             asked: HashMap::new(),
+            cache: cache_dir(),
             clients: HashMap::new(),
             failed: HashSet::new(),
             viewers: HashMap::new(),
@@ -220,8 +235,7 @@ impl MachineDisplays {
     }
 
     /// The machines as the palette's `machines` plugin reads them: each
-    /// one's name, label and whether it runs, and the apps of each running
-    /// one that has said which it has.
+    /// one's name, label and whether it runs, and the apps it has.
     pub fn palette(&self) -> Value {
         palette(&self.machines, &self.apps)
     }
@@ -243,8 +257,13 @@ impl MachineDisplays {
     pub fn poll(&mut self, commands: &mut Vec<Command>) {
         if let Some(latest) = self.changes.try_iter().last() {
             self.machines = latest;
+            self.recall_apps();
         }
         for (machine, apps) in self.listed.try_iter() {
+            self.answered.insert(machine.clone(), Instant::now());
+            if let Some(found) = self.machine(&machine) {
+                self.keep_apps(&found.uuid, &apps);
+            }
             self.apps.insert(machine, apps);
         }
         self.ask_for_apps();
@@ -458,10 +477,52 @@ impl MachineDisplays {
         }
     }
 
-    /// Forgets the apps of machines that stopped, and asks the running ones
-    /// that have not answered lately which apps they have. Windows machines
-    /// are not asked: their apps open through WinApps, not the guest
-    /// agent, which has no `losos-guest-run` to run there.
+    /// Forgets the apps of machines that are gone, and finds those of
+    /// machines it has none for yet: the list the machine gave last, kept
+    /// on disk, or else the one its template ships.
+    fn recall_apps(&mut self) {
+        let names: HashSet<&str> = self.machines.iter().map(|m| m.name.as_str()).collect();
+        self.apps.retain(|name, _| names.contains(name.as_str()));
+        let data_dirs = setup::data_dirs();
+        for machine in &self.machines {
+            if self.apps.contains_key(&machine.name) || machine.is_windows() {
+                continue;
+            }
+            let kept = self
+                .cache
+                .as_ref()
+                .and_then(|dir| std::fs::read_to_string(apps_file(dir, &machine.uuid)).ok())
+                .map(|list| derisk_machines::parse_apps(&list).collect());
+            let apps = kept.or_else(|| {
+                let template = machine.template.as_ref()?;
+                derisk_machines::template_apps(&data_dirs, &template.name)
+            });
+            if let Some(apps) = apps {
+                self.apps.insert(machine.name.clone(), apps);
+            }
+        }
+    }
+
+    /// Writes the machine `uuid`'s list of apps where the next session finds
+    /// it. A list that cannot be kept only costs a later session the
+    /// machine's apps until it runs again.
+    fn keep_apps(&self, uuid: &str, apps: &[GuestApp]) {
+        let Some(dir) = &self.cache else {
+            return;
+        };
+        let file = apps_file(dir, uuid);
+        let kept = std::fs::create_dir_all(dir)
+            .and_then(|()| std::fs::write(&file, derisk_machines::list_apps(apps)));
+        if let Err(e) = kept {
+            tracing::debug!(file = %file.display(), error = %e, "cannot keep a machine's apps");
+        }
+    }
+
+    /// Asks the running machines that have not answered lately which apps
+    /// they have, and forgets when it last asked those that stopped, so
+    /// each is asked again once it starts. Windows machines are not asked:
+    /// their apps open through WinApps, not the guest agent, which has no
+    /// `losos-guest-run` to run there.
     fn ask_for_apps(&mut self) {
         let running: HashSet<&str> = self
             .machines
@@ -469,19 +530,26 @@ impl MachineDisplays {
             .filter(|m| m.state.is_active())
             .map(|m| m.name.as_str())
             .collect();
-        self.apps.retain(|name, _| running.contains(name.as_str()));
+        self.answered
+            .retain(|name, _| running.contains(name.as_str()));
         self.asked.retain(|name, _| running.contains(name.as_str()));
         for machine in &self.machines {
             let name = machine.name.as_str();
             if !running.contains(name) || machine.is_windows() {
                 continue;
             }
-            let wait = if self.apps.contains_key(name) {
-                APPS_FRESH
-            } else {
-                APPS_UNANSWERED
-            };
-            if self.asked.get(name).is_some_and(|t| t.elapsed() < wait) {
+            if self
+                .answered
+                .get(name)
+                .is_some_and(|t| t.elapsed() < APPS_FRESH)
+            {
+                continue;
+            }
+            if self
+                .asked
+                .get(name)
+                .is_some_and(|t| t.elapsed() < APPS_UNANSWERED)
+            {
                 continue;
             }
             // Asked or not, the clock restarts: a full queue now is a
@@ -490,6 +558,27 @@ impl MachineDisplays {
             let _ = self.orders.try_send(Order::Apps(name.to_owned()));
         }
     }
+}
+
+/// Where the session keeps machines' lists of apps:
+/// `$XDG_CACHE_HOME/derisk/machines`, or `~/.cache/derisk/machines`.
+fn cache_dir() -> Option<PathBuf> {
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?;
+    Some(cache.join("derisk").join("machines"))
+}
+
+/// The file the machine `uuid`'s list of apps is kept in. By UUID, not
+/// name, so a machine made again under an old name starts from its own
+/// template's list rather than the old machine's.
+fn apps_file(dir: &std::path::Path, uuid: &str) -> PathBuf {
+    let uuid: String = uuid
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit() || *c == '-')
+        .collect();
+    dir.join(format!("{uuid}.apps"))
 }
 
 /// Carries out each order it is sent, one after another, and sends back
@@ -575,27 +664,50 @@ mod tests {
     }
 
     #[test]
-    fn the_palette_hears_of_running_machines_apps() {
+    fn the_palette_hears_of_machines_apps_running_or_not() {
         let machines = [
             machine("work", Label::Blue, State::Running),
+            machine("flatpak", Label::Purple, State::Off),
             machine("web", Label::Red, State::Off),
         ];
-        let apps = HashMap::from([(
-            "work".to_owned(),
-            vec![GuestApp {
-                id: "foot".into(),
-                name: "Foot".into(),
-            }],
-        )]);
+        let apps = HashMap::from([
+            (
+                "work".to_owned(),
+                vec![GuestApp {
+                    id: "foot".into(),
+                    name: "Foot".into(),
+                }],
+            ),
+            (
+                "flatpak".to_owned(),
+                vec![GuestApp {
+                    id: "io.github.kolunmi.Bazaar".into(),
+                    name: "Bazaar".into(),
+                }],
+            ),
+        ]);
         assert_eq!(
             palette(&machines, &apps),
             json!({"machines": [
                 {"name": "work", "label": "blue", "running": true, "screen": false,
                  "apps": [{"id": "foot", "name": "Foot"}]},
+                {"name": "flatpak", "label": "purple", "running": false, "screen": false,
+                 "apps": [{"id": "io.github.kolunmi.Bazaar", "name": "Bazaar"}]},
                 {"name": "web", "label": "red", "running": false, "screen": false,
                  "apps": []},
             ]})
         );
+    }
+
+    #[test]
+    fn a_machines_apps_are_kept_by_its_uuid_alone() {
+        let dir = std::path::Path::new("/home/u/.cache/derisk/machines");
+        assert_eq!(
+            apps_file(dir, "6f1c2d9e-0a7b-4e33-9c1d-2b8f5e6a7c90"),
+            dir.join("6f1c2d9e-0a7b-4e33-9c1d-2b8f5e6a7c90.apps")
+        );
+        // Whatever libvirt says the UUID is, the file stays in the directory.
+        assert_eq!(apps_file(dir, "../../x"), dir.join(".apps"));
     }
 
     #[test]

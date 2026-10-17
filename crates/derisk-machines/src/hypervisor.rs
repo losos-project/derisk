@@ -125,17 +125,18 @@ impl Hypervisor {
     /// `losos-guest-run` to drop to the guest's user and put the program's
     /// windows on the host.
     pub fn spawn(&self, name: &str, program: &Program) -> Result<u32> {
+        let mut arguments = json!({
+            "path": program.path,
+            "arg": program.args,
+            "env": program.env,
+            "capture-output": program.capture_output,
+        });
+        if !program.input.is_empty() {
+            arguments["input-data"] = STANDARD.encode(&program.input).into();
+        }
         let reply = self.agent(
             name,
-            json!({
-                "execute": "guest-exec",
-                "arguments": {
-                    "path": program.path,
-                    "arg": program.args,
-                    "env": program.env,
-                    "capture-output": program.capture_output,
-                },
-            }),
+            json!({ "execute": "guest-exec", "arguments": arguments }),
         )?;
         reply["pid"]
             .as_u64()
@@ -159,7 +160,7 @@ impl Hypervisor {
         })
     }
 
-    fn agent(&self, name: &str, command: Value) -> Result<Value> {
+    pub(crate) fn agent(&self, name: &str, command: Value) -> Result<Value> {
         let domain = self.domain(name)?;
         let reply = domain
             .qemu_agent_command(&command.to_string(), AGENT_TIMEOUT_SECONDS, 0)
@@ -196,6 +197,8 @@ pub struct Program {
     /// Keep its output for [`Exit::stdout`] and [`Exit::stderr`]. An app
     /// that runs for hours should not have its output kept in the agent.
     pub capture_output: bool,
+    /// What it reads on its standard input; it reads nothing when empty.
+    pub input: Vec<u8>,
 }
 
 /// How a program run in a machine ended.
