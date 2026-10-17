@@ -326,8 +326,14 @@ fn core_desktop_entries() -> Vec<DesktopEntry> {
 fn installed_apps() -> Vec<DesktopEntry> {
     desktop::scan(&desktop::application_dirs())
         .into_iter()
-        .filter(|e| !e.no_display && derisk_apps::find(&e.id).is_none())
+        .filter(listed)
         .collect()
+}
+
+/// Whether an installed app belongs in the palette and the app index: not
+/// hidden from menus, and not a copy of a core app.
+fn listed(entry: &DesktopEntry) -> bool {
+    !entry.no_display && derisk_apps::find(&entry.id).is_none()
 }
 
 /// The core apps and installed apps, with their desktop actions, for the
@@ -1152,7 +1158,8 @@ impl Session {
     fn spawn_command(&mut self, app: &str, argv: &[String]) {
         self.launches += 1;
         if self.execute {
-            if let Some(mut unit) = systemd::launch_command_argv(app, self.launches, argv) {
+            let instance = systemd::instance(self.launches);
+            if let Some(mut unit) = systemd::launch_command_argv(app, instance, argv) {
                 let split = unit.iter().position(|a| a == "--").unwrap_or(unit.len());
                 unit.insert(
                     split,
@@ -1161,7 +1168,17 @@ impl Session {
                 for (key, value) in &self.theme_env {
                     unit.insert(split, format!("--setenv={key}={value}"));
                 }
-                let _ = systemd::run(&unit);
+                // Said in the journal, where the unit's own lines are, so a
+                // launch that came to nothing is not a silent one.
+                match systemd::run(&unit) {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => warn!(
+                        app,
+                        "cannot launch: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                    Err(e) => warn!(app, "cannot run systemd-run: {e}"),
+                }
             }
         } else if let Some((program, args)) = argv.split_first()
             && let Err(e) = std::process::Command::new(program)
@@ -1229,6 +1246,33 @@ impl Session {
         self.phone.store(self.shell.is_phone(), Ordering::Relaxed);
     }
 
+    /// The installed app a desktop file ID names. One installed since the
+    /// apps were last read (the palette reads them again only as it opens)
+    /// is not among them, and its ID would run as a command that does not
+    /// exist: so on a miss they are read again, which takes a few
+    /// milliseconds, and the palette and the app index learn of it too.
+    /// Apps hidden from menus are found as well, since asking for one by
+    /// its ID is how they are meant to start.
+    fn installed_entry(&mut self, app: &str) -> Option<DesktopEntry> {
+        if let Some(entry) = self.installed.iter().find(|e| e.id == app) {
+            return Some(entry.clone());
+        }
+        // A plain command is no desktop file ID; reading every application
+        // directory for it would find nothing.
+        if !app.ends_with(".desktop") {
+            return None;
+        }
+        let all = desktop::scan(&desktop::application_dirs());
+        let found = all.iter().find(|e| e.id == app).cloned();
+        let installed: Vec<DesktopEntry> = all.into_iter().filter(listed).collect();
+        if installed != self.installed {
+            self.ui.palette.apps = palette_apps(&self.core_apps, &installed);
+            self.shell.apps = app_index(&self.core_apps, &installed);
+            self.installed = installed;
+        }
+        found
+    }
+
     /// Runs an app's desktop action: core apps open in-process through
     /// [`CoreApps`], installed apps run the action's `Exec`.
     fn launch_action(&mut self, app: &str, id: &str) {
@@ -1243,12 +1287,7 @@ impl Session {
             self.commands.push(Command::Launch(core.id.to_owned()));
             return;
         }
-        let Some(argv) = self
-            .installed
-            .iter()
-            .find(|e| e.id == app)
-            .and_then(|e| e.action_argv(id))
-        else {
+        let Some(argv) = self.installed_entry(app).and_then(|e| e.action_argv(id)) else {
             info!("{app} has no action {id:?}");
             return;
         };
@@ -1289,7 +1328,8 @@ impl Session {
                     if self.execute {
                         self.launches += 1;
                         let session = self.session_id.as_deref();
-                        if let Some(argv) = systemd::effect_argv(&effect, self.launches, session) {
+                        let instance = systemd::instance(self.launches);
+                        if let Some(argv) = systemd::effect_argv(&effect, instance, session) {
                             let _ = systemd::run(&argv);
                         }
                     } else {
@@ -1319,9 +1359,8 @@ impl Session {
                     if self.execute {
                         self.launches += 1;
                         let session = self.session_id.as_deref();
-                        if let Some(mut argv) =
-                            systemd::effect_argv(&effect, self.launches, session)
-                        {
+                        let instance = systemd::instance(self.launches);
+                        if let Some(mut argv) = systemd::effect_argv(&effect, instance, session) {
                             let split = argv.iter().position(|a| a == "--").unwrap_or(argv.len());
                             argv.insert(
                                 split,
@@ -2060,7 +2099,7 @@ impl compositor::Shell for Session {
         }
         // An installed app's desktop file ID runs its `Exec`; any other name
         // runs as a plain command.
-        let command = match self.installed.iter().find(|e| e.id == app) {
+        let command = match self.installed_entry(app) {
             Some(entry) => entry.argv(),
             None => vec![app.strip_suffix(".desktop").unwrap_or(app).to_owned()],
         };
@@ -2070,7 +2109,8 @@ impl compositor::Shell for Session {
         }
         self.launches += 1;
         if self.execute
-            && let Some(mut argv) = systemd::launch_command_argv(app, self.launches, &command)
+            && let Some(mut argv) =
+                systemd::launch_command_argv(app, systemd::instance(self.launches), &command)
         {
             // systemd-run takes its options before the `--` and the command.
             let split = argv.iter().position(|a| a == "--").unwrap_or(argv.len());

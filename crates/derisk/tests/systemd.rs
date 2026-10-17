@@ -18,6 +18,19 @@ fn apps_launch_as_transient_units_in_the_app_slice() {
 }
 
 #[test]
+fn a_new_desktop_never_names_a_unit_the_last_one_left_running() {
+    // The count starts again at 1 with every desktop; the process ID is
+    // what keeps the first launch of this one apart from the last one's.
+    let first = systemd::app_unit("org.derisk.terminal.desktop", systemd::instance(1));
+    assert_ne!(first, systemd::app_unit("org.derisk.terminal.desktop", 1));
+    assert_ne!(
+        first,
+        systemd::app_unit("org.derisk.terminal.desktop", systemd::instance(2))
+    );
+    assert_eq!(systemd::instance(1) >> 20, u64::from(std::process::id()));
+}
+
+#[test]
 fn only_plain_command_names_are_launchable() {
     for ok in ["firefox", "org.kde.dolphin.desktop", "gtk4-demo", "g++"] {
         assert!(systemd::is_launchable(ok), "{ok}");

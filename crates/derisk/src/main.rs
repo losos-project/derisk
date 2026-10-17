@@ -716,7 +716,7 @@ impl Host {
             return;
         }
         self.launches += 1;
-        let instance = (u64::from(std::process::id()) << 20) | self.launches;
+        let instance = systemd::instance(self.launches);
         if let Some(argv) = systemd::effect_argv(effect, instance, self.session_id.as_deref()) {
             let ok = systemd::run(&argv).is_ok_and(|o| o.status.success());
             let effect_json = serde_json::to_string(effect).unwrap_or_default();
