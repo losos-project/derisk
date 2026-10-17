@@ -1,7 +1,7 @@
 //! Deep systemd integration, without linking libsystemd.
 //!
 //! - **Apps as units**: every launch becomes a transient
-//!   `app-derisk-<AppID>@<random>.service` in `app-graphical.slice`, named per
+//!   `app-derisk-<AppID>@<instance>.service` in `app-graphical.slice`, named per
 //!   the XDG/systemd app-unit convention, so each app gets its own cgroup,
 //!   resource accounting, journal stream and clean shutdown.
 //! - **Focus-aware resources**: the focused app's unit gets higher CPU and IO
@@ -86,6 +86,15 @@ pub fn is_launchable(app: &str) -> bool {
         && app
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'+'))
+}
+
+/// The instance part of a launch's unit name: this process's ID above its
+/// count of launches. The count alone starts again at 1 with every desktop,
+/// while the user's manager, and an app unit something in its cgroup keeps
+/// up, can outlive one; systemd refuses a second unit of the same name, so
+/// that app would not start again until the old unit went.
+pub fn instance(launches: u64) -> u64 {
+    (u64::from(std::process::id()) << 20) | launches
 }
 
 /// The transient unit name for an app instance.
