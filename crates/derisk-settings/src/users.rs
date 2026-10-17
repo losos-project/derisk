@@ -362,6 +362,9 @@ impl NewPerson {
 #[derive(Debug, Default)]
 pub(crate) struct UsersUi {
     loaded: bool,
+    /// Read the list again before the next frame: someone may have signed
+    /// in or out since, which decides whether they can be removed.
+    stale: bool,
     /// Who is using Settings.
     me: String,
     people: Vec<Person>,
@@ -464,7 +467,8 @@ fn avatar(ui: &mut egui::Ui, person: &Person, theme: &Theme) {
 }
 
 pub(crate) fn page(ui: &mut egui::Ui, state: &mut UsersUi, theme: &Theme) {
-    if !state.loaded {
+    if !state.loaded || state.stale {
+        state.stale = false;
         state.load();
     }
     state.poll();
@@ -564,6 +568,7 @@ fn row(
         } else {
             state.open = Some(person.user_name.clone());
             state.real_name = person.real_name.clone();
+            state.stale = true;
         }
         state.confirm_remove = false;
     }
@@ -635,6 +640,7 @@ fn row(
             );
             if ui.button("Sign them out…").clicked() {
                 state.confirm_remove = true;
+                state.stale = true;
             }
         } else if state.confirm_remove {
             hint(
@@ -654,7 +660,10 @@ fn row(
                 }
             });
         } else if ui.button("Remove account…").clicked() {
+            // They may have signed in since the list was read; the next
+            // frame offers to sign them out instead if so.
             state.confirm_remove = true;
+            state.stale = true;
         }
     });
     job
@@ -667,6 +676,8 @@ fn add_form(ui: &mut egui::Ui, state: &mut UsersUi, theme: &Theme) -> Option<Job
         if ui.button("Add someone…").clicked() {
             state.adding = Some(NewPerson::default());
             state.checked = None;
+            // The last change's outcome is not about this one.
+            state.status = None;
         }
         return None;
     };

@@ -4754,7 +4754,9 @@ fn login_user(ui: &mut Ui, user: &LoginUser, picked: bool, theme: &Theme) -> egu
             Align2::LEFT_CENTER,
             "Signed in",
             FontId::proportional(12.0),
-            theme.border,
+            // The border colour vanished into the wallpaper; muted text
+            // reads on it, as the rest of the shell's secondary text does.
+            theme.foreground.gamma_multiply(0.7),
         );
     }
     response
