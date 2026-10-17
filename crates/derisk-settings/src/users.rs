@@ -13,6 +13,11 @@
 //! first-boot setup makes. Someone else's home area is locked while they are
 //! logged out, so their record is changed with `--offline`: homed updates its
 //! own copy and writes it into the home area at their next login.
+//!
+//! Each person's virtual machines live in their home area and run as their
+//! own user services, so removing someone deletes their machines with it,
+//! and homed refuses to remove a home area that is open. Someone signed in
+//! behind Switch user is signed out first, on purpose and with a warning.
 
 use std::process::{Command, Stdio};
 
@@ -52,6 +57,9 @@ pub struct Person {
     pub admin: bool,
     /// Whether homed keeps the account, so this page can change it.
     pub homed: bool,
+    /// Whether their home area is open: they are signed in, or homed is
+    /// still opening or closing it. homed will not remove it then.
+    pub in_use: bool,
 }
 
 impl Person {
@@ -117,9 +125,20 @@ pub fn parse_people(userdbctl_json: &str, wheel: &[String]) -> Vec<Person> {
                 })
                 .unwrap_or_default();
             let admin = groups.iter().any(|g| g == ADMIN_GROUP) || wheel.contains(&user_name);
+            // homed puts the home area's state in the record's status
+            // section, one entry per machine ID; this machine's is the only
+            // one a local record has.
+            let in_use = record
+                .get("status")
+                .and_then(|v| v.as_object())
+                .into_iter()
+                .flat_map(|machines| machines.values())
+                .filter_map(|status| status.get("state")?.as_str())
+                .any(|state| !CLOSED_STATES.contains(&state));
             Some(Person {
                 real_name: text("realName"),
                 homed: text("service") == "io.systemd.Home",
+                in_use,
                 user_name,
                 groups,
                 admin,
@@ -130,6 +149,10 @@ pub fn parse_people(userdbctl_json: &str, wheel: &[String]) -> Vec<Person> {
     people.dedup_by(|a, b| a.user_name == b.user_name);
     people
 }
+
+/// homed's states for a home area that is closed and idle; in every other
+/// one it is open or busy, and `homectl remove` refuses it.
+const CLOSED_STATES: &[&str] = &["unfixated", "absent", "inactive", "dirty"];
 
 /// The members of `group` in `/etc/group`-style text.
 pub fn group_members<'a>(group_file: &'a str, group: &'a str) -> impl Iterator<Item = &'a str> {
@@ -216,6 +239,16 @@ pub fn remove(user: &str) -> Job {
     Job {
         label: "Removing the account",
         argv: vec!["homectl".into(), "remove".into(), user.into()],
+        env: Vec::new(),
+    }
+}
+
+/// Ends every session `user` has, which closes their apps and their virtual
+/// machines and closes their home area, so it can be removed.
+pub fn sign_out(user: &str) -> Job {
+    Job {
+        label: "Signing them out",
+        argv: vec!["loginctl".into(), "terminate-user".into(), user.into()],
         env: Vec::new(),
     }
 }
@@ -555,10 +588,37 @@ fn row(
             );
         } else if let Some(why) = last_admin(people, person) {
             hint(ui, why);
+        } else if person.in_use && state.confirm_remove {
+            hint(
+                ui,
+                "Signing them out closes their apps and their virtual machines. Anything they have not saved is lost.",
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .button(format!("Sign {} out", person.display_name()))
+                    .clicked()
+                {
+                    job = Some(sign_out(&person.user_name));
+                }
+                if ui.button("Keep").clicked() {
+                    state.confirm_remove = false;
+                }
+            });
+        } else if person.in_use {
+            hint(
+                ui,
+                &format!(
+                    "{} is signed in. Their account can be removed once they sign out.",
+                    person.display_name()
+                ),
+            );
+            if ui.button("Sign them out…").clicked() {
+                state.confirm_remove = true;
+            }
         } else if state.confirm_remove {
             hint(
                 ui,
-                "Their account and every file in their home folder will be deleted. This cannot be undone.",
+                "Their account and everything in their home folder will be deleted, their virtual machines too. This cannot be undone.",
             );
             ui.horizontal(|ui| {
                 let remove_now = egui::Button::new(
@@ -656,7 +716,8 @@ mod tests {
 
     const USERDB: &str = "\u{1e}{\"userName\":\"ada\",\"realName\":\"Ada Lovelace\",\
         \"memberOf\":[\"wheel\",\"wpa_supplicant\"],\"service\":\"io.systemd.Home\"}\n\
-        \u{1e}{\"userName\":\"bob\",\"realName\":\"Bob\",\"service\":\"io.systemd.Home\"}\n\
+        \u{1e}{\"userName\":\"bob\",\"realName\":\"Bob\",\"service\":\"io.systemd.Home\",\
+        \"status\":{\"6a1f\":{\"state\":\"active\"}}}\n\
         \u{1e}{\"userName\":\"old\",\"realName\":\"\"}\n";
 
     #[test]
@@ -666,6 +727,8 @@ mod tests {
         assert_eq!(names, ["Ada Lovelace", "Bob", "old"]);
         assert!(people[0].admin && people[0].homed);
         assert!(!people[1].admin);
+        // Bob is signed in; Ada's record says nothing, so hers is closed.
+        assert!(people[1].in_use && !people[0].in_use);
         // /etc/group makes a passwd user an administrator; homed doesn't
         // keep them, so the page leaves them alone.
         assert!(people[2].admin && !people[2].homed);
@@ -699,6 +762,11 @@ mod tests {
             job.argv,
             ["homectl", "update", "ada", "--real-name=Ada King"]
         );
+    }
+
+    #[test]
+    fn signing_out_ends_every_session() {
+        assert_eq!(sign_out("bob").argv, ["loginctl", "terminate-user", "bob"]);
     }
 
     #[test]
