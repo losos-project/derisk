@@ -53,12 +53,13 @@ use std::{
 use derisk::{
     greetd::{self, AuthMessageType, Request, Response},
     password_age::PasswordAge,
+    setup::Task,
     systemd,
 };
 use tracing::{error, info};
 
 use crate::{
-    first_login, greeter as greeter_command,
+    first_login, firstboot, greeter as greeter_command,
     pam::{self, Auth, Pam},
 };
 
@@ -502,20 +503,23 @@ fn apply_password_age(user: &str) {
         .ok()
         .and_then(|out| serde_json::from_slice(&out.stdout).ok())
         .unwrap_or(serde_json::Value::Null);
-    let Some(argv) = age.update_argv(user, &record) else {
+    let Some(mut argv) = age.update_argv(user, &record) else {
         return;
     };
-    // Never stops to ask: the display manager has no terminal, and the
-    // active home needs no password to update.
-    let status = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .arg("--no-ask-password")
-        .stdin(std::process::Stdio::null())
-        .status();
-    match status {
-        Ok(s) if s.success() => info!("applied the password age policy"),
-        Ok(s) => error!("homectl update for the password age policy failed: {s}"),
-        Err(e) => error!("cannot run homectl for the password age policy: {e}"),
+    // homed can still want the user's password to rewrite the record, and
+    // homectl then asks a password agent with no time limit whatever
+    // --no-ask-password says. Nothing answers on this seat, so the session
+    // would never start: the question is cancelled, and that account goes
+    // without the policy rather than without its session.
+    argv.push("--no-ask-password".into());
+    let task = Task {
+        label: "Password age",
+        argv,
+        env: Vec::new(),
+    };
+    match firstboot::execute(&task) {
+        Ok(()) => info!("applied the password age policy"),
+        Err(reason) => error!("homectl update for the password age policy failed: {reason}"),
     }
 }
 
