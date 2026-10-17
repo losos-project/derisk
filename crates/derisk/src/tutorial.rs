@@ -1,7 +1,7 @@
 //! The tour of the desktop that the first login starts with.
 //!
 //! A few cards, each pointing at one part of the desktop (the top bar, the
-//! window buttons, the search field, the overview) with a sentence or two
+//! window buttons, the search button, the overview) with a sentence or two
 //! on what it is for and the keys that reach it. Finishing or skipping it
 //! leaves a mark under `$XDG_STATE_HOME/derisk`, so later logins go
 //! straight to the desktop; the command palette's "Take the Tour" shows it
@@ -20,7 +20,7 @@ pub enum Target {
     /// The focused window's buttons and title in the top bar; the whole
     /// bar while no window has the focus.
     WindowControls,
-    /// The search field that opens the command palette.
+    /// The search button that opens the command palette.
     Search,
     /// The overview button.
     Overview,
