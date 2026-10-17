@@ -565,7 +565,7 @@ impl SettingsApp {
                     ui.label("");
                     ui.label(
                         egui::RichText::new(
-                            "Turns off blur and animations and caps the frame rate at 30 fps.",
+                            "Turns off blur, shadows and animations. Frames stay at 60 per second or more.",
                         )
                         .small()
                         .color(theme.border),
