@@ -405,7 +405,7 @@ pub struct State {
     pub clock: Clock,
     /// Battery.
     pub battery: Option<Battery>,
-    /// Whether low power mode is on (no blur or animations, at most 30 fps).
+    /// Whether low power mode is on (no blur, shadows or animations).
     pub low_power: bool,
     /// Failed systemd user units.
     pub failed_units: Vec<String>,
