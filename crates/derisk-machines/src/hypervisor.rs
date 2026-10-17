@@ -159,7 +159,7 @@ impl Hypervisor {
         })
     }
 
-    fn agent(&self, name: &str, command: Value) -> Result<Value> {
+    pub(crate) fn agent(&self, name: &str, command: Value) -> Result<Value> {
         let domain = self.domain(name)?;
         let reply = domain
             .qemu_agent_command(&command.to_string(), AGENT_TIMEOUT_SECONDS, 0)

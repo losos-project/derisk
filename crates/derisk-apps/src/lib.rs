@@ -38,6 +38,8 @@ pub const MONITOR: &str = "org.derisk.monitor";
 pub const CALCULATOR: &str = "org.derisk.calculator";
 /// App ID of Machines.
 pub const MACHINES: &str = derisk_machines::APP_ID;
+/// App ID of the Store.
+pub const STORE: &str = derisk_store::APP_ID;
 
 /// A catalog entry for one core app.
 #[derive(Clone, Copy, Debug)]
@@ -97,7 +99,7 @@ impl AppInfo {
 }
 
 /// Every core app, in launcher order.
-pub const APPS: [AppInfo; 6] = [
+pub const APPS: [AppInfo; 7] = [
     AppInfo {
         id: FILES,
         name: "Files",
@@ -190,6 +192,30 @@ pub const APPS: [AppInfo; 6] = [
         action: |a| {
             new_window(a, "new-window", || {
                 Box::new(derisk_machines::MachinesApp::new())
+            })
+        },
+    },
+    AppInfo {
+        id: STORE,
+        name: "Store",
+        summary: "Find, install and update apps from Flathub",
+        icon: "📦",
+        keywords: &[
+            "app store",
+            "software",
+            "flathub",
+            "flatpak",
+            "install",
+            "updates",
+            "bazaar",
+        ],
+        desktop_file: include_str!("../data/org.derisk.store.desktop"),
+        create: || Box::new(derisk_store::StoreApp::new()),
+        action: |a| {
+            (a == "installed").then(|| {
+                let mut store = derisk_store::StoreApp::new();
+                store.show_installed();
+                Box::new(store) as Box<dyn App>
             })
         },
     },

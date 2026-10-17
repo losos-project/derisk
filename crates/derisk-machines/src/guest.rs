@@ -14,6 +14,9 @@
 
 use std::time::{Duration, Instant};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
+use serde_json::json;
+
 use crate::{Error, Exit, Hypervisor, Program, Result};
 
 /// Where `losos-guest-run` is: the guest template's system profile, then
@@ -51,6 +54,10 @@ fn guest_run(args: &[&str]) -> Program {
 /// How long a machine that was off may take to boot far enough to answer.
 const BOOT_WAIT: Duration = Duration::from_secs(120);
 
+/// How much of a file [`Hypervisor::read_file`] asks the agent for at a
+/// time; its replies are base64 in JSON, a third larger.
+const READ_PIECE: u64 = 4 << 20;
+
 /// How long `losos-guest-run` may take to list the apps or start one.
 const LIST_WAIT: Duration = Duration::from_secs(10);
 
@@ -87,17 +94,7 @@ impl Hypervisor {
     /// machine and waiting for it to boot first if it is off. Fails with
     /// what the guest said when it has no such app.
     pub fn open_app(&self, machine: &str, app: &str) -> Result<()> {
-        self.start(machine)?;
-        let deadline = Instant::now() + BOOT_WAIT;
-        while !self.agent_ready(machine)? {
-            if Instant::now() >= deadline {
-                return Err(Error::Agent {
-                    name: machine.into(),
-                    reply: "the guest agent did not answer after the machine started".into(),
-                });
-            }
-            std::thread::sleep(Duration::from_secs(1));
-        }
+        self.boot(machine)?;
         let pid = self.spawn(machine, &guest_run(&[app]))?;
         // It returns as soon as the app's unit has started, so this is a
         // moment's wait, and it is how an app the guest lacks is told apart
@@ -111,6 +108,67 @@ impl Hypervisor {
                 reply: String::from_utf8_lossy(&exit.stderr).trim().to_owned(),
             })
         }
+    }
+
+    /// Starts `machine` if it is off and waits for it to boot far enough
+    /// for its guest agent to answer.
+    pub fn boot(&self, machine: &str) -> Result<()> {
+        self.start(machine)?;
+        let deadline = Instant::now() + BOOT_WAIT;
+        while !self.agent_ready(machine)? {
+            if Instant::now() >= deadline {
+                return Err(Error::Agent {
+                    name: machine.into(),
+                    reply: "the guest agent did not answer after the machine started".into(),
+                });
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        Ok(())
+    }
+
+    /// The bytes of the guest's file `path`, read through the agent a piece
+    /// at a time. A program's captured output would do for a small file,
+    /// but the agent keeps at most 16 MiB of it, and Flathub's catalogue
+    /// alone is most of that.
+    pub fn read_file(&self, machine: &str, path: &str) -> Result<Vec<u8>> {
+        let handle = self.agent(
+            machine,
+            json!({ "execute": "guest-file-open", "arguments": { "path": path, "mode": "r" } }),
+        )?;
+        let handle = handle.as_i64().ok_or_else(|| Error::Agent {
+            name: machine.into(),
+            reply: handle.to_string(),
+        })?;
+        let read = || -> Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            loop {
+                let piece = self.agent(
+                    machine,
+                    json!({
+                        "execute": "guest-file-read",
+                        "arguments": { "handle": handle, "count": READ_PIECE },
+                    }),
+                )?;
+                let unreadable = || Error::Agent {
+                    name: machine.into(),
+                    reply: format!("guest-file-read of {path} answered without its data"),
+                };
+                let data = piece["buf-b64"].as_str().ok_or_else(unreadable)?;
+                bytes.extend(STANDARD.decode(data).map_err(|_| unreadable())?);
+                if piece["eof"].as_bool().unwrap_or(true) || piece["count"].as_u64() == Some(0) {
+                    return Ok(bytes);
+                }
+            }
+        };
+        let bytes = read();
+        // Closed whatever the read did: the agent keeps a handle open
+        // until it is told otherwise.
+        let _ = self.agent(
+            machine,
+            json!({ "execute": "guest-file-close", "arguments": { "handle": handle } }),
+        );
+        bytes
     }
 
     /// Waits up to `wait` for the guest program `pid` to exit.

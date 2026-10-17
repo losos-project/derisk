@@ -388,7 +388,7 @@ $ cargo run --release --features host -- session --launch derisk-terminal
 
 `derisk session` runs the desktop as a Smithay compositor nested in a window
 of your current X11 or Wayland session. The core apps (Files, Settings, Text
-Editor, System Monitor, Calculator, Machines, in `crates/`) run inside
+Editor, System Monitor, Calculator, Machines, Store, in `crates/`) run inside
 the session and launch by name: `--launch files`, `derisk do open calculator`,
 or the command palette. Wayland apps launched from it (or from any
 terminal with `WAYLAND_DISPLAY` set to the socket it prints) get derisk's
@@ -604,6 +604,7 @@ in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 | System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
 | Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
 | Machines | `derisk-machines` | The libvirt machines apps run in, each in its label's colour: make one from a template the OS ships (through `pm machine create`), start, shut down, force off and remove them, open the apps a machine has, choose the machine apps you launch open in (`machines.open_apps_in` in `settings.conf`; derisk's own apps stay on the host), and set pm's libvirt plugin up with your own key. |
+| Store | `derisk-store` | Flathub's apps, sorted into categories and their sections from everything their AppStream data says (categories, additional categories, keywords, name and summary), searched, and installed, updated, opened and removed through flatpak: in the `flatpak` machine when libvirt has one, on the computer itself otherwise. The front page leads with the updates waiting, your apps' release notes and then the newest release notes on Flathub. |
 
 `derisk-apps` lists them, registers them with `mcsapi-runtime`, and keeps the
 running app objects next to their instances (`derisk_apps::Session`), so the

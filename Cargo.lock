@@ -1706,6 +1706,7 @@ dependencies = [
  "derisk-machines",
  "derisk-monitor",
  "derisk-settings",
+ "derisk-store",
  "derisk-sys",
  "eframe",
  "mcsapi-runtime",
@@ -1888,6 +1889,21 @@ dependencies = [
  "qrcode",
  "serde_json",
  "sha1",
+]
+
+[[package]]
+name = "derisk-store"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "derisk-icons",
+ "derisk-machines",
+ "derisk-sys",
+ "flate2",
+ "image",
+ "mcsapi-ui",
+ "quick-xml",
+ "tracing",
 ]
 
 [[package]]
