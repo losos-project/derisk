@@ -372,7 +372,7 @@ pub struct ShellUi {
     /// What the focused window's title in the top bar was dragged through
     /// since the host last asked.
     title_drags: Vec<TitleDrag>,
-    /// Where the top bar's search field was drawn last frame.
+    /// Where the top bar's search button was drawn last frame.
     search_rect: Option<Rect>,
     /// Where the top bar's overview button and the focused window's
     /// buttons and title were drawn last frame, for the tour to point at.
@@ -432,7 +432,7 @@ pub struct PaletteUi {
     message: Option<String>,
     open: bool,
     /// When it opened (ms on [`motion::now`]'s clock), and where from: it
-    /// grows out of the top bar's search field.
+    /// grows out of the top bar's search button.
     opened: Option<(f64, Option<Rect>)>,
     /// Where the card was drawn last frame.
     rect: Option<Rect>,
@@ -1588,23 +1588,12 @@ impl ShellUi {
                 if overview.clicked() {
                     actions.push(Action::Overview { visible: None });
                 }
-                let search = icons::button_with_text(
-                    ui.ctx(),
-                    "system-search",
-                    RichText::new("Search or ask…").color(self.theme.border),
-                    14.0,
-                    self.theme.border,
-                );
-                // The background, not the surface: the bar is the surface
-                // colour while a window has the focus.
+                // A button beside the overview's, drawn the same way: the
+                // field it replaced took a quarter of a narrow bar for a
+                // hint the palette shows anyway once it opens.
                 let search = prefs.search.then(|| {
-                    ui.add(
-                        search
-                            .fill(self.theme.background)
-                            .stroke(Stroke::new(1.0, self.theme.border))
-                            .corner_radius(8),
-                    )
-                    .on_hover_text("Command palette (Super+Space)")
+                    ui.add(icons::button(ui.ctx(), "system-search", 16.0, ink).frame(false))
+                        .on_hover_text("Search or ask (Super+Space)")
                 });
                 if let Some(search) = &search {
                     name(ui, search, Role::Button, "Search or ask");
@@ -1618,7 +1607,7 @@ impl ShellUi {
                 {
                     ui.painter().rect_stroke(
                         search.rect.expand(3.0),
-                        11,
+                        search.rect.height() / 2.0 + 3.0,
                         Stroke::new(2.5, self.theme.accent),
                         StrokeKind::Inside,
                     );
@@ -1780,7 +1769,7 @@ impl ShellUi {
     }
 
     /// The phone's top bar: a status bar with the time, the focused app and
-    /// the indicators. The overview button and search field move to the
+    /// the indicators. The overview and search buttons move to the
     /// navigation bar within reach of the thumb, and the global menus, which
     /// have no room here, stay reachable as palette commands.
     fn status_bar(
@@ -2226,7 +2215,7 @@ impl ShellUi {
             }
         }
         // It comes in as the film's does: the backdrop fades up while the
-        // search field's outline folds onto the current workspace (30
+        // search button's outline folds onto the current workspace (30
         // frames), and everything else rises in around it, one after
         // another (30 frames each, starting 4 to 28 frames in).
         let ctx = ui.ctx().clone();
@@ -2343,7 +2332,7 @@ impl ShellUi {
             };
             painter.rect_filled(r, 10, self.theme.surface);
             if n == active {
-                // The outline the top bar's search field folds into.
+                // The outline the top bar's search button folds into.
                 let g = motion::since(&ctx, since, f(30), ease::OUT);
                 let (from, radius) = self
                     .search_rect
@@ -2959,8 +2948,8 @@ impl ShellUi {
         let nav = shell.profile().nav_bar as f32 + keyboard;
         let screen = to_rect(shell.output());
         let dimmed = Rect::from_min_max(screen.min, screen.max - vec2(0.0, nav));
-        // It grows out of the search field as the film's does: the card
-        // morphs from the field to its own place (52 frames, expo-out) and
+        // It grows out of the search button as the film's does: the card
+        // morphs from the button to its own place (52 frames, expo-out) and
         // its contents fade in over the last 16.
         let (opened, from) = state.opened.unwrap_or_default();
         let ctx = ui.ctx().clone();
@@ -4749,7 +4738,7 @@ pub fn paint_login(
 
 /// Paints one frame of the startup animation over `screen`: the cover with
 /// the iris the desktop shows through, the ring, and the dot on its way to
-/// `field` (the search field's frame, when the top bar has one).
+/// `field` (the search button's frame, when the top bar has one).
 pub fn paint_startup(
     painter: &Painter,
     screen: Rect,

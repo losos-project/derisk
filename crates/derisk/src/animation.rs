@@ -172,9 +172,9 @@ mod at {
     pub const BLOOM: (f32, f32) = (f(60), f(90));
     /// The top bar slides in.
     pub const BAR: (f32, f32) = (f(90), f(114));
-    /// The dot flies into the search field.
+    /// The dot flies into the search button.
     pub const FLIGHT: (f32, f32) = (f(90), f(120));
-    /// It opens into the field's focus outline.
+    /// It opens into the button's focus ring.
     pub const OPEN: (f32, f32) = (f(118), f(132));
 }
 

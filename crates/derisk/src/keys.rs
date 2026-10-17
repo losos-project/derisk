@@ -17,7 +17,7 @@
 //! | Super+Ctrl+←/→ | Previous / next workspace |
 //! | Super+Ctrl+Shift+←/→ | Move the focused window to the previous / next workspace |
 //! | Super+J / Super+K, Alt+Tab | Focus next / previous |
-//! | Super+Enter | Promote to the main pane |
+//! | Super+Shift+Enter | Promote to the main pane |
 //! | Super+Q, Alt+F4 | Close |
 //! | Super+H | Minimize |
 //! | Alt+F10 | Maximize or restore |
@@ -25,7 +25,7 @@
 //! | Super+Shift+T | Keep on top |
 //! | Super+M / Super+Shift+M | Monocle / tall layout |
 //! | Super+W then ←/→/Q/E/Z/C | Snap to a half or a quarter |
-//! | Super+E, Super+I, Ctrl+Alt+T | Files, Settings, a terminal |
+//! | Super+Enter, Super+E, Super+I | A terminal, Files, Settings |
 //! | Super+O then E/M/C/V | Text Editor, System Monitor, Calculator, Machines |
 //! | Super+L | Lock |
 //! | Super+X then S/O/R/P | Suspend, log out, restart, power off |
@@ -42,8 +42,11 @@ use crate::{
     systemd::SessionOp,
 };
 
-/// The terminal Ctrl+Alt+T opens: foot, which the image ships.
-pub const TERMINAL: &str = "foot";
+/// The terminal Super+Enter opens: derisk-terminal, which the image ships
+/// in place of foot, by its desktop file ID, which is how installed apps
+/// are looked up for their `Exec`. foot's name stayed here after the image
+/// dropped it, which left the shortcut opening nothing.
+pub const TERMINAL: &str = "org.derisk.terminal.desktop";
 
 // The core apps' IDs, as `derisk_apps` names them; that crate is only built
 // with the host, and these keys are the library's.

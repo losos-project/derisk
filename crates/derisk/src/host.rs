@@ -1830,7 +1830,7 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Chrome;
         }
-        // With no window to type into, the search field has the focus (the
+        // With no window to type into, the search button has the focus (the
         // startup's dot lands there): typing opens the palette with it.
         if self.shell.focused().is_none()
             && !self.shell.overview_visible()
