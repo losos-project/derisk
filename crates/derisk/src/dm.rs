@@ -5,7 +5,7 @@
 //! needs root: PAM and starting sessions. It draws nothing. Each round it
 //!
 //! 1. starts the greeter (`derisk greeter`) as an unprivileged user, in a
-//!    logind session of class `greeter` on the seat's VT, where it takes the
+//!    logind session of class `greeter` on a free VT, where it takes the
 //!    display and input devices from logind;
 //! 2. serves greetd's protocol to it over a socket only that user can open
 //!    (`$GREETD_SOCK`), running `pam_authenticate` for whoever it names and
@@ -13,8 +13,15 @@
 //! 3. once the greeter asked to start a session for an authenticated user and
 //!    exited, opens that user's PAM session (pam_systemd registers it with
 //!    logind; pam_systemd_home unlocks a homed home area) and runs the
-//!    session command as the user;
-//! 4. waits for the session to end, closes it, and goes back to 1.
+//!    session command as the user, on the VT the greeter had.
+//!
+//! Several people can be logged in at once, each session on a VT of its
+//! own. The next round starts when the screen needs a login screen: nobody
+//! is logged in, the session on the screen ended, or the person at it asked
+//! to switch user (`derisk session` connects to [`SWITCH_SOCKET`] after
+//! locking itself). Picking someone already logged in on the login screen
+//! goes back to their session, which the greeter asks logind for itself, and
+//! the round ends without a login.
 //!
 //! The round after first-boot setup skips 1 and 2: setup leaves a ticket with
 //! the account it just made ([`crate::first_login`]), and the display manager
@@ -27,7 +34,8 @@
 //!
 //! The daemon is single-threaded, so forking is safe; each session runs in a
 //! worker process that holds its PAM handle open while the session lives,
-//! the way login(1) and every other display manager do.
+//! the way login(1) and every other display manager do. Between rounds it
+//! looks for ended sessions and switch requests a few times a second.
 
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_void},
@@ -60,8 +68,18 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 const PAM_ESTABLISH_CRED: c_int = 0x2;
 const PAM_DELETE_CRED: c_int = 0x4;
 
+const VT_GETSTATE: libc::c_ulong = 0x5603;
 const VT_ACTIVATE: libc::c_ulong = 0x5606;
 const VT_WAITACTIVE: libc::c_ulong = 0x5607;
+
+/// The highest VT whose state `VT_GETSTATE` reports (its mask is 16 bits,
+/// bit 0 unused).
+const LAST_VT: u32 = 15;
+
+/// Where a session asks for the login screen, to let someone else log in
+/// while it stays running. Anyone can connect; only the session on the
+/// screen is listened to ([`switch_requested`]).
+pub const SWITCH_SOCKET: &str = derisk::systemd::SWITCH_USER_SOCKET;
 
 #[link(name = "pam")]
 unsafe extern "C" {
@@ -75,7 +93,8 @@ unsafe extern "C" {
 /// How the display manager was configured.
 #[derive(Debug)]
 pub struct Options {
-    /// The VT the greeter and sessions run on.
+    /// The first VT the greeter and sessions run on; more sessions take the
+    /// free VTs after it.
     pub vt: u32,
     /// The unprivileged user the greeter runs as.
     pub greeter_user: String,
@@ -184,6 +203,15 @@ struct Pending {
     start: Option<(Vec<String>, Vec<String>)>,
 }
 
+/// A session that is running, on its own VT.
+struct Live {
+    /// The worker process holding its PAM handle; it exits with the session.
+    worker: libc::pid_t,
+    vt: u32,
+    /// Whose it is, to tell their switch requests from anyone else's.
+    uid: libc::uid_t,
+}
+
 /// Runs the display manager until it is stopped.
 pub fn run(options: Options) -> Result {
     if options.greeter.is_empty() {
@@ -195,26 +223,74 @@ pub fn run(options: Options) -> Result {
     }
     let greeter = account(&options.greeter_user)
         .ok_or_else(|| format!("no greeter user {}", options.greeter_user))?;
+    let switch = listen_for_switches(&options.runtime_dir)?;
     systemd::notify_ready("derisk display manager running");
+    let mut sessions: Vec<Live> = Vec::new();
+    let mut greet = true;
     loop {
-        activate_vt(options.vt);
-        match round(&options, &greeter) {
-            Ok(()) => {}
+        let active = active_vt();
+        sessions.retain(|session| {
+            if !exited(session.worker) {
+                return true;
+            }
+            info!("a session ended");
+            // The one on the screen leaves it dark: the login screen comes
+            // back. One ending on another VT changes nothing on this one.
+            greet |= active.is_none_or(|vt| vt == session.vt);
+            false
+        });
+        greet |= sessions.is_empty();
+        greet |= switch_requested(&switch, &sessions, active);
+        if !greet {
+            std::thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        greet = false;
+        match round(&options, &greeter, sessions.is_empty(), &switch, &sessions) {
+            Ok((Some(session), _)) => sessions.push(session),
+            // The greeter went back to someone's running session, or
+            // stopped with nobody logged in; if its VT is still the one on
+            // the screen, it is blank and needs a login screen again.
+            Ok((None, vt)) => greet = still_active(vt),
             Err(e) => {
                 error!("{e}");
+                greet = true;
                 // Don't spin if something is persistently broken.
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
+        // A request made while the login screen was up asked for what was
+        // already shown.
+        let _ = switch_requested(&switch, &[], None);
     }
 }
 
-/// One login, by the greeter or by first-boot setup's ticket, and the
-/// session it asks for, if any.
-fn round(options: &Options, greeter: &Account) -> Result {
-    let pending = match first_login(options) {
+/// One login on a free VT, by the greeter or (on the `first` round, with
+/// nobody logged in) by first-boot setup's ticket, and the session it
+/// started, if any, with the VT it used.
+fn round(
+    options: &Options,
+    greeter: &Account,
+    first: bool,
+    switch: &UnixListener,
+    sessions: &[Live],
+) -> Result<(Option<Live>, u32)> {
+    let vt = free_vt(options.vt).ok_or("every VT is in use")?;
+    // Held open until the session on it has its own: logind starts a
+    // getty on a VT that comes to the front with nobody on it, unless
+    // something has it open.
+    // O_NOCTTY: the daemon must not make it its own controlling terminal,
+    // which the session's worker takes.
+    use std::os::unix::fs::OpenOptionsExt;
+    let _held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open(format!("/dev/tty{vt}"));
+    activate_vt(vt);
+    let pending = match first.then(|| first_login(options, vt)).flatten() {
         Some(pending) => Some(pending),
-        None => greet(options, greeter)?,
+        None => greet(options, greeter, vt, switch, sessions)?,
     };
     let Some(Pending {
         pam,
@@ -222,7 +298,7 @@ fn round(options: &Options, greeter: &Account) -> Result {
         start: Some((cmd, env)),
     }) = pending
     else {
-        return Ok(());
+        return Ok((None, vt));
     };
     let Some(user) = account(&username) else {
         return Err("an authenticated user has no account".into());
@@ -230,19 +306,24 @@ fn round(options: &Options, greeter: &Account) -> Result {
     // Whose session it is goes to logind, which records it with the session;
     // the log says only that one started, since the name came from the
     // greeter's text field.
-    info!("starting a session");
+    info!(vt, "starting a session");
     apply_password_age(&username);
-    let worker = spawn_session(pam, &user, options.vt, "user", &cmd, &env, true)?;
-    wait(worker);
-    info!("the session ended");
-    Ok(())
+    let worker = spawn_session(pam, &user, vt, "user", &cmd, &env, true)?;
+    Ok((
+        Some(Live {
+            worker,
+            vt,
+            uid: user.uid,
+        }),
+        vt,
+    ))
 }
 
 /// The login first-boot setup's ticket stands for, if it left one and PAM
 /// takes its password: authenticated through the same service as the login
 /// screen, so a homed home area is unlocked as usual, with the session the
 /// greeter would have started. Anything less, and the login screen asks.
-fn first_login(options: &Options) -> Option<Pending> {
+fn first_login(options: &Options, vt: u32) -> Option<Pending> {
     let ticket = first_login::take(Path::new(first_login::PATH), 0)?;
     let Some((cmd, env)) = greeter_command::session_of(&options.greeter) else {
         error!("first-boot setup left a login, but the greeter's command names no session");
@@ -251,7 +332,7 @@ fn first_login(options: &Options) -> Option<Pending> {
     let auth = pam::authenticate(
         &options.service,
         &ticket.user,
-        Some(options.vt),
+        Some(vt),
         // Setup made the password a minute ago; if the policy disagrees,
         // the login screen is where it gets changed.
         pam::Expired::Change,
@@ -366,13 +447,18 @@ impl Drop for Scripted {
 }
 
 /// One greeter, and who it authenticated and the session it asked for, if
-/// it got that far.
-fn greet(options: &Options, greeter: &Account) -> Result<Option<Pending>> {
+/// it got that far. Switch user from one of `sessions` while it is up
+/// brings it back to the front ([`answer_switches`]).
+fn greet(
+    options: &Options,
+    greeter: &Account,
+    vt: u32,
+    switch: &UnixListener,
+    sessions: &[Live],
+) -> Result<Option<Pending>> {
     fs::create_dir_all(&options.runtime_dir)?;
     fs::set_permissions(&options.runtime_dir, fs::Permissions::from_mode(0o711))?;
-    let socket = options
-        .runtime_dir
-        .join(format!("greeter-vt{}.sock", options.vt));
+    let socket = options.runtime_dir.join(format!("greeter-vt{vt}.sock"));
     match fs::remove_file(&socket) {
         Err(e) if e.kind() != ErrorKind::NotFound => return Err(e.into()),
         _ => {}
@@ -387,15 +473,7 @@ fn greet(options: &Options, greeter: &Account) -> Result<Option<Pending>> {
     let greeter_name = greeter.name.to_string_lossy().into_owned();
     let pam = Pam::start(&options.greeter_service, &greeter_name, None)?;
     let env = vec![format!("GREETD_SOCK={}", socket.display())];
-    let worker = spawn_session(
-        pam,
-        greeter,
-        options.vt,
-        "greeter",
-        &options.greeter,
-        &env,
-        false,
-    )?;
+    let worker = spawn_session(pam, greeter, vt, "greeter", &options.greeter, &env, false)?;
 
     // Wait for the greeter to connect, or to die before it does.
     let stream = loop {
@@ -405,6 +483,7 @@ fn greet(options: &Options, greeter: &Account) -> Result<Option<Pending>> {
                 if exited(worker) {
                     break None;
                 }
+                answer_switches(switch, sessions, vt);
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => return Err(e.into()),
@@ -414,7 +493,7 @@ fn greet(options: &Options, greeter: &Account) -> Result<Option<Pending>> {
     match stream {
         Some(stream) => {
             stream.set_nonblocking(false)?;
-            let pending = serve(options, stream);
+            let pending = serve(options, stream, vt, switch, sessions);
             wait(worker);
             Ok(pending)
         }
@@ -460,9 +539,21 @@ fn apply_password_age(user: &str) {
 
 /// Serves the greeter until it hangs up. Returns the authenticated user and
 /// the session they asked for, if the greeter got that far.
-fn serve(options: &Options, mut stream: UnixStream) -> Option<Pending> {
+fn serve(
+    options: &Options,
+    mut stream: UnixStream,
+    vt: u32,
+    switch: &UnixListener,
+    sessions: &[Live],
+) -> Option<Pending> {
     let mut pending: Option<Pending> = None;
     loop {
+        // Wait for the greeter's next request, answering Switch user from
+        // the sessions meanwhile.
+        if !readable(&stream, switch) {
+            answer_switches(switch, sessions, vt);
+            continue;
+        }
         let request = match greetd::read_request(&mut stream) {
             Ok(request) => request,
             // EOF: the greeter is done (it exits after a start).
@@ -473,7 +564,7 @@ fn serve(options: &Options, mut stream: UnixStream) -> Option<Pending> {
                 if pending.is_some() {
                     error("a session is already being set up")
                 } else {
-                    match authenticate(options, &mut stream, &username) {
+                    match authenticate(options, &mut stream, &username, vt) {
                         Auth::Ok(pam) => {
                             pending = Some(Pending {
                                 pam,
@@ -522,14 +613,14 @@ fn error(description: &str) -> Response {
 
 /// Runs PAM's authentication for `username`, with the greeter answering its
 /// prompts over `stream`.
-fn authenticate(options: &Options, stream: &mut UnixStream, username: &str) -> Auth {
+fn authenticate(options: &Options, stream: &mut UnixStream, username: &str, vt: u32) -> Auth {
     let Ok(channel) = stream.try_clone() else {
         return Auth::Broken;
     };
     pam::authenticate(
         &options.service,
         username,
-        Some(options.vt),
+        Some(vt),
         pam::Expired::Change,
         Box::new(channel),
     )
@@ -732,6 +823,153 @@ fn wait(pid: libc::pid_t) {
     }
 }
 
+/// The console's VT state: which VT is on the screen, and a mask of those
+/// something has open (bit N for VT N).
+fn vt_state() -> Option<(u32, u16)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let console = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open(Path::new("/dev/tty0"))
+        .ok()?;
+    use std::os::fd::AsRawFd;
+    #[repr(C)]
+    #[derive(Default)]
+    struct VtStat {
+        v_active: u16,
+        v_signal: u16,
+        v_state: u16,
+    }
+    let mut state = VtStat::default();
+    // SAFETY: VT_GETSTATE fills a `struct vt_stat`, which VtStat lays out.
+    let r = unsafe { libc::ioctl(console.as_raw_fd(), VT_GETSTATE, &mut state) };
+    (r == 0).then_some((u32::from(state.v_active), state.v_state))
+}
+
+/// The VT on the screen.
+fn active_vt() -> Option<u32> {
+    vt_state().map(|(active, _)| active)
+}
+
+/// Whether `vt` is on the screen, giving a VT switch that logind was asked
+/// for time to land: the greeter quits as soon as logind takes the request,
+/// and the switch waits for its compositor to let the VT go. Called back
+/// too early, a login screen would start on the VT being left and stay
+/// there behind the session, where Switch user could not reach it.
+fn still_active(vt: u32) -> bool {
+    for _ in 0..50 {
+        if active_vt() != Some(vt) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    true
+}
+
+/// The first VT from `from` that nothing has open: not a session, not a
+/// getty (logind keeps one on its reserved VT).
+fn free_vt(from: u32) -> Option<u32> {
+    let (_, open) = vt_state().unwrap_or((0, 0));
+    first_free(from, open)
+}
+
+fn first_free(from: u32, open: u16) -> Option<u32> {
+    (from.max(1)..=LAST_VT).find(|vt| open & (1 << vt) == 0)
+}
+
+/// The socket sessions ask for the login screen on, open to everyone:
+/// connecting is the whole request.
+fn listen_for_switches(runtime_dir: &Path) -> Result<UnixListener> {
+    fs::create_dir_all(runtime_dir)?;
+    fs::set_permissions(runtime_dir, fs::Permissions::from_mode(0o711))?;
+    let path = runtime_dir.join(Path::new(SWITCH_SOCKET).file_name().unwrap_or_default());
+    match fs::remove_file(&path) {
+        Err(e) if e.kind() != ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    let listener = UnixListener::bind(&path)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666))?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
+}
+
+/// Whether someone asked for the login screen since the last look: the
+/// owner of one of `sessions` while it is on the screen (`active`). Anyone
+/// else's request is dropped, so a program in a session in the background
+/// cannot pull the screen away from whoever is using it.
+fn switch_requested(listener: &UnixListener, sessions: &[Live], active: Option<u32>) -> bool {
+    let mut asked = false;
+    while let Ok((stream, _)) = listener.accept() {
+        let Some(uid) = peer_uid(&stream) else {
+            continue;
+        };
+        if sessions
+            .iter()
+            .any(|s| s.uid == uid && active == Some(s.vt))
+        {
+            info!("switching user");
+            asked = true;
+        }
+    }
+    asked
+}
+
+/// Brings the login screen on `vt` back to the front when one of
+/// `sessions` asks for it, as [`switch_requested`] judges: its owner went
+/// back to it from the login screen without logging in, and now wants the
+/// login screen again.
+fn answer_switches(switch: &UnixListener, sessions: &[Live], vt: u32) {
+    if switch_requested(switch, sessions, active_vt()) {
+        activate_vt(vt);
+    }
+}
+
+/// Whether the greeter's `stream` has something to read (or hung up), as
+/// against a Switch user request arriving on `switch` first.
+fn readable(stream: &UnixStream, switch: &UnixListener) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut fds = [
+        libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: switch.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    // SAFETY: poll reads and writes the two pollfds it is given.
+    let r = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+    // On an error (EINTR) the read decides: it blocks until the greeter
+    // speaks, which is what serving it did before.
+    r < 0 || fds[0].revents != 0
+}
+
+/// Who connected on `stream`, as the kernel recorded at connect time.
+fn peer_uid(stream: &UnixStream) -> Option<libc::uid_t> {
+    use std::os::fd::AsRawFd;
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: SO_PEERCRED fills a `struct ucred` of `len` bytes.
+    let r = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    (r == 0).then_some(cred.uid)
+}
+
 /// Brings `vt` to the front, so the session on it is the seat's active one.
 fn activate_vt(vt: u32) {
     let Ok(console) = fs::OpenOptions::new()
@@ -753,6 +991,16 @@ fn activate_vt(vt: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_greeter_takes_the_first_vt_nothing_has_open() {
+        // tty1 has a session, tty6 logind's reserved getty.
+        let open = (1 << 1) | (1 << 6);
+        assert_eq!(first_free(1, open), Some(2));
+        assert_eq!(first_free(1, 0), Some(1));
+        assert_eq!(first_free(6, open), Some(7));
+        assert_eq!(first_free(1, u16::MAX), None);
+    }
 
     #[test]
     fn the_command_runs_after_the_profile() {

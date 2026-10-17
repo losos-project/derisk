@@ -27,7 +27,7 @@ use derisk::{
     backlight::{self, PasswordDim},
     greetd::{self, Login, Phase, Request, Response},
     time::Clock,
-    ui::{GreeterInput, paint_login, paint_startup, paint_wallpaper, show_greeter},
+    ui::{GreeterInput, LoginUser, paint_login, paint_startup, paint_wallpaper, show_greeter},
 };
 use mcsapi::WindowId;
 use mcsapi_compositor::{
@@ -94,7 +94,10 @@ const SESSION_ENV: [&str; 3] = [
 
 struct Greeter {
     login: Login,
-    users: Vec<String>,
+    users: Vec<LoginUser>,
+    /// `loginctl activate` going back to someone's running session: its
+    /// result arrives here, and the greeter exits once it worked.
+    switching: Option<mpsc::Receiver<std::result::Result<(), String>>>,
     /// Submit on the first frame: one user, so go straight to the password
     /// the way the lock screen does.
     auto_submit: bool,
@@ -141,9 +144,46 @@ impl Greeter {
         }
     }
 
+    /// Goes to `user`'s running session instead of logging them in again:
+    /// logind makes it the seat's active session (polkit lets the active
+    /// session on a seat do that), it shows its own lock screen, and this
+    /// greeter is no longer needed.
+    fn switch_to(&mut self, user: usize) {
+        let Some(session) = self.users.get(user).and_then(|u| u.session.clone()) else {
+            return;
+        };
+        if self.switching.is_some() {
+            return;
+        }
+        info!("switching to a running session");
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            let out = std::process::Command::new("loginctl")
+                .args(["activate", &session])
+                .stdin(std::process::Stdio::null())
+                .output();
+            let _ = done.send(match out {
+                Ok(out) if out.status.success() => Ok(()),
+                Ok(out) => Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()),
+                Err(e) => Err(e.to_string()),
+            });
+        });
+        self.switching = Some(result);
+    }
+
     /// Applies greetd's answers that arrived since the last frame. `now` is
     /// ms since the first frame.
     fn poll(&mut self, now: u32) {
+        if let Some(result) = self.switching.as_ref().and_then(|r| r.try_recv().ok()) {
+            self.switching = None;
+            match result {
+                Ok(()) => self.quit(),
+                Err(e) => {
+                    error!("cannot switch to the session: {e}");
+                    self.login.tell("Could not switch to that session", true);
+                }
+            }
+        }
         loop {
             match self.from_greetd.try_recv() {
                 Ok(Ok(response)) => {
@@ -276,10 +316,24 @@ impl compositor::Shell for Greeter {
             }
             None => {}
         }
-        let request = match input {
-            GreeterInput::Submit => self.login.submit(),
-            GreeterInput::Back => self.login.back(),
-            GreeterInput::None => None,
+        // A name typed for someone signed in already goes to their session
+        // too, the same as picking them.
+        let typed = (input == GreeterInput::Submit && *self.login.phase() == Phase::User)
+            .then(|| {
+                let name = self.login.username.trim();
+                self.users
+                    .iter()
+                    .position(|u| u.name == name && u.session.is_some())
+            })
+            .flatten();
+        let request = match (input, typed) {
+            (_, Some(user)) | (GreeterInput::Switch(user), _) => {
+                self.switch_to(user);
+                None
+            }
+            (GreeterInput::Submit, None) => self.login.submit(),
+            (GreeterInput::Back, None) => self.login.back(),
+            (GreeterInput::None, None) => None,
         };
         self.send(request);
         // greetd's answers arrive between frames; keep drawing so they show.
@@ -326,45 +380,99 @@ pub(crate) fn spawn_worker(
 }
 
 /// Regular users, from userdb (which includes systemd-homed's) and then
-/// /etc/passwd, sorted and without repeats.
-fn regular_users() -> Vec<String> {
-    let mut users = Vec::new();
-    if let Ok(out) = std::process::Command::new("userdbctl")
-        .args([
+/// /etc/passwd, sorted and without repeats, each with their running session
+/// on this seat if they have one.
+fn regular_users() -> Vec<LoginUser> {
+    let output = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let mut users: Vec<LoginUser> = userdb_users(&output(
+        "userdbctl",
+        &[
             "user",
             "--disposition=regular",
             "--json=short",
             "--no-pager",
-        ])
-        .stderr(std::process::Stdio::null())
-        .output()
-    {
-        // One JSON object per record, possibly with RS separators.
-        let text = String::from_utf8_lossy(&out.stdout).replace('\u{1e}', "\n");
-        for record in serde_json::Deserializer::from_str(&text).into_iter::<serde_json::Value>() {
-            let Ok(record) = record else { break };
-            if let Some(name) = record.get("userName").and_then(|n| n.as_str()) {
-                users.push(name.to_owned());
-            }
-        }
-    }
+        ],
+    ))
+    .collect();
     if let Ok(passwd) = std::fs::read_to_string("/etc/passwd") {
         users.extend(passwd_users(&passwd));
     }
-    users.sort();
-    users.dedup();
+    // userdb comes first, so its record (with the full name) is the one
+    // kept when /etc/passwd lists the same person.
+    users.sort_by(|a, b| a.name.cmp(&b.name));
+    users.dedup_by(|later, first| later.name == first.name);
+    let sessions = output("loginctl", &["list-sessions", "--json=short", "--no-pager"]);
+    for (name, id) in seat_sessions(&sessions) {
+        if let Some(user) = users.iter_mut().find(|u| u.name == name) {
+            user.session.get_or_insert(id);
+        }
+    }
     users
 }
 
+/// People in `userdbctl user --json=short` output: one JSON object per
+/// record, possibly with RS separators.
+fn userdb_users(json: &str) -> impl Iterator<Item = LoginUser> {
+    let text = json.replace('\u{1e}', "\n");
+    let records: Vec<serde_json::Value> = serde_json::Deserializer::from_str(&text)
+        .into_iter::<serde_json::Value>()
+        .map_while(std::result::Result::ok)
+        .collect();
+    records.into_iter().filter_map(|record| {
+        Some(LoginUser {
+            name: record.get("userName")?.as_str()?.to_owned(),
+            real_name: record
+                .get("realName")
+                .and_then(|n| n.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            session: None,
+        })
+    })
+}
+
 /// Users in /etc/passwd in the regular UID range (1000–60000, systemd's and
-/// most distributions') that have a login shell.
-fn passwd_users(passwd: &str) -> impl Iterator<Item = String> + '_ {
+/// most distributions') that have a login shell, with the full name from
+/// the comment field.
+fn passwd_users(passwd: &str) -> impl Iterator<Item = LoginUser> + '_ {
     passwd.lines().filter_map(|line| {
         let fields: Vec<&str> = line.split(':').collect();
         let uid: u32 = fields.get(2)?.parse().ok()?;
         let shell = fields.get(6)?;
         let login = !shell.ends_with("/nologin") && !shell.ends_with("/false");
-        ((1000..=60000).contains(&uid) && login).then(|| fields[0].to_owned())
+        ((1000..=60000).contains(&uid) && login).then(|| LoginUser {
+            name: fields[0].to_owned(),
+            real_name: fields
+                .get(4)
+                .and_then(|gecos| gecos.split(',').next())
+                .unwrap_or_default()
+                .to_owned(),
+            session: None,
+        })
+    })
+}
+
+/// The user sessions on seat0 in `loginctl list-sessions --json=short`
+/// output, as (user, session ID): the desktops someone left running, which
+/// the greeter goes back to rather than starting a second one.
+fn seat_sessions(json: &str) -> impl Iterator<Item = (String, String)> {
+    let list: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
+    list.into_iter().filter_map(|session| {
+        let text = |key: &str| session.get(key)?.as_str().map(str::to_owned);
+        let ours = text("class").as_deref() == Some("user")
+            && text("seat").as_deref() == Some("seat0")
+            // A session logind is closing (its user logged out) is not
+            // one to go back to.
+            && text("state").as_deref() != Some("closing");
+        ours.then(|| Some((text("user")?, text("session")?)))
+            .flatten()
     })
 }
 
@@ -391,10 +499,12 @@ pub fn run(options: Options) -> Result {
         .map_err(|e| format!("cannot reach greetd on {}: {e}", socket.to_string_lossy()))?;
     let (to_greetd, from_greetd) = spawn_worker(stream);
     let users = regular_users();
-    let preset = options
-        .user
-        .clone()
-        .or_else(|| (users.len() == 1).then(|| users[0].clone()));
+    // The only person goes straight to their password, unless they are
+    // signed in already: then the list offers to go back to their session.
+    let preset = options.user.clone().or_else(|| match users.as_slice() {
+        [only] if only.session.is_none() => Some(only.name.clone()),
+        _ => None,
+    });
     let greeter = Greeter {
         auto_submit: preset.is_some(),
         login: Login::new(
@@ -403,6 +513,7 @@ pub fn run(options: Options) -> Result {
             session_env(options.env),
         ),
         users,
+        switching: None,
         output: (1280, 800),
         clock: Clock::now_local(),
         last_tick: None,
@@ -430,7 +541,39 @@ mod tests {
                       alice:x:1000:100::/home/alice:/bin/bash\n\
                       backup:x:1001:1001::/:/usr/sbin/nologin\n\
                       nobody:x:65534:65534::/:/bin/false\n";
-        assert_eq!(passwd_users(passwd).collect::<Vec<_>>(), ["alice"]);
+        let users: Vec<_> = passwd_users(passwd).collect();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].name, "alice");
+    }
+
+    #[test]
+    fn full_names_come_from_userdb_and_passwd() {
+        let userdb = "\u{1e}{\"userName\":\"ada\",\"realName\":\"Ada Lovelace\"}\n\
+                      \u{1e}{\"userName\":\"bob\"}\n";
+        let users: Vec<_> = userdb_users(userdb).collect();
+        assert_eq!(users[0].display_name(), "Ada Lovelace");
+        assert_eq!(users[1].display_name(), "bob");
+        let passwd = "carol:x:1000:100:Carol Danvers,,,:/home/carol:/bin/bash\n";
+        assert_eq!(
+            passwd_users(passwd).next().unwrap().real_name,
+            "Carol Danvers"
+        );
+    }
+
+    #[test]
+    fn running_desktops_are_the_seats_user_sessions() {
+        // systemd 261's `loginctl list-sessions --json=short`.
+        let json = r#"[
+            {"session":"2","uid":1000,"user":"ada","seat":"seat0","leader":901,"class":"user","tty":"tty1","idle":true,"since":null,"state":"active"},
+            {"session":"c1","uid":994,"user":"derisk-greeter","seat":"seat0","leader":950,"class":"greeter","tty":"tty2","idle":false,"since":null,"state":"online"},
+            {"session":"4","uid":1001,"user":"bob","seat":null,"leader":990,"class":"user","tty":"pts/0","idle":false,"since":null,"state":"active"},
+            {"session":"5","uid":1002,"user":"carol","seat":"seat0","leader":991,"class":"user","tty":"tty3","idle":false,"since":null,"state":"closing"}
+        ]"#;
+        assert_eq!(
+            seat_sessions(json).collect::<Vec<_>>(),
+            [("ada".to_owned(), "2".to_owned())]
+        );
+        assert_eq!(seat_sessions("").count(), 0);
     }
 
     #[test]

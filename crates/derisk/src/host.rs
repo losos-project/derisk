@@ -63,7 +63,7 @@ use derisk::{
     time::Clock,
     tutorial,
     ui::{
-        ChoiceInput, KeyHint, PolkitInput, ShellUi, TitleDragPhase, WindowPictures,
+        ChoiceInput, KeyHint, LockInput, PolkitInput, ShellUi, TitleDragPhase, WindowPictures,
         set_touch_style, show_choice, show_lock, show_polkit,
     },
     wallpaper::{self, Visibility, WallpaperPainter},
@@ -1281,7 +1281,7 @@ impl Session {
                     if matches!(
                         effect,
                         Effect::Session {
-                            op: SessionOp::Lock
+                            op: SessionOp::Lock | SessionOp::SwitchUser
                         }
                     ) {
                         self.lock_screen();
@@ -1291,6 +1291,14 @@ impl Session {
                         let session = self.session_id.as_deref();
                         if let Some(argv) = systemd::effect_argv(&effect, self.launches, session) {
                             let _ = systemd::run(&argv);
+                        }
+                        if matches!(
+                            effect,
+                            Effect::Session {
+                                op: SessionOp::SwitchUser
+                            }
+                        ) {
+                            switch_user();
                         }
                     } else {
                         info!(
@@ -1950,16 +1958,22 @@ impl compositor::Shell for Session {
         }
         if self.lock.is_locked() {
             let theme = self.ui.theme;
-            if show_lock(
+            match show_lock(
                 ui,
                 &mut self.lock,
                 &self.shell,
                 &theme,
                 &self.user,
                 &mut self.lock_wallpaper,
-            ) && let Some(request) = self.lock.login.submit()
-            {
-                self.send_auth(request);
+                self.execute && Path::new(systemd::SWITCH_USER_SOCKET).exists(),
+            ) {
+                LockInput::Submit => {
+                    if let Some(request) = self.lock.login.submit() {
+                        self.send_auth(request);
+                    }
+                }
+                LockInput::SwitchUser => switch_user(),
+                LockInput::None => {}
             }
             self.ui.show_privacy_cover(ui, &self.shell);
             return;
@@ -2859,6 +2873,15 @@ fn tiled_edges(mode: Mode) -> Edges {
             SnapZone::BottomRight => edges(false, true, false, true),
             SnapZone::Maximize => Edges::NONE,
         },
+    }
+}
+
+/// Asks the display manager for the login screen, so someone else can log
+/// in while this session keeps running behind its lock screen.
+fn switch_user() {
+    match systemd::request_switch_user() {
+        Ok(()) => info!("asked for the login screen"),
+        Err(e) => warn!("cannot ask the display manager to switch user: {e}"),
     }
 }
 

@@ -36,12 +36,26 @@ pub const FOCUS_WEIGHT: u32 = 400;
 /// Default CPU/IO weight.
 pub const DEFAULT_WEIGHT: u32 = 100;
 
+/// Where `derisk display-manager` listens for a session asking it to show
+/// the login screen, so someone else can log in while it keeps running.
+pub const SWITCH_USER_SOCKET: &str = "/run/derisk-dm/switch.sock";
+
+/// Asks `derisk display-manager` to show the login screen on a VT of its
+/// own ([`SWITCH_USER_SOCKET`]). Connecting is the request; it is heard
+/// only from the session on the screen, so call it from there.
+pub fn request_switch_user() -> io::Result<()> {
+    std::os::unix::net::UnixStream::connect(SWITCH_USER_SOCKET).map(drop)
+}
+
 /// A logind / service-manager session operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionOp {
     /// Lock the session.
     Lock,
+    /// Lock the session and show the login screen on another VT, leaving
+    /// it running for its owner to come back to.
+    SwitchUser,
     /// Suspend to RAM.
     Suspend,
     /// Hibernate.
@@ -140,7 +154,7 @@ pub fn launch_command_argv(app: &str, instance: u64, command: &[String]) -> Opti
 /// Command line for a session operation.
 pub fn session_argv(op: SessionOp, session_id: Option<&str>) -> Vec<String> {
     let args: Vec<&str> = match op {
-        SessionOp::Lock => match session_id {
+        SessionOp::Lock | SessionOp::SwitchUser => match session_id {
             Some(id) => vec!["loginctl", "lock-session", id],
             None => vec!["loginctl", "lock-sessions"],
         },

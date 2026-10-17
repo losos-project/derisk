@@ -305,6 +305,17 @@ fn session(args: &[String]) -> Result {
             other => return Err(usage(format!("unknown session option: {other}"))),
         }
     }
+    // The Users page in Settings says why homed would refuse a new
+    // person's password while it is typed, and makes the account under the
+    // password age policy, as first-boot setup does.
+    derisk_settings::users::set_password_check(|password, user| {
+        pwquality::Checker::load()?.weakness(password, user)
+    });
+    derisk_settings::users::set_password_age(|| {
+        derisk::password_age::PasswordAge::system()
+            .homectl_args()
+            .collect()
+    });
     host::run(options)
 }
 

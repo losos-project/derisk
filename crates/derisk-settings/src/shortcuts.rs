@@ -442,6 +442,8 @@ shortcuts! {
     Machines = "machines", Apps, "Machines", "Super+O V";
     /// Lock the screen.
     Lock = "lock", Session, "Lock the screen", "Super+L";
+    /// Lock, and show the login screen for someone else.
+    SwitchUser = "switch_user", Session, "Switch user", "Super+X U";
     /// Suspend.
     Suspend = "suspend", Session, "Suspend", "Super+X S";
     /// Log out, after asking.

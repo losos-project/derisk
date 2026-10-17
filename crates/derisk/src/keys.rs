@@ -158,6 +158,7 @@ pub fn action(shortcut: Shortcut) -> Action {
         Shortcut::Calculator => launch(CALCULATOR),
         Shortcut::Machines => launch(derisk_machines::APP_ID),
         Shortcut::Lock => session(SessionOp::Lock),
+        Shortcut::SwitchUser => session(SessionOp::SwitchUser),
         Shortcut::Suspend => session(SessionOp::Suspend),
         Shortcut::LogOut => ask(SessionOp::Logout),
         Shortcut::Reboot => ask(SessionOp::Reboot),
