@@ -99,6 +99,10 @@ pub struct Account {
     /// Whether the user name was typed rather than derived from the full
     /// name; once it was, the full name stops changing it.
     pub user_name_edited: bool,
+    /// Why homed's quality check would refuse the password, set by whoever
+    /// can ask libpwquality (`derisk setup`); `None` when it would take it
+    /// or nobody asked.
+    pub weakness: Option<String>,
 }
 
 /// Names a user may not take: system accounts that exist or that systemd
@@ -130,7 +134,7 @@ impl Account {
 
     /// What is wrong with the account so far, in a sentence, or `None` when
     /// it can be created.
-    pub fn problem(&self) -> Option<&'static str> {
+    pub fn problem(&self) -> Option<&str> {
         if self.real_name.trim().is_empty() {
             return Some("Enter your name.");
         }
@@ -142,6 +146,11 @@ impl Account {
         }
         if self.password.is_empty() {
             return Some("Choose a password.");
+        }
+        // Before the confirmation, so a weak password is said while it is
+        // typed the first time.
+        if let Some(weakness) = &self.weakness {
+            return Some(weakness);
         }
         if self.password != self.confirm {
             return Some("The passwords do not match.");
@@ -319,4 +328,69 @@ pub fn has_regular_users(userdbctl_json: &str) -> bool {
         .into_iter::<serde_json::Value>()
         .map_while(Result::ok)
         .any(|record| record.get("userName").is_some())
+}
+
+/// Where systemd's password agents find the questions a program on this
+/// machine is waiting on, one `ask.*` file each.
+pub const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
+
+/// The socket that answers `ask_file` (an `ask.*` file under
+/// [`ASK_PASSWORD_DIR`]) when it is the question process `pid` is waiting
+/// on, or `None` when it is another program's.
+///
+/// homectl reads the new password from `NEWPASSWORD` once. When homed
+/// refuses that password (its quality policy), systemd 261's homectl asks
+/// for another, and with no terminal on its stdin it asks a password agent
+/// with no time limit. Nothing answers on the seat while the setup holds
+/// it, so "Your account" would spin for good; the setup answers "cancel"
+/// on this socket instead ([`ASK_CANCEL`]), and homectl exits with homed's
+/// reason on its stderr ([`task_failure`]).
+pub fn ask_socket(ask_file: &str, pid: u32) -> Option<std::path::PathBuf> {
+    let field = |key: &str| {
+        ask_file
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('='))
+            .map(str::trim)
+    };
+    (field("PID")?.parse::<u32>().ok()? == pid)
+        .then(|| field("Socket"))
+        .flatten()
+        .filter(|socket| !socket.is_empty())
+        .map(Into::into)
+}
+
+/// The datagram that answers a password agent's question with "cancel".
+pub const ASK_CANCEL: &[u8] = b"-";
+
+/// What to show for a task that failed with `stderr`, or `None` when it
+/// printed nothing. Normally its last line. When the setup cancelled a
+/// password question, homectl's last lines are only the cancellation and a
+/// hint about a command-line switch; the line before them is homed's
+/// reason ("Password too weak: ...").
+pub fn task_failure(stderr: &str) -> Option<&str> {
+    let lines = || {
+        stderr
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+    };
+    lines()
+        .filter(|line| {
+            !line.starts_with("Failed to acquire password")
+                && !line.starts_with("(Use --enforce-password-policy=")
+        })
+        .next_back()
+        .or_else(|| lines().next_back())
+}
+
+/// `text` as a sentence: libpwquality's messages ("The password is shorter
+/// than 8 characters") end without a full stop, and the page's own notices
+/// end with one.
+pub fn sentence(text: &str) -> String {
+    let text = text.trim();
+    if text.ends_with(['.', '!', '?']) {
+        text.to_owned()
+    } else {
+        format!("{text}.")
+    }
 }
