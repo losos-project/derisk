@@ -2,7 +2,9 @@
 //! network, the project's home server.
 //!
 //! Git repositories in the home go to the box's LosOS Git, each as a private
-//! repository, and everything else goes to the person's LosOS cloud. None of
+//! repository, and so do the configs (`~/.config` and the home's dotfiles),
+//! as the history of one private repository of their own. Everything else
+//! goes to the person's LosOS cloud. None of
 //! it is derisk's own setting: `losos-backup`, which the OS runs from a user
 //! timer, keeps its own, and this page runs it. `losos-backup status` says
 //! where things stand as JSON, `choose` pins a box's certificate, `sign-in`
@@ -48,6 +50,11 @@ pub struct Run {
     pub failures: Vec<String>,
     /// Repositories pushed.
     pub repos: u64,
+    /// Config files in LosOS Git's configs repository, or 0 when they went
+    /// to LosOS cloud.
+    pub configs: u64,
+    /// Whether the run committed a change to them.
+    pub configs_changed: bool,
     /// Repositories that could not be, each with why.
     pub repo_failures: Vec<String>,
 }
@@ -113,6 +120,8 @@ pub fn parse_status(json: &str) -> Option<Status> {
             failed: number(l, "failed"),
             failures: list(l, "failures"),
             repos: number(l, "repos"),
+            configs: number(l, "configs"),
+            configs_changed: l.get("configs_changed").and_then(Value::as_bool) == Some(true),
             repo_failures: list(l, "repo_failures"),
         }),
         last_done: number(&v, "last_done"),
@@ -172,6 +181,18 @@ pub fn summary(run: &Run) -> String {
             "{} repositor{}",
             run.repos,
             if run.repos == 1 { "y" } else { "ies" }
+        ));
+    }
+    if run.configs > 0 {
+        parts.push(format!(
+            "{} config file{} {}",
+            run.configs,
+            if run.configs == 1 { "" } else { "s" },
+            if run.configs_changed {
+                "committed"
+            } else {
+                "unchanged"
+            }
         ));
     }
     if parts.is_empty() {
@@ -385,7 +406,7 @@ fn last_backup(ui: &mut egui::Ui, state: &mut BackupUi, status: &Status, theme: 
     section(ui, theme, "Backups");
     hint(
         ui,
-        "Repositories in your home go to LosOS Git, each as a private repository of yours. Everything else goes to LosOS cloud, in Backups, under this computer's name. Caches and the trash stay out.",
+        "Repositories in your home go to LosOS Git, each as a private repository of yours, and so do your configs, the files in ~/.config and your dotfiles, as one private repository with their history. Everything else goes to LosOS cloud, in Backups, under this computer's name. Caches and the trash stay out.",
     );
     let ready = !status.box_name.is_empty() && (status.cloud.is_some() || status.git.is_some());
     let mut on = status.enabled;
@@ -584,7 +605,7 @@ mod tests {
 
     #[test]
     fn reads_the_status() {
-        let json = r#"{"box":"mattbox.local","fingerprint":"AB:CD","enabled":true,"cloud":"matus","git":null,"running":false,"last":{"started":10,"finished":20,"box":"mattbox.local","machine":"boxes","outcome":"done","message":"","uploaded":3,"bytes":2048,"deleted":1,"unchanged":7,"failed":1,"failures":["~/.htaccess: forbidden"],"repos":2,"repo_failures":[]},"last_done":20,"routed":true,"machines":["boxes"],"boxes":["mattbox.local"]}"#;
+        let json = r#"{"box":"mattbox.local","fingerprint":"AB:CD","enabled":true,"cloud":"matus","git":null,"running":false,"last":{"started":10,"finished":20,"box":"mattbox.local","machine":"boxes","outcome":"done","message":"","uploaded":3,"bytes":2048,"deleted":1,"unchanged":7,"failed":1,"failures":["~/.htaccess: forbidden"],"repos":2,"configs":14,"configs_changed":true,"repo_failures":[]},"last_done":20,"routed":true,"machines":["boxes"],"boxes":["mattbox.local"]}"#;
         let status = parse_status(json).unwrap();
         assert_eq!(status.box_name, "mattbox.local");
         assert_eq!(status.cloud.as_deref(), Some("matus"));
@@ -593,7 +614,7 @@ mod tests {
         assert_eq!((last.uploaded, last.repos, last.failures.len()), (3, 2, 1));
         assert_eq!(
             summary(&last),
-            "3 files sent (2.0 KB), 7 unchanged, 1 removed, 2 repositories."
+            "3 files sent (2.0 KB), 7 unchanged, 1 removed, 2 repositories, 14 config files committed."
         );
         assert!(parse_status("not json").is_none());
         assert_eq!(parse_status(r#"{"last":null}"#).unwrap().last, None);
