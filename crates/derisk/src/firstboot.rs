@@ -10,9 +10,12 @@
 //! login goes through the login screen.
 
 use std::{
+    io::Read,
+    os::unix::net::UnixDatagram,
     process::{Command as Process, Stdio},
     sync::mpsc::{self, Receiver},
     thread,
+    time::Duration,
 };
 
 use derisk::{
@@ -462,24 +465,75 @@ impl Flow for Setup {
     }
 }
 
-/// Runs one task, returning what it said on failure.
+/// How often a running task is checked for a password question.
+const ASK_POLL: Duration = Duration::from_millis(200);
+
+/// Runs one task, returning what it said on failure. A task that stops to
+/// ask for a password is answered "cancel" ([`cancel_questions`]), so it
+/// fails with its reason instead of waiting for an answer nobody can give.
 fn execute(task: &Task) -> std::result::Result<(), String> {
-    let output = Process::new(&task.argv[0])
+    let mut child = Process::new(&task.argv[0])
         .args(&task.argv[1..])
         .envs(task.env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("{}: {e}", task.argv[0]))?;
-    if output.status.success() {
+    let pid = child.id();
+    let mut stderr = child.stderr.take();
+    let (status, said) = thread::scope(|scope| {
+        // Read as it comes, so a chatty task never blocks on a full pipe
+        // while this thread waits for it.
+        let reader = scope.spawn(move || {
+            let mut said = String::new();
+            if let Some(stderr) = &mut stderr {
+                let _ = stderr.read_to_string(&mut said);
+            }
+            said
+        });
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => {}
+                Err(e) => break Err(e),
+            }
+            cancel_questions(pid);
+            thread::sleep(ASK_POLL);
+        };
+        (status, reader.join().unwrap_or_default())
+    });
+    let status = status.map_err(|e| format!("{}: {e}", task.argv[0]))?;
+    if status.success() {
         return Ok(());
     }
-    let said = String::from_utf8_lossy(&output.stderr);
-    let said = said.trim();
-    Err(if said.is_empty() {
-        format!("{} failed ({})", task.argv[0], output.status)
-    } else {
-        said.lines().last().unwrap_or(said).to_owned()
-    })
+    Err(setup::task_failure(&said)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{} failed ({status})", task.argv[0])))
+}
+
+/// Answers "cancel" to every password question process `pid` is waiting
+/// on (see [`setup::ask_socket`] for why homectl asks one).
+fn cancel_questions(pid: u32) {
+    let Ok(dir) = std::fs::read_dir(setup::ASK_PASSWORD_DIR) else {
+        return;
+    };
+    for entry in dir.flatten() {
+        if !entry.file_name().as_encoded_bytes().starts_with(b"ask.") {
+            continue;
+        }
+        let Ok(ask) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if let Some(socket) = setup::ask_socket(&ask, pid) {
+            warn!(pid, "a setup task asked for a password; cancelling it");
+            if let Err(error) =
+                UnixDatagram::unbound().and_then(|s| s.send_to(setup::ASK_CANCEL, &socket))
+            {
+                warn!(%error, "cannot cancel the password question");
+            }
+        }
+    }
 }
 
 /// Whether a regular user exists, by userdb (which includes homed's).

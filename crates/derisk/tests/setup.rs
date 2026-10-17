@@ -223,6 +223,41 @@ fn setup_runs_only_without_regular_users() {
 }
 
 #[test]
+fn a_password_question_is_matched_to_the_process_asking() {
+    // What systemd 261's ask_password_agent() writes for homectl.
+    let ask = "[Ask]\nPID=1875\nSocket=/run/systemd/ask-password/sck.5b0c\n\
+               AcceptCached=0\nEcho=0\nNotAfter=0\nSilent=0\nIcon=user-home\n\
+               Message=Please enter new password for user matus:\n";
+    assert_eq!(
+        setup::ask_socket(ask, 1875),
+        Some("/run/systemd/ask-password/sck.5b0c".into())
+    );
+    assert_eq!(setup::ask_socket(ask, 18), None);
+    assert_eq!(setup::ask_socket("[Ask]\nPID=1875\n", 1875), None);
+    assert_eq!(setup::ask_socket("", 1875), None);
+}
+
+#[test]
+fn a_refused_password_shows_homeds_reason() {
+    let cancelled = "Password too weak: The password is shorter than 8 characters\n\
+                     (Use --enforce-password-policy=no to turn off password quality checks for this account.)\n\
+                     Failed to acquire password: Operation canceled\n";
+    assert_eq!(
+        setup::task_failure(cancelled),
+        Some("Password too weak: The password is shorter than 8 characters")
+    );
+    assert_eq!(
+        setup::task_failure("Warning: x\nFailed to set locale: Access denied\n"),
+        Some("Failed to set locale: Access denied")
+    );
+    assert_eq!(
+        setup::task_failure("Failed to acquire password: Operation canceled\n"),
+        Some("Failed to acquire password: Operation canceled")
+    );
+    assert_eq!(setup::task_failure(" \n"), None);
+}
+
+#[test]
 fn backend_protocol_round_trips() {
     assert_eq!(
         install::request_line(&Request::Disks),
