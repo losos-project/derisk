@@ -11,6 +11,11 @@
 //! Portal permissions (camera, location, background, notifications,
 //! screenshots) live in xdg-desktop-portal's permission store, which only
 //! its D-Bus service writes; they go through `flatpak permission-set`.
+//!
+//! On LosOS's PCs Flatpak does not run on this computer at all: its apps
+//! live in a virtual machine of their own. [`Installation`] is what the
+//! Privacy page reads and changes, so the same page works on [`Dirs`] here
+//! and, through derisk-machines, on that machine's.
 
 use std::{
     collections::BTreeMap,
@@ -428,17 +433,8 @@ impl Dirs {
                         .find_map(|l| l.strip_prefix("Name=").map(str::to_owned))
                 })
                 .unwrap_or_else(|| id.clone());
-                let overrides = fs::read_to_string(self.override_path(&id))
-                    .map(|t| Context::parse(&t))
-                    .unwrap_or_default();
-                apps.push(App {
-                    bus_names: bus_names(&metadata),
-                    requested: Context::parse(&metadata),
-                    id,
-                    name,
-                    user,
-                    overrides,
-                });
+                let overrides = fs::read_to_string(self.override_path(&id)).unwrap_or_default();
+                apps.push(App::from_files(id, name, user, &metadata, &overrides));
             }
         }
         apps.sort_by_key(|a| a.name.to_lowercase());
@@ -487,6 +483,26 @@ fn bus_names(metadata: &str) -> Vec<String> {
 }
 
 impl App {
+    /// The app `id`, called `name` and installed for the user or not, from
+    /// its `metadata` keyfile and the user's `overrides` of it, as they are
+    /// in an installation's files.
+    pub fn from_files(
+        id: String,
+        name: String,
+        user: bool,
+        metadata: &str,
+        overrides: &str,
+    ) -> App {
+        App {
+            bus_names: bus_names(metadata),
+            requested: Context::parse(metadata),
+            overrides: Context::parse(overrides),
+            id,
+            name,
+            user,
+        }
+    }
+
     /// Whether `perm` is in effect, after the global and the app's own
     /// overrides.
     pub fn effective(&self, global: &Context, key: Key, value: &str) -> Option<Grant> {
@@ -568,13 +584,109 @@ pub fn parse_permission_show(text: &str) -> BTreeMap<Portal, bool> {
 /// Grants or denies a portal permission, or with `None` forgets it so the
 /// portal asks again.
 pub fn set_portal(app: &str, portal: Portal, allow: Option<bool>) -> Result<(), CommandError> {
-    let (table, object) = portal.store();
-    match allow {
-        Some(allow) => {
-            let mut args = vec!["permission-set", table, object, app];
-            args.extend(portal.values(allow));
-            flatpak(&args).map(drop)
-        }
-        None => flatpak(&["permission-remove", table, object, app]).map(drop),
+    let args = portal_args(app, portal, allow);
+    flatpak(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(drop)
+}
+
+/// What an [`Installation`] has found of its apps so far.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Scan {
+    /// Its apps, by name, and the overrides every app gets.
+    Apps {
+        /// The apps.
+        apps: Vec<App>,
+        /// The user's overrides of every app (`overrides/global`).
+        global: Context,
+    },
+    /// Not known yet; the line says what it waits for.
+    Waiting(String),
+    /// Cannot be read now; the line says why. `startable` when starting
+    /// something (its machine) would let it be read.
+    Unavailable {
+        /// Why, for the page.
+        reason: String,
+        /// Whether [`Installation::start`] would help.
+        startable: bool,
+    },
+}
+
+/// Finds the installation Flatpak apps are in, when it is not this
+/// computer's own: the machine Flatpak runs in, say. `None` when there is
+/// none, and this computer's own is read.
+pub type FindInstallation = fn() -> Option<Box<dyn Installation>>;
+
+/// Where the Privacy page finds Flatpak apps and changes what they may
+/// reach: this computer's own [`Dirs`], or a machine Flatpak runs in.
+///
+/// Nothing here may block for long: the page is drawn by the compositor,
+/// and a machine is a guest agent's round trip away. A slow installation
+/// answers [`Scan::Waiting`] and `None` until it knows, does its changes
+/// in the background, and says through [`Installation::status`] when one
+/// failed; the page asks again every frame meanwhile.
+pub trait Installation: fmt::Debug + Send {
+    /// Where the apps run, for the page to say: `None` for this computer,
+    /// or a machine's name.
+    fn machine(&self) -> Option<&str> {
+        None
     }
+
+    /// The apps, as far as known; `again` asks the installation to look
+    /// afresh rather than answer what it found before.
+    fn scan(&mut self, again: bool) -> Scan;
+
+    /// Writes `overrides` as the user's overrides of `app`; empty removes
+    /// them.
+    fn save_overrides(&mut self, app: &str, overrides: &Context) -> Result<(), String>;
+
+    /// `app`'s portal permissions, `None` while they are being read.
+    fn portal_permissions(&mut self, app: &str) -> Option<Result<BTreeMap<Portal, bool>, String>>;
+
+    /// Allows, denies or forgets (`None`) `portal` for `app`.
+    fn set_portal(&mut self, app: &str, portal: Portal, allow: Option<bool>) -> Result<(), String>;
+
+    /// A change done in the background that failed since last asked.
+    fn status(&mut self) -> Option<String> {
+        None
+    }
+
+    /// Starts what the apps are in, when [`Scan::Unavailable`] said that
+    /// would help.
+    fn start(&mut self) {}
+}
+
+impl Installation for Dirs {
+    fn scan(&mut self, _again: bool) -> Scan {
+        Scan::Apps {
+            apps: self.apps(),
+            global: self.global_overrides(),
+        }
+    }
+
+    fn save_overrides(&mut self, app: &str, overrides: &Context) -> Result<(), String> {
+        Dirs::save_overrides(self, app, overrides).map_err(|e| e.to_string())
+    }
+
+    fn portal_permissions(&mut self, app: &str) -> Option<Result<BTreeMap<Portal, bool>, String>> {
+        Some(portal_permissions(app).map_err(|e| e.0))
+    }
+
+    fn set_portal(&mut self, app: &str, portal: Portal, allow: Option<bool>) -> Result<(), String> {
+        set_portal(app, portal, allow).map_err(|e| e.0)
+    }
+}
+
+/// The arguments of the `flatpak` command line that sets (`Some`) or
+/// forgets (`None`) `portal` for `app` in the permission store. A machine
+/// runs the same command in its guest.
+pub fn portal_args(app: &str, portal: Portal, allow: Option<bool>) -> Vec<String> {
+    let (table, object) = portal.store();
+    let mut args: Vec<String> = match allow {
+        Some(_) => vec!["permission-set".into()],
+        None => vec!["permission-remove".into()],
+    };
+    args.extend([table, object, app].map(str::to_owned));
+    if let Some(allow) = allow {
+        args.extend(portal.values(allow).iter().map(|v| (*v).to_owned()));
+    }
+    args
 }

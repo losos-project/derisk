@@ -17,6 +17,8 @@
 //!   [`Hypervisor::open_app`] opens an app in a machine.
 //! - [`display`] (not on wasm32) brings a machine's windows to the desktop
 //!   and makes sure each one is known by the machine it came from.
+//! - [`flatpak`] (not on wasm32) is the machine Flatpak runs in, as
+//!   Settings' Privacy page reads and changes its apps' permissions.
 //! - [`MachinesApp`] is the Machines core app (`org.derisk.machines`): the
 //!   list, with buttons to make machines through `pm machine create`, start,
 //!   shut down, force off and remove them, and to set pm's libvirt plugin up.
@@ -37,6 +39,8 @@ pub mod setup;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod display;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod flatpak;
+#[cfg(not(target_arch = "wasm32"))]
 mod guest;
 #[cfg(not(target_arch = "wasm32"))]
 mod hypervisor;
@@ -48,7 +52,7 @@ pub use label::{Label, UnknownLabel};
 pub use machine::{Machine, State, TemplateRef};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use guest::{GUEST_RUN, GuestApp, parse_apps};
+pub use guest::{GUEST_RUN, GuestApp, list_apps, parse_apps, template_apps};
 #[cfg(not(target_arch = "wasm32"))]
 pub use hypervisor::{Exit, Hypervisor, Program, watch};
 
