@@ -97,7 +97,8 @@ pub fn window_menu() -> Menu {
             },
             MenuEntry::item("derisk.tile", "Tile").with_shortcut("Super+T"),
             MenuEntry::item("derisk.float", "Float").with_shortcut("Super+F"),
-            MenuEntry::item("derisk.promote", "Make Main Window").with_shortcut("Super+Enter"),
+            MenuEntry::item("derisk.promote", "Make Main Window")
+                .with_shortcut("Super+Shift+Enter"),
             MenuEntry::item("derisk.keep_on_top", "Keep on Top").with_shortcut("Super+Shift+T"),
             MenuEntry::Separator,
             MenuEntry::item("derisk.overview", "Overview").with_shortcut("Super"),

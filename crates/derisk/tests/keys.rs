@@ -217,3 +217,25 @@ fn new_single_chords_and_families() {
         })
     );
 }
+
+#[test]
+fn super_enter_opens_the_terminal_and_shift_promotes() {
+    assert_eq!(
+        binding(SUPER, Key::Enter),
+        Some(Action::Launch {
+            app: "org.derisk.terminal.desktop".into()
+        })
+    );
+    let shifted = Mods {
+        shift: true,
+        ..SUPER
+    };
+    assert_eq!(binding(shifted, Key::Enter), Some(Action::Promote));
+    // Ctrl+Alt+T was the terminal's before; it is free now.
+    let ctrl_alt = Mods {
+        ctrl: true,
+        alt: true,
+        ..Mods::default()
+    };
+    assert_eq!(binding(ctrl_alt, Key::Letter('t')), None);
+}

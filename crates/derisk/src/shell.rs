@@ -17,7 +17,7 @@ use crate::{
     assistant,
     conversation::{Conversation, Source, StepRef, StepStatus},
     effects::{Effects, Look},
-    geom::{Point, Rect, centered, contains, inset, rect},
+    geom::{Point, Rect, centered, contains, gap_insets, inset_sides, rect},
     keyboard,
     menu::{self, GlobalMenu},
     mobile::NavBar,
@@ -351,6 +351,10 @@ pub struct Shell {
     /// The windows [`Action::ShowDesktop`] minimized, to bring back when it
     /// is pressed again; emptied once any of them is restored another way.
     desktop_shown: Vec<WindowId>,
+    /// The gap between tiled windows the person chose in Settings
+    /// (`desktop.gaps`), in place of the profile's own; `None` until the
+    /// host passes it in.
+    gaps: Option<i32>,
     /// Names and icons for app IDs, set by the host from `.desktop` files.
     pub apps: Apps,
     /// Whether the screen is dimmed because nobody used it for a while,
@@ -474,6 +478,7 @@ impl Shell {
             shortcut_help: false,
             tutorial: false,
             desktop_shown: Vec::new(),
+            gaps: None,
             snap_assist: None,
             pending: Vec::new(),
             conversation: Conversation::default(),
@@ -549,8 +554,25 @@ impl Shell {
         let before = self.profile.form_factor;
         self.output = output;
         self.profile = Profile::detect(output.size.w, output.size.h, touch);
+        self.apply_gaps();
         if before != self.profile.form_factor {
             self.apply_profile_layout();
+        }
+    }
+
+    /// Sets the gap between tiled windows, in logical pixels: Settings'
+    /// `desktop.gaps`. Windows move to it on the next frame.
+    pub fn set_gaps(&mut self, gaps: u8) {
+        self.gaps = Some(i32::from(gaps));
+        self.apply_gaps();
+    }
+
+    fn apply_gaps(&mut self) {
+        // A phone shows one window at a time, so it has none to separate.
+        if let Some(gaps) = self.gaps
+            && !self.is_phone()
+        {
+            self.profile.gap = gaps;
         }
     }
 
@@ -1705,7 +1727,8 @@ impl Shell {
             .filter(visible)
             .filter(|w| self.windows[w].mode == Mode::Tiled)
             .collect();
-        let tile_area = inset(area, gap / 2);
+        let ((area_before, area_after), (tile_before, tile_after)) = gap_insets(gap);
+        let tile_area = inset_sides(area, area_before, area_after);
         // Phones are monocle whatever the workspace's layout and the
         // window's mode: the topmost window fills the work area, floating
         // and snapped ones included, since there is no room to show two.
@@ -1723,7 +1746,7 @@ impl Shell {
         let layout = ws.layout();
         let mut out: Vec<WindowPlacement> = match layout.arrange(tile_area, tiled.iter().copied()) {
             Ok(placements) if layout != Layout::Monocle && tiled.len() > 1 => placements
-                .map(|p| place(p.window, inset(p.geometry, gap - gap / 2)))
+                .map(|p| place(p.window, inset_sides(p.geometry, tile_before, tile_after)))
                 .collect(),
             // Monocle, a lone tiled window, or too little space to tile: the
             // topmost tiled window fills the work area. Gaps separate tiles
