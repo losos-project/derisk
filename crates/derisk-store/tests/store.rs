@@ -396,3 +396,22 @@ fn the_browser_demo_and_the_catalog_draw_a_frame() {
     settle(&mut store, &context);
     assert!(store.catalog().is_none());
 }
+
+#[test]
+fn a_job_in_the_machine_reports_its_end() {
+    use derisk_store::flatpak::parse_progress;
+    assert_eq!(
+        parse_progress("running\nInstalling 1/2… 45%\n"),
+        (None, "Installing 1/2… 45%\n")
+    );
+    assert_eq!(parse_progress("running\n"), (None, ""));
+    assert_eq!(
+        parse_progress("done 0\nInstalling…\nInstalled\n"),
+        (Some(0), "Installing…\nInstalled\n")
+    );
+    assert_eq!(
+        parse_progress("done 1\nerror: No remote refs found\n"),
+        (Some(1), "error: No remote refs found\n")
+    );
+    assert_eq!(parse_progress("done ?\n"), (Some(1), ""));
+}

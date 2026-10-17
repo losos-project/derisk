@@ -1,8 +1,9 @@
 //! Where flatpak runs for the store, and what it answers.
 //!
-//! On a PC the Flatpak apps live in a machine of their own (losos-desktop's
-//! `flatpak` machine), so the store runs flatpak there through the machine's
-//! guest agent and reads Flathub's catalogue from the machine's disk. A
+//! On a PC the Flatpak apps live in a machine of their own, made from
+//! losos-desktop's `losos-flatpak` template, so the store runs flatpak there
+//! through the machine's guest agent and reads Flathub's catalogue from the
+//! machine's disk. A
 //! phone, which has no machines, keeps Flatpak on itself, and so does any
 //! computer without that machine. Both are a [`Flatpak`].
 
@@ -13,10 +14,6 @@ use std::{
 
 /// The remote the store offers apps from.
 pub const REMOTE: &str = "flathub";
-
-/// The machine the PC's Flatpak apps run in (losos-desktop's
-/// `losos.machines.guests.flatpak`).
-pub const MACHINE: &str = "flatpak";
 
 /// An installed app, as `flatpak list` lists it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -226,6 +223,20 @@ pub fn failure(stderr: &str, stdout: &str) -> String {
         .unwrap_or_else(|| "flatpak failed".into())
 }
 
+/// `losos-guest-flatpak store progress`'s report: the job's exit status
+/// once it is done (`done <status>` on the first line, `running` before),
+/// and everything it has printed so far, carriage returns made line ends.
+pub fn parse_progress(report: &str) -> (Option<i32>, &str) {
+    let (state, output) = report.split_once('\n').unwrap_or((report, ""));
+    let status = state
+        .trim()
+        .strip_prefix("done ")
+        // A status that is not a number is still the end of the job, and
+        // not a good one.
+        .map(|s| s.trim().parse().unwrap_or(1));
+    (status, output)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use machine::Machine;
 
@@ -233,34 +244,51 @@ pub use machine::Machine;
 mod machine {
     use std::time::{Duration, Instant};
 
-    use derisk_machines::{Hypervisor, Program};
+    use derisk_machines::{
+        Hypervisor, Program,
+        flatpak::{GUEST_FLATPAK, TEMPLATE},
+    };
 
-    use super::{Flatpak, failure};
+    use super::{Flatpak, failure, parse_progress};
 
-    /// flatpak in the guest template's system profile; the agent's own
-    /// `PATH` is not a login's.
-    const FLATPAK: &str = "/run/current-system/sw/bin/flatpak";
+    /// How long a question (`list`, `remote-ls --updates`) may take: the
+    /// second asks Flathub.
+    const ASK_WAIT: Duration = Duration::from_secs(120);
 
     /// How long an install, an update or a catalogue refresh may take:
     /// a large app over a slow line is a long download.
     const RUN_WAIT: Duration = Duration::from_secs(60 * 60);
 
-    /// flatpak in a machine, through its guest agent, as the guest's root,
-    /// whose system installation is the one the machine's apps run from.
+    /// How often a running job's output is read again.
+    const POLL: Duration = Duration::from_millis(400);
+
+    /// flatpak in the Flatpak machine, through `losos-guest-flatpak store`
+    /// (losos-desktop, `nixos/guest/losos-guest-flatpak.sh`), which runs it
+    /// as the guest's user, whose apps and installs they are:
+    ///
+    /// - `store run <list|remote-ls> ...` runs flatpak and prints what it
+    ///   printed once it has finished, with its exit status;
+    /// - `store start <install|uninstall|update> ...` starts flatpak in a
+    ///   unit of the user's manager and returns at once, since the agent
+    ///   hands output over only once a program has exited;
+    /// - `store progress` prints `running`, or `done <status>`, then
+    ///   everything that job has printed so far.
     pub struct Machine {
         name: String,
         hypervisor: Hypervisor,
     }
 
     impl Machine {
-        /// The machine called `name`, if libvirt has one.
-        pub fn find(name: &str) -> Option<Machine> {
+        /// The machine Flatpak runs in: the first made from
+        /// [`TEMPLATE`], if libvirt has one.
+        pub fn find() -> Option<Machine> {
             let hypervisor = Hypervisor::open().ok()?;
-            hypervisor.machine(name).ok()?;
-            Some(Machine {
-                name: name.to_owned(),
-                hypervisor,
-            })
+            let name = hypervisor
+                .machines()
+                .ok()?
+                .find(|m| m.template.as_ref().is_some_and(|t| t.name == TEMPLATE))?
+                .name;
+            Some(Machine { name, hypervisor })
         }
 
         /// Starts the machine if it is off, and waits for its agent.
@@ -269,29 +297,26 @@ mod machine {
                 .boot(&self.name)
                 .map_err(|e| format!("Could not start {}: {e}", self.name))
         }
-    }
 
-    impl Flatpak for Machine {
-        fn machine(&self) -> Option<&str> {
-            Some(&self.name)
-        }
-
-        fn run(&self, args: &[&str], line: &mut dyn FnMut(&str)) -> Result<String, String> {
-            self.up()?;
+        /// Runs `losos-guest-flatpak store <args>` to its end, giving back
+        /// what it printed, or its last error line.
+        fn store(&self, args: &[&str], wait: Duration) -> Result<String, String> {
             let program = Program {
-                path: FLATPAK.into(),
-                args: args.iter().map(|&a| a.to_owned()).collect(),
+                path: GUEST_FLATPAK.into(),
+                args: ["store"]
+                    .iter()
+                    .chain(args)
+                    .map(|&a| a.to_owned())
+                    .collect(),
                 env: vec!["LANG=C.UTF-8".into()],
                 capture_output: true,
+                input: Vec::new(),
             };
             let pid = self
                 .hypervisor
                 .spawn(&self.name, &program)
                 .map_err(|e| e.to_string())?;
-            // The agent hands output over only once the program has exited,
-            // so there is nothing to show until then.
-            line(&format!("Working in {}…", self.name));
-            let deadline = Instant::now() + RUN_WAIT;
+            let deadline = Instant::now() + wait;
             let exit = loop {
                 if let Some(exit) = self
                     .hypervisor
@@ -303,13 +328,61 @@ mod machine {
                 if Instant::now() >= deadline {
                     return Err(format!("flatpak did not finish in {}", self.name));
                 }
-                std::thread::sleep(Duration::from_millis(250));
+                std::thread::sleep(Duration::from_millis(100));
             };
             let stdout = String::from_utf8_lossy(&exit.stdout).into_owned();
             if exit.success() {
                 Ok(stdout)
             } else {
                 Err(failure(&String::from_utf8_lossy(&exit.stderr), &stdout))
+            }
+        }
+
+        /// Starts a job and follows it to its end, handing each new line to
+        /// `line`.
+        fn job(&self, args: &[&str], line: &mut dyn FnMut(&str)) -> Result<String, String> {
+            let mut start = vec!["start"];
+            start.extend_from_slice(args);
+            self.store(&start, ASK_WAIT)?;
+            let deadline = Instant::now() + RUN_WAIT;
+            let mut seen = 0;
+            loop {
+                let report = self.store(&["progress"], ASK_WAIT)?;
+                let (status, output) = parse_progress(&report);
+                let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+                // A job's log only grows, so what is past `seen` is new.
+                for &new in lines.iter().skip(seen) {
+                    line(new.trim_end());
+                }
+                seen = seen.max(lines.len());
+                match status {
+                    Some(0) => return Ok(output.to_owned()),
+                    Some(_) => return Err(failure(output, "")),
+                    None => {}
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!("flatpak did not finish in {}", self.name));
+                }
+                std::thread::sleep(POLL);
+            }
+        }
+    }
+
+    impl Flatpak for Machine {
+        fn machine(&self) -> Option<&str> {
+            Some(&self.name)
+        }
+
+        fn run(&self, args: &[&str], line: &mut dyn FnMut(&str)) -> Result<String, String> {
+            self.up()?;
+            match args.first() {
+                // Questions answer quickly and change nothing.
+                Some(&("list" | "remote-ls")) => {
+                    let mut run = vec!["run"];
+                    run.extend_from_slice(args);
+                    self.store(&run, ASK_WAIT)
+                }
+                _ => self.job(args, line),
             }
         }
 

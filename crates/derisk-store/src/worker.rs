@@ -176,10 +176,10 @@ mod threads {
         }
     }
 
-    /// Where the store finds flatpak: in the flatpak machine when libvirt has
+    /// Where the store finds flatpak: in the Flatpak machine when libvirt has
     /// one, otherwise on this computer.
     pub fn place() -> Arc<dyn Flatpak> {
-        match flatpak::Machine::find(flatpak::MACHINE) {
+        match flatpak::Machine::find() {
             Some(machine) => Arc::new(machine),
             None => Arc::new(flatpak::Local),
         }

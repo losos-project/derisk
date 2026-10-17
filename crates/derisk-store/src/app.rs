@@ -266,6 +266,10 @@ impl StoreApp {
     fn order(&mut self, order: Order) {
         if self.worker.send(order) {
             self.status = None;
+            // Busy from the moment it is asked, not from when the thread
+            // gets to it: every order ends in a Done, whose words replace
+            // these, and a click in between must not send a second order.
+            self.doing = Some("Working…".into());
         } else {
             self.status = Some(Err("The store's thread is not answering".into()));
         }
