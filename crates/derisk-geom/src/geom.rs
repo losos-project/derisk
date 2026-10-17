@@ -28,6 +28,34 @@ pub fn inset(geometry: Geometry, by: i32) -> Geometry {
     rect(x, y, w, h)
 }
 
+/// Shrinks a rectangle by `before` on its left and top and `after` on its
+/// right and bottom, never below one logical pixel.
+pub fn inset_sides(geometry: Geometry, before: i32, after: i32) -> Geometry {
+    // An axis too short for both keeps one pixel in its middle, as `inset`
+    // does.
+    let axis = |start: i32, len: i32| {
+        let inner = len - before - after;
+        if inner >= 1 {
+            (start + before, inner)
+        } else {
+            (start + (len - 1) / 2, 1)
+        }
+    };
+    let (x, w) = axis(geometry.loc.x, geometry.size.w);
+    let (y, h) = axis(geometry.loc.y, geometry.size.h);
+    rect(x, y, w, h)
+}
+
+/// Splits `gap` for the edges of tiles laid side by side in an area: the
+/// area shrinks by the first pair (before, after) and each tile by the
+/// second, so the space between two tiles and between a tile and the area's
+/// edge both come to `gap`. Halving an odd gap on every side instead left
+/// 6 pixels between tiles for a gap of 5.
+pub fn gap_insets(gap: i32) -> ((i32, i32), (i32, i32)) {
+    let (half, rest) = (gap / 2, gap - gap / 2);
+    ((rest, half), (half, rest))
+}
+
 /// Centers a `w`×`h` rectangle in `area`, clamping its size to the area.
 pub fn centered(area: Geometry, w: i32, h: i32) -> Geometry {
     let (w, h) = (w.min(area.size.w).max(1), h.min(area.size.h).max(1));

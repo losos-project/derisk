@@ -1612,6 +1612,7 @@ impl compositor::Shell for Session {
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
         if let Some(settings) = self.settings.poll() {
             self.shell.effects = Effects::from_settings(&settings);
+            self.shell.set_gaps(settings.desktop.gaps);
             self.shortcuts = settings.shortcuts;
             self.ui.shortcuts = settings.shortcuts;
             self.power = settings.power;

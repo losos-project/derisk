@@ -534,6 +534,7 @@ fn refresh(shell: &mut Shell) {
     shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
     if let Some(settings) = SettingsWatch::new(derisk_settings::default_path()).poll() {
         shell.effects = Effects::from_settings(&settings);
+        shell.set_gaps(settings.desktop.gaps);
     }
 }
 

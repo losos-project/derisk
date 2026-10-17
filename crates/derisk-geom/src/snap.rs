@@ -3,7 +3,7 @@
 use mcsapi::Geometry;
 use serde::{Deserialize, Serialize};
 
-use crate::geom::{Point, inset, rect};
+use crate::geom::{Point, gap_insets, inset_sides, rect};
 
 /// A region of the work area that a window can be snapped into.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -75,7 +75,8 @@ impl SnapZone {
     /// takes the whole area rather than leaving a strip of wallpaper round it.
     pub fn geometry(self, area: Geometry, gap: i32) -> Geometry {
         let whole = area;
-        let area = inset(area, gap / 2);
+        let ((area_before, area_after), (tile_before, tile_after)) = gap_insets(gap);
+        let area = inset_sides(area, area_before, area_after);
         let (x, y, w, h) = (area.loc.x, area.loc.y, area.size.w, area.size.h);
         let (lw, th) = (w / 2, h / 2);
         let raw = match self {
@@ -87,7 +88,7 @@ impl SnapZone {
             Self::BottomRight => rect(x + lw, y + th, w - lw, h - th),
             Self::Maximize => return whole,
         };
-        inset(raw, gap - gap / 2)
+        inset_sides(raw, tile_before, tile_after)
     }
 
     /// The zone that "Snap Assist" offers to fill after snapping into `self`.

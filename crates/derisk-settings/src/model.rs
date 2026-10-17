@@ -721,7 +721,7 @@ impl Default for Settings {
             defaults: Defaults::default(),
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
-                gaps: 8,
+                gaps: 5,
                 workspaces: 9,
                 profile: Profile::Automatic,
                 vrr: Vrr::Automatic,
