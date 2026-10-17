@@ -29,10 +29,10 @@ use tracing::{info, warn};
 
 use derisk::widgets::{CustomWidget, MAX_ROWS, WidgetRow};
 
-/// How often libvirt is asked whether machines started or stopped.
+/// How often the machines' folders are read for which started or stopped.
 const WATCH: Duration = Duration::from_secs(1);
 
-/// Orders waiting for libvirt. Opening an app can take as long as its
+/// Orders waiting their turn. Opening an app can take as long as its
 /// machine takes to boot, and what is asked meanwhile waits its turn; past
 /// this many, more are dropped with a warning rather than queued.
 const ORDERS: usize = 8;
@@ -53,7 +53,7 @@ pub const SOURCE: &str = "machines";
 /// The overview button that opens the Machines app.
 pub const MANAGE: &str = "manage";
 
-/// What the session asks of libvirt, carried out one after another on a
+/// What the session asks of its machines, carried out one after another on a
 /// thread of its own, since any of it can take seconds.
 enum Order {
     /// Open an app (a desktop file ID) in a machine, starting it first if
@@ -66,9 +66,6 @@ enum Order {
     /// Ask a running machine which apps it has.
     Apps(String),
 }
-
-/// The URI virt-viewer reaches pm's machines at.
-const LIBVIRT_URI: &str = "qemu:///system";
 
 /// Machines and their windows' plumbing, for one session.
 pub struct MachineDisplays {
@@ -99,22 +96,22 @@ pub struct MachineDisplays {
     /// until they stop: waypipe is missing, and saying so every second
     /// helps nobody.
     failed: HashSet<String>,
-    /// The virt-viewer showing the screen of each running machine that has
+    /// The remote-viewer showing the screen of each running machine that has
     /// one (an installer's, or Windows' whole desktop).
     viewers: HashMap<String, Child>,
     /// Running machines whose screen is not shown: its window was closed,
-    /// or virt-viewer could not start. Shown again when the palette asks,
+    /// or remote-viewer could not start. Shown again when the palette asks,
     /// or the next time the machine starts.
     hidden: HashSet<String>,
 }
 
 impl MachineDisplays {
-    /// Starts watching libvirt and listening for guests. `None` without
-    /// `$XDG_RUNTIME_DIR`, which a session always has.
+    /// Starts watching the person's machines and listening for guests.
+    /// `None` without `$XDG_RUNTIME_DIR`, which a session always has.
     ///
-    /// Where libvirt cannot be reached (a nested session on a developer's
-    /// machine, say) the watch thread logs why and the session simply has
-    /// no machines; likewise for the gate without vhost-vsock.
+    /// Without a home to keep machines in the watch thread logs why and the
+    /// session simply has no machines; likewise for the gate without
+    /// vhost-vsock.
     pub fn start() -> Option<Self> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
         let sockets = Sockets::new(&runtime);
@@ -126,7 +123,7 @@ impl MachineDisplays {
         let (stop, stop_rx) = bounded::<()>(0);
         let spawned = std::thread::Builder::new()
             .name("derisk-machines-watch".into())
-            .spawn(move || match Hypervisor::open_read_only() {
+            .spawn(move || match Hypervisor::open() {
                 Ok(hypervisor) => {
                     if let Err(e) =
                         derisk_machines::watch(&hypervisor, WATCH, &changes_tx, &stop_rx)
@@ -134,7 +131,7 @@ impl MachineDisplays {
                         warn!(error = %e, "stopped watching machines");
                     }
                 }
-                Err(e) => info!(error = %e, "no machines: libvirt cannot be reached"),
+                Err(e) => info!(error = %e, "no machines: they have nowhere to be kept"),
             });
         if let Err(e) = spawned {
             warn!(error = %e, "cannot watch machines");
@@ -152,7 +149,7 @@ impl MachineDisplays {
         let spawned = std::thread::Builder::new()
             .name("derisk-machines-gate".into())
             .spawn(move || {
-                let served = Hypervisor::open_read_only()
+                let served = Hypervisor::open()
                     .map_err(std::io::Error::other)
                     .and_then(|hypervisor| display::gate(&gate_sockets, &hypervisor));
                 if let Err(e) = served {
@@ -247,12 +244,12 @@ impl MachineDisplays {
         card(&self.machines)
     }
 
-    /// Machines that run, in libvirt's order.
+    /// Machines that run, by name.
     pub fn running(&self) -> impl Iterator<Item = &Machine> {
         self.machines.iter().filter(|m| m.state.is_active())
     }
 
-    /// Takes the latest list from libvirt and opens or closes each
+    /// Takes the latest list of machines and opens or closes each
     /// machine's sockets to match, queueing what the compositor has to do.
     pub fn poll(&mut self, commands: &mut Vec<Command>) {
         if let Some(latest) = self.changes.try_iter().last() {
@@ -353,12 +350,19 @@ impl MachineDisplays {
     }
 }
 
-/// virt-viewer on `machine`'s screen, a client of `socket`.
-fn viewer(machine: &str, socket: &std::path::Path) -> std::process::Command {
-    let mut command = std::process::Command::new("virt-viewer");
+/// remote-viewer on `machine`'s screen, the SPICE socket `screen`, a
+/// client of `socket`.
+fn viewer(
+    machine: &str,
+    screen: &std::path::Path,
+    socket: &std::path::Path,
+) -> std::process::Command {
+    let mut command = std::process::Command::new("remote-viewer");
+    // virt-viewer named its window after the machine; remote-viewer would
+    // name it after the socket's path.
     command
-        .args(["--connect", LIBVIRT_URI, "--attach", "--reconnect", "--"])
-        .arg(machine)
+        .args(["--title", machine, "--"])
+        .arg(format!("spice+unix://{}", screen.display()))
         // An absolute WAYLAND_DISPLAY is used as the socket's path, and GTK
         // would take an X display over it if it had one.
         .env("WAYLAND_DISPLAY", socket)
@@ -428,11 +432,11 @@ fn card(machines: &[Machine]) -> Option<CustomWidget> {
 }
 
 impl MachineDisplays {
-    /// Opens a virt-viewer on the screen of each running machine that has
+    /// Opens a remote-viewer on the screen of each running machine that has
     /// one, its socket open and its screen not hidden, and notes which
     /// viewers were closed.
     ///
-    /// virt-viewer is a client of the machine's own socket, not the
+    /// remote-viewer is a client of the machine's own socket, not the
     /// session's, so its window is framed in the machine's colour like the
     /// machine's apps' windows are, and whatever the compositor holds back
     /// from an untrusted machine it holds back from its screen too.
@@ -457,20 +461,26 @@ impl MachineDisplays {
             .collect();
         for name in &screens {
             let socket = self.sockets.wayland(name);
+            // QEMU makes the screen's socket as it starts, a moment after
+            // the machine counts as running; the next poll catches it.
+            let Some(screen) = derisk_machines::screen_socket(name) else {
+                continue;
+            };
             if self.viewers.contains_key(name)
                 || self.hidden.contains(name)
                 || !self.clients.contains_key(name)
                 || !socket.exists()
+                || !screen.exists()
             {
                 continue;
             }
-            match viewer(name, &socket).spawn() {
+            match viewer(name, &screen, &socket).spawn() {
                 Ok(child) => {
                     info!(machine = name, "showing the machine's screen");
                     self.viewers.insert(name.clone(), child);
                 }
                 Err(e) => {
-                    warn!(machine = name, error = %e, "cannot start virt-viewer");
+                    warn!(machine = name, error = %e, "cannot start remote-viewer");
                     self.hidden.insert(name.clone());
                 }
             }
@@ -582,8 +592,7 @@ fn apps_file(dir: &std::path::Path, uuid: &str) -> PathBuf {
 }
 
 /// Carries out each order it is sent, one after another, and sends back
-/// the apps machines list. A read-write connection, which polkit grants an
-/// administrator outright and asks anyone else about, made at the first
+/// the apps machines list, with the person's machines opened at the first
 /// order and kept.
 fn carry_out(orders: &Receiver<Order>, listed: &Sender<(String, Vec<GuestApp>)>) {
     let mut hypervisor = None;
@@ -592,7 +601,7 @@ fn carry_out(orders: &Receiver<Order>, listed: &Sender<(String, Vec<GuestApp>)>)
             match Hypervisor::open() {
                 Ok(opened) => hypervisor = Some(opened),
                 Err(e) => {
-                    warn!(error = %e, "cannot reach libvirt to drive a machine");
+                    warn!(error = %e, "cannot find the machines to drive one");
                     continue;
                 }
             }
@@ -706,25 +715,25 @@ mod tests {
             apps_file(dir, "6f1c2d9e-0a7b-4e33-9c1d-2b8f5e6a7c90"),
             dir.join("6f1c2d9e-0a7b-4e33-9c1d-2b8f5e6a7c90.apps")
         );
-        // Whatever libvirt says the UUID is, the file stays in the directory.
+        // Whatever a machine's record says its UUID is, the file stays in the
+        // directory.
         assert_eq!(apps_file(dir, "../../x"), dir.join(".apps"));
     }
 
     #[test]
     fn a_screen_is_shown_on_its_machines_socket_and_nowhere_else() {
         let socket = std::path::Path::new("/run/user/1000/derisk/machines/win.wayland");
-        let command = viewer("win", socket);
-        assert_eq!(command.get_program(), "virt-viewer");
+        let screen = std::path::Path::new("/home/u/.local/share/pm/machines/win/win.sock");
+        let command = viewer("win", screen, socket);
+        assert_eq!(command.get_program(), "remote-viewer");
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(
             args,
             [
-                "--connect",
-                LIBVIRT_URI,
-                "--attach",
-                "--reconnect",
+                "--title",
+                "win",
                 "--",
-                "win"
+                "spice+unix:///home/u/.local/share/pm/machines/win/win.sock"
             ]
         );
         let env: HashMap<&OsStr, Option<&OsStr>> = command.get_envs().collect();

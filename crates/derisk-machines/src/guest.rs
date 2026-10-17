@@ -216,7 +216,8 @@ pub fn parse_apps(list: &str) -> impl Iterator<Item = GuestApp> + '_ {
 /// `None` when no template of that name ships a list.
 pub fn template_apps(data_dirs: &[PathBuf], template: &str) -> Option<Vec<GuestApp>> {
     // A name pm accepts cannot climb out of the directory, but this one
-    // came from a domain definition anyone with libvirt's ear could write.
+    // came from a machine's record, which anything running as the person
+    // can write.
     if template.is_empty() || template.contains('/') || template.starts_with('.') {
         return None;
     }
