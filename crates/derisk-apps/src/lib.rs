@@ -127,7 +127,7 @@ pub const APPS: [AppInfo; 6] = [
             "permissions",
         ],
         desktop_file: include_str!("../data/org.derisk.settings.desktop"),
-        create: || Box::new(derisk_settings::SettingsApp::default()),
+        create: || Box::new(settings()),
         action: settings_action,
     },
     AppInfo {
@@ -214,8 +214,17 @@ fn files_action(action: &str) -> Option<Box<dyn App>> {
     )))
 }
 
+/// Settings, its Privacy page reading Flatpak's apps from the machine they
+/// run in when there is one, and this computer's own otherwise.
+fn settings() -> derisk_settings::SettingsApp {
+    let app = derisk_settings::SettingsApp::default();
+    #[cfg(not(target_arch = "wasm32"))]
+    let app = app.with_flatpak_finder(derisk_machines::flatpak::find);
+    app
+}
+
 fn settings_action(action: &str) -> Option<Box<dyn App>> {
-    use derisk_settings::{Page, SettingsApp};
+    use derisk_settings::Page;
 
     let page = match action {
         "appearance" => Page::Appearance,
@@ -234,7 +243,7 @@ fn settings_action(action: &str) -> Option<Box<dyn App>> {
         "about" => Page::About,
         _ => return None,
     };
-    let mut app = SettingsApp::default();
+    let mut app = settings();
     app.page = page;
     Some(Box::new(app))
 }

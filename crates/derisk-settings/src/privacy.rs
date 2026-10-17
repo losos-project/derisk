@@ -6,24 +6,38 @@
 //! store, and switching it back on forgets those answers so apps ask
 //! again. Changes to one app's permissions apply at once, like Flatseal,
 //! because they live in Flatpak's own files rather than in derisk's.
+//!
+//! Those files are an [`Installation`]'s: this computer's own, or those of
+//! the machine Flatpak runs in, which answers a moment later and is asked
+//! again every frame until it has.
 
 use std::collections::BTreeMap;
 
 use mcsapi_ui::{Theme, egui};
 
 use crate::{
-    flatpak::{self, App, Context, Dirs, Grant, PERMISSIONS, Portal},
+    flatpak::{
+        self, App, Context, Dirs, FindInstallation, Grant, Installation, PERMISSIONS, Portal, Scan,
+    },
     model::{Privacy, PrivacyDisplay},
 };
 
 /// An app's portal permissions, or why they can't be read, by app ID.
 type PortalState = (String, Result<BTreeMap<Portal, bool>, String>);
 
+/// How often the page looks again at an installation that is still
+/// answering.
+const WAITING: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Privacy page state: the scanned apps and what is selected.
 #[derive(Debug, Default)]
 pub(crate) struct PrivacyUi {
-    dirs: Option<Dirs>,
+    installation: Option<Box<dyn Installation>>,
+    find: Option<FindInstallation>,
     apps: Option<Vec<App>>,
+    /// Why there are no apps to show yet, and whether starting the
+    /// installation's machine would help.
+    notice: Option<(String, bool)>,
     global: Context,
     selected: Option<String>,
     filter: String,
@@ -38,7 +52,15 @@ impl PrivacyUi {
     /// Uses `dirs` instead of the standard Flatpak locations (for tests).
     pub(crate) fn with_dirs(dirs: Dirs) -> Self {
         Self {
-            dirs: Some(dirs),
+            installation: Some(Box::new(dirs)),
+            ..Self::default()
+        }
+    }
+
+    /// Looks for Flatpak's apps with `find` first.
+    pub(crate) fn with_finder(find: FindInstallation) -> Self {
+        Self {
+            find: Some(find),
             ..Self::default()
         }
     }
@@ -47,16 +69,43 @@ impl PrivacyUi {
         self.selected = Some(id.to_owned());
     }
 
-    fn scan(&mut self) {
-        if self.dirs.is_none() {
-            self.dirs = Dirs::standard();
+    /// Reads the apps, or looks whether they are known yet. `again` looks
+    /// afresh, for the installation too: a machine made since the page
+    /// opened is found then.
+    fn scan(&mut self, again: bool) {
+        if (again || self.installation.is_none())
+            && let Some(found) = self.find.and_then(|find| find())
+        {
+            let same = self
+                .installation
+                .as_ref()
+                .is_some_and(|i| i.machine() == found.machine());
+            if !same {
+                self.installation = Some(found);
+            }
         }
-        let Some(dirs) = &self.dirs else {
+        if self.installation.is_none() {
+            self.installation = Dirs::standard().map(|d| Box::new(d) as Box<dyn Installation>);
+        }
+        let Some(installation) = &mut self.installation else {
             self.apps = Some(Vec::new());
             return;
         };
-        self.global = dirs.global_overrides();
-        self.apps = Some(dirs.apps());
+        match installation.scan(again) {
+            Scan::Apps { apps, global } => {
+                self.global = global;
+                self.apps = Some(apps);
+                self.notice = None;
+            }
+            Scan::Waiting(line) => {
+                self.apps = None;
+                self.notice = Some((line, false));
+            }
+            Scan::Unavailable { reason, startable } => {
+                self.apps = None;
+                self.notice = Some((reason, startable));
+            }
+        }
     }
 
     /// Denies, or forgets, a device for every Flatpak app after its master
@@ -74,20 +123,22 @@ impl PrivacyUi {
         if changed.is_empty() {
             return None;
         }
-        self.scan();
+        self.scan(false);
         let apps = self.apps.clone().unwrap_or_default();
-        let mut failed = None;
-        for app in &apps {
-            for (portal, on) in &changed {
-                let result = flatpak::set_portal(&app.id, *portal, (!on).then_some(false));
-                if let Err(e) = result {
-                    failed.get_or_insert(e.0);
+        let mut failed = self.notice.as_ref().map(|(why, _)| why.clone());
+        if let Some(installation) = &mut self.installation {
+            for app in &apps {
+                for (portal, on) in &changed {
+                    let result = installation.set_portal(&app.id, *portal, (!on).then_some(false));
+                    if let Err(e) = result {
+                        failed.get_or_insert(e);
+                    }
                 }
             }
         }
         self.portals = None;
         Some(match failed {
-            Some(e) if !apps.is_empty() => format!("Saved, but Flatpak apps were not updated: {e}"),
+            Some(e) => format!("Saved, but Flatpak apps were not updated: {e}"),
             _ => format!("Saved; {} Flatpak app(s) updated", apps.len()),
         })
     }
@@ -210,13 +261,27 @@ pub(crate) fn page(
     ui.add_space(16.0);
     ui.separator();
     ui.heading(egui::RichText::new("Flatpak apps").color(theme.foreground));
+    if state.apps.is_none() {
+        state.scan(false);
+    }
+    let machine = state
+        .installation
+        .as_ref()
+        .and_then(|i| i.machine())
+        .map(str::to_owned);
     hint(
         ui,
-        "What each app may reach. Changes apply right away and take effect when the app next starts.",
+        &match &machine {
+            Some(machine) => format!(
+                "Flatpak apps run in the {machine} machine. What each may reach there; \
+                 changes apply right away and take effect when the app next starts."
+            ),
+            None => "What each app may reach. Changes apply right away and take effect when the app next starts.".to_owned(),
+        },
     );
     ui.add_space(6.0);
-    if state.apps.is_none() {
-        state.scan();
+    if let Some(status) = state.installation.as_mut().and_then(|i| i.status()) {
+        state.status = Some(status);
     }
     ui.horizontal(|ui| {
         ui.add(
@@ -225,16 +290,36 @@ pub(crate) fn page(
                 .desired_width(200.0),
         );
         if ui.button("Rescan").clicked() {
-            state.scan();
+            state.scan(true);
             state.portals = None;
         }
         if let Some(status) = &state.status {
             ui.label(egui::RichText::new(status).color(theme.accent));
         }
     });
+    if let Some((notice, startable)) = state.notice.clone() {
+        ui.horizontal(|ui| {
+            hint(ui, &notice);
+            if startable
+                && let Some(machine) = &machine
+                && ui.button(format!("Start {machine}")).clicked()
+                && let Some(installation) = &mut state.installation
+            {
+                installation.start();
+            }
+        });
+        ui.ctx().request_repaint_after(WAITING);
+        return;
+    }
     let apps = state.apps.clone().unwrap_or_default();
     if apps.is_empty() {
-        hint(ui, "No Flatpak apps are installed for you or system-wide.");
+        hint(
+            ui,
+            &match &machine {
+                Some(machine) => format!("No Flatpak apps are installed in the {machine} machine."),
+                None => "No Flatpak apps are installed for you or system-wide.".to_owned(),
+            },
+        );
         return;
     }
     ui.add_space(6.0);
@@ -381,8 +466,8 @@ fn app_permissions(
         }
     });
     if changed {
-        if let Some(dirs) = &state.dirs {
-            state.status = Some(match dirs.save_overrides(&app.id, &app.overrides) {
+        if let Some(installation) = &mut state.installation {
+            state.status = Some(match installation.save_overrides(&app.id, &app.overrides) {
                 Ok(()) => format!("Updated {}", app.name),
                 Err(e) => format!("Could not update {}: {e}", app.name),
             });
@@ -395,10 +480,18 @@ fn app_permissions(
     ui.add_space(10.0);
     ui.label(egui::RichText::new("Asked through portals").strong());
     if state.portals.as_ref().is_none_or(|(id, _)| *id != app.id) {
-        state.portals = Some((
-            app.id.clone(),
-            flatpak::portal_permissions(&app.id).map_err(|e| e.0),
-        ));
+        match state
+            .installation
+            .as_mut()
+            .and_then(|i| i.portal_permissions(&app.id))
+        {
+            Some(read) => state.portals = Some((app.id.clone(), read)),
+            None => {
+                hint(ui, "Reading…");
+                ui.ctx().request_repaint_after(WAITING);
+                return;
+            }
+        }
     }
     let Some((_, portals)) = &state.portals else {
         return;
@@ -442,8 +535,10 @@ fn app_permissions(
                 ui.end_row();
             }
         });
-    if let Some((portal, choice)) = update {
-        state.status = Some(match flatpak::set_portal(&app.id, portal, choice) {
+    if let Some((portal, choice)) = update
+        && let Some(installation) = &mut state.installation
+    {
+        state.status = Some(match installation.set_portal(&app.id, portal, choice) {
             Ok(()) => format!("Updated {}", app.name),
             Err(e) => format!("Could not update {}: {e}", app.name),
         });
