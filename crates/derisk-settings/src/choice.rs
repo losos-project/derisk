@@ -556,7 +556,7 @@ impl ChoiceUi {
         if !user {
             self.install(flathub, true);
         } else {
-            self.status = Some("Install failed. Try again from Bazaar.".into());
+            self.status = Some("Install failed. Try again from the Store.".into());
         }
         None
     }

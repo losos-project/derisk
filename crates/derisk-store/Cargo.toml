@@ -1,0 +1,28 @@
+[package]
+name = "derisk-store"
+description = "derisk Store app: Flathub's apps by category, with their release notes, installed through flatpak"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+derisk-icons.workspace = true
+derisk-sys.workspace = true
+mcsapi-ui.workspace = true
+# Flathub's catalogue is 50 MB of XML: read as a stream, so only what the
+# store shows is ever held, and never a document tree of all of it.
+quick-xml = "0.41.0"
+flate2 = "1.1.10"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+crossbeam-channel.workspace = true
+derisk-machines.workspace = true
+# Ratings and reviews come from GNOME's ODRS over HTTPS. ureq is blocking,
+# which suits the thread that asks, and brings rustls with its own roots.
+ureq = "3.4.2"

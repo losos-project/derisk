@@ -1612,6 +1612,7 @@ impl compositor::Shell for Session {
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
         if let Some(settings) = self.settings.poll() {
             self.shell.effects = Effects::from_settings(&settings);
+            self.shell.set_gaps(settings.desktop.gaps);
             self.shortcuts = settings.shortcuts;
             self.ui.shortcuts = settings.shortcuts;
             self.power = settings.power;
@@ -1830,7 +1831,7 @@ impl compositor::Shell for Session {
             }
             return KeyRoute::Chrome;
         }
-        // With no window to type into, the search field has the focus (the
+        // With no window to type into, the search button has the focus (the
         // startup's dot lands there): typing opens the palette with it.
         if self.shell.focused().is_none()
             && !self.shell.overview_visible()

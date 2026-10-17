@@ -332,6 +332,58 @@ fn unit_actions_only_touch_failed_units() {
     );
 }
 
+/// The space between two side-by-side tiles, and between each and the
+/// work area's left and right edges.
+fn gaps_around(shell: &Shell, a: WindowId, b: WindowId) -> (i32, i32, i32) {
+    let area = shell.work_area();
+    let (fa, fb) = (frame_of(shell, a), frame_of(shell, b));
+    (
+        fa.loc.x - area.loc.x,
+        fb.loc.x - (fa.loc.x + fa.size.w),
+        area.loc.x + area.size.w - (fb.loc.x + fb.size.w),
+    )
+}
+
+#[test]
+fn tiles_are_five_pixels_apart_by_default() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    assert_eq!(gaps_around(&shell, a, b), (5, 5, 5));
+    let area = shell.work_area();
+    assert_eq!(frame_of(&shell, a).loc.y - area.loc.y, 5);
+}
+
+#[test]
+fn the_gap_setting_moves_tiles_and_snapped_halves() {
+    let mut shell = desktop();
+    let (a, _) = shell.map_window("a", "A");
+    let (b, _) = shell.map_window("b", "B");
+    for gaps in [0, 7, 16] {
+        shell.set_gaps(gaps);
+        let g = i32::from(gaps);
+        assert_eq!(gaps_around(&shell, a, b), (g, g, g), "gap {gaps}");
+    }
+
+    let area = shell.work_area();
+    let left = SnapZone::Left.geometry(area, 7);
+    let right = SnapZone::Right.geometry(area, 7);
+    assert_eq!(left.loc.x - area.loc.x, 7);
+    assert_eq!(right.loc.x - (left.loc.x + left.size.w), 7);
+    assert_eq!(area.loc.x + area.size.w - (right.loc.x + right.size.w), 7);
+}
+
+#[test]
+fn phones_keep_no_gaps_whatever_the_setting() {
+    let mut shell = Shell::new(rect(0, 0, 400, 800), true);
+    shell.set_gaps(16);
+    let (a, _) = shell.map_window("a", "A");
+    assert_eq!(frame_of(&shell, a), shell.work_area());
+    // Turning the phone into a desktop picks the setting up.
+    shell.set_output(rect(0, 0, 1920, 1080), false);
+    assert_eq!(shell.profile().gap, 16);
+}
+
 #[test]
 fn phones_use_monocle_without_gaps() {
     let mut shell = Shell::new(rect(0, 0, 400, 800), true);

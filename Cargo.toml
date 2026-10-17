@@ -47,6 +47,7 @@ derisk-sys = { path = "crates/derisk-sys", version = "0.1.0" }
 derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 derisk-machines = { path = "crates/derisk-machines", version = "0.1.0" }
 derisk-terminal = { path = "crates/derisk-terminal", version = "0.1.0" }
+derisk-store = { path = "crates/derisk-store", version = "0.1.0" }
 # The GPUI mcsapi-components-gpui is built on (Sonne's fork, at the revision
 # mcsapi pins): two GPUIs in one build cannot share a window or an element.
 gpui = { git = "https://github.com/dasmatus/sonne", rev = "b0f67b3b07b28f88151e6f88044ada8d7c4ffb75", default-features = false, features = ["font-kit", "wayland", "x11"] }

@@ -32,6 +32,8 @@ mod polkit_agent;
 #[cfg(feature = "host")]
 mod power;
 #[cfg(feature = "host")]
+mod pwquality;
+#[cfg(feature = "host")]
 mod unlock;
 #[cfg(feature = "host")]
 mod wizard_host;
@@ -534,6 +536,7 @@ fn refresh(shell: &mut Shell) {
     shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
     if let Some(settings) = SettingsWatch::new(derisk_settings::default_path()).poll() {
         shell.effects = Effects::from_settings(&settings);
+        shell.set_gaps(settings.desktop.gaps);
     }
 }
 

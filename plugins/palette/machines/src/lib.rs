@@ -1,6 +1,6 @@
-//! Virtual machines: "Start work", "Shut down work", each app a running
-//! machine has, as "Foot in work", and "Show work's screen" for a running
-//! machine with a screen of its own.
+//! Virtual machines: "Start work", "Shut down work", each app a machine
+//! has, as "Foot in work", and "Show work's screen" for a running machine
+//! with a screen of its own.
 //!
 //! The session publishes its machines as the `machines` source, which only
 //! the shell itself may register (an agent connection cannot speak for it),
@@ -16,7 +16,9 @@
 //! ```
 //!
 //! A machine's apps are what its guest agent listed the last time the
-//! session asked, so a machine that is off, or still booting, has none yet.
+//! session asked, kept while the machine is off, or until then what its
+//! template ships; picking one of a machine that is off starts it. A
+//! machine nothing is known of yet has none.
 
 use derisk_palette_sdk::{
     Category, Entry, Guest, Hook, Input, Manifest, Value, View, export, json,
@@ -54,8 +56,7 @@ fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value[key].as_str().unwrap_or_default()
 }
 
-/// The catalog: each machine's apps while it runs, and starting or
-/// shutting it down.
+/// The catalog: each machine's apps, and starting or shutting it down.
 pub fn entries(view: &View) -> Vec<Entry> {
     let Some(registration) = view.registered.iter().find(|r| r.source == SOURCE) else {
         return Vec::new();
@@ -73,7 +74,8 @@ pub fn entries(view: &View) -> Vec<Entry> {
         // The label goes in the search terms, so "blue" finds the machine
         // whose windows are drawn blue.
         let label = text(machine, "label");
-        if machine["running"].as_bool() != Some(true) {
+        let running = machine["running"].as_bool() == Some(true);
+        if !running {
             out.push(
                 Entry::new(
                     Category::Command,
@@ -84,8 +86,12 @@ pub fn entries(view: &View) -> Vec<Entry> {
                 .detail("Virtual machine")
                 .keywords(format!("machine vm boot run {label}")),
             );
-            continue;
         }
+        let detail = if running {
+            format!("Opens in the {name} machine")
+        } else {
+            format!("Starts the {name} machine and opens there")
+        };
         for app in machine["apps"].as_array().unwrap_or(&none) {
             let (id, app_name) = (text(app, "id"), text(app, "name"));
             if id.is_empty() || app_name.is_empty() {
@@ -98,9 +104,12 @@ pub fn entries(view: &View) -> Vec<Entry> {
                     format!("{app_name} in {name}"),
                     &[command(json!({"op": "open", "machine": name, "app": id}))],
                 )
-                .detail(format!("Opens in the {name} machine"))
+                .detail(detail.clone())
                 .keywords(format!("{id} machine vm {label}")),
             );
+        }
+        if !running {
+            continue;
         }
         // The session shows a running machine's screen by itself; this is
         // for after its window was closed.
@@ -164,6 +173,23 @@ mod tests {
         );
         assert_eq!(rows[0].category, Category::App);
         assert!(rows[2].keywords.contains("red"));
+    }
+
+    #[test]
+    fn a_stopped_machine_offers_the_apps_it_had_and_starts_for_them() {
+        let rows = entries(&view(json!({"machines": [
+            {"name": "flatpak", "label": "purple", "running": false,
+             "apps": [{"id": "io.github.kolunmi.Bazaar", "name": "Bazaar"}]},
+        ]})));
+        let titles: Vec<_> = rows.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, ["Start flatpak", "Bazaar in flatpak"]);
+        assert_eq!(
+            rows[1].parsed_actions(),
+            [json!({"action": "palette_command", "source": "machines",
+                    "command": {"op": "open", "machine": "flatpak",
+                                "app": "io.github.kolunmi.Bazaar"}})]
+        );
+        assert_eq!(rows[1].detail, "Starts the flatpak machine and opens there");
     }
 
     #[test]

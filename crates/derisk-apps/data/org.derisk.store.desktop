@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Store
+GenericName=App Store
+Comment=Find, install and update apps from Flathub
+Keywords=flathub;flatpak;software;install;apps;updates;
+Icon=system-software-install
+Exec=derisk launch org.derisk.store
+Categories=System;PackageManager;
+Actions=installed;
+
+[Desktop Action installed]
+Name=Installed Apps
+Exec=derisk launch org.derisk.store --action installed

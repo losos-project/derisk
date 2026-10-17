@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::snap::SnapConfig;
 
+/// The gap between tiled windows until Settings says otherwise, in logical
+/// pixels: Settings' own default for `desktop.gaps`. Tablets once had 10 and
+/// desktops 8; the one setting now covers both.
+pub const DEFAULT_GAP: i32 = 5;
+
 /// The broad class of device the shell is running on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,7 +31,9 @@ pub struct Profile {
     pub form_factor: FormFactor,
     /// Default tiling layout for workspaces.
     pub layout: Layout,
-    /// Gap between tiles, in logical pixels.
+    /// Gap between tiles, in logical pixels. Settings' `desktop.gaps`
+    /// replaces it on every profile but a phone's (see
+    /// [`crate::shell::Shell::set_gaps`]).
     pub gap: i32,
     /// Height of the top bar (global menu, tray, clock).
     pub top_bar: i32,
@@ -69,7 +76,7 @@ impl Profile {
             FormFactor::Tablet => Self {
                 form_factor,
                 layout: Layout::Tall,
-                gap: 10,
+                gap: DEFAULT_GAP,
                 top_bar: 32,
                 nav_bar: 0,
                 snap: SnapConfig {
@@ -81,7 +88,7 @@ impl Profile {
             FormFactor::Desktop => Self {
                 form_factor,
                 layout: Layout::Tall,
-                gap: 8,
+                gap: DEFAULT_GAP,
                 top_bar: 28,
                 nav_bar: 0,
                 snap: SnapConfig::default(),

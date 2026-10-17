@@ -248,7 +248,7 @@ pub struct TopBar {
     /// Hide the bar until the pointer touches its edge; windows then use
     /// the whole screen.
     pub autohide: bool,
-    /// The search field that opens the command palette.
+    /// The search button that opens the command palette.
     pub search: bool,
     /// The focused app's name.
     pub app_name: bool,
@@ -721,7 +721,7 @@ impl Default for Settings {
             defaults: Defaults::default(),
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
-                gaps: 8,
+                gaps: 5,
                 workspaces: 9,
                 profile: Profile::Automatic,
                 vrr: Vrr::Automatic,
@@ -827,6 +827,8 @@ impl Settings {
     pub fn parse(text: &str) -> (Self, Vec<Warning>) {
         let mut settings = Self::default();
         let mut warnings = Vec::new();
+        // A file without a `shortcut.edition` line predates it.
+        settings.shortcuts.read_as(1);
         for (index, raw) in text.lines().enumerate() {
             let line = strip_comment(raw).trim();
             if line.is_empty() {
@@ -845,6 +847,7 @@ impl Settings {
                 warnings.push(warn(format!("ignored `{key} = {value}`")));
             }
         }
+        settings.shortcuts.upgrade();
         (settings, warnings)
     }
 
