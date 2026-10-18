@@ -265,16 +265,16 @@ fn url_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts) {
 /// to a language model, and which one, where.
 pub(crate) fn assistant(ui: &mut egui::Ui, a: &mut AssistantPrefs, drafts: &mut Drafts) {
     ui.label("Language model");
-    ui.checkbox(
-        &mut a.use_model,
-        "Send requests the assistant can't follow to a language model",
-    );
+    // Short enough for a half-width window: a checkbox label does not wrap,
+    // so the sentence about which requests go to the model is the note's.
+    ui.checkbox(&mut a.use_model, "Use a language model");
     ui.end_row();
     wrapped_hint(
         ui,
-        "It works through the desktop's own tools: it opens apps and moves windows \
-         itself, and asks you in the palette before it clicks or types in an app, \
-         changes a setting or ends your session.",
+        "Requests the palette's own rules can't follow go to the model. It works \
+         through the desktop's own tools: it opens apps and moves windows itself, \
+         and asks you in the palette before it clicks or types in an app, changes \
+         a setting or ends your session.",
     );
     if !a.use_model {
         return;
