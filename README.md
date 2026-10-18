@@ -153,6 +153,13 @@ anything a person can do an agent can do too, under the same rules.
 - **Assistant**: type in the command palette, e.g.
   `open firefox and snap it left, then go to workspace 2`.
   Try it from a terminal with `derisk ask open firefox and snap it left`.
+- **Language model**: what the assistant's rules don't follow goes to a
+  small model on an Ollama-compatible server (`crates/derisk/src/model.rs`;
+  `http://localhost:11434` and `qwen3:4b-instruct` by default, changed in
+  Settings › Assistant). It works through flat versions of the agent
+  tools, as an agent connection, with a step per tool in the palette's
+  conversation. Clicking or typing in apps, changing a setting, opening a
+  file and session operations wait for the person's Allow there first.
 - **Agent protocol**: JSON lines over stdio or a Unix socket.
 - **MCP**: `derisk mcp` serves the same tools to MCP clients over stdio,
   each call going to the running session. Sonne lists it as a context

@@ -626,6 +626,62 @@ pub fn machine_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// The palette's assistant: requests its own rules don't follow go to a
+/// language model on an Ollama-compatible server, which works through the
+/// desktop's tools.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssistantPrefs {
+    /// Send requests the rules don't follow to the model.
+    pub use_model: bool,
+    /// The server's address (see [`model_server_url`]); the OS runs Ollama
+    /// on this computer at the default.
+    pub url: String,
+    /// The model's name on that server (see [`model_name`]); Ollama
+    /// downloads it the first time it is asked for.
+    pub model: String,
+}
+
+impl AssistantPrefs {
+    /// Ollama on this computer, where LosOS runs it as a system service.
+    pub const DEFAULT_URL: &str = "http://localhost:11434";
+    /// Qwen3 4B Instruct (2507), 2.5 GB: of the small models Ollama
+    /// offers, the one that followed derisk's tools most reliably when they
+    /// were compared, and Apache-2.0.
+    pub const DEFAULT_MODEL: &str = "qwen3:4b-instruct";
+}
+
+impl Default for AssistantPrefs {
+    fn default() -> Self {
+        Self {
+            use_model: true,
+            url: Self::DEFAULT_URL.to_owned(),
+            model: Self::DEFAULT_MODEL.to_owned(),
+        }
+    }
+}
+
+/// Whether `url` can be the model server's address: http(s), with a host
+/// and no whitespace. Plain http is allowed because Ollama serves it, on
+/// this computer or on another one the person runs.
+pub fn model_server_url(url: &str) -> bool {
+    !url.chars().any(|c| c.is_whitespace() || c.is_control())
+        && ["https://", "http://"].iter().any(|scheme| {
+            url.strip_prefix(scheme)
+                .is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'))
+        })
+}
+
+/// Whether `name` can name a model, as Ollama spells them
+/// (`qwen3:4b-instruct`, `hf.co/org/model:Q4_K_M`): printable, no
+/// whitespace, at most 200 bytes.
+pub fn model_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && name
+            .chars()
+            .all(|c| c.is_ascii_graphic() && c != '"' && c != '\\')
+}
+
 /// Notification preferences.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Notifications {
@@ -679,6 +735,8 @@ pub struct Settings {
     pub power: Power,
     /// Virtual machines.
     pub machines: MachinePrefs,
+    /// The palette's assistant.
+    pub assistant: AssistantPrefs,
 }
 
 impl Default for Settings {
@@ -748,6 +806,7 @@ impl Default for Settings {
                 low_power: LowPower::OnBattery,
             },
             machines: MachinePrefs::default(),
+            assistant: AssistantPrefs::default(),
         }
     }
 }
@@ -971,6 +1030,15 @@ impl Settings {
                 &mut self.machines.open_apps_in,
                 Some(value.to_owned()).filter(|v| v.is_empty() || machine_name(v)),
             ),
+            "assistant.use_model" => put(&mut self.assistant.use_model, parse_bool(value)),
+            "assistant.url" => put(
+                &mut self.assistant.url,
+                Some(value.trim_end_matches('/').to_owned()).filter(|u| model_server_url(u)),
+            ),
+            "assistant.model" => put(
+                &mut self.assistant.model,
+                Some(value.to_owned()).filter(|m| model_name(m)),
+            ),
             "defaults.search" => put(
                 &mut self.defaults.search,
                 if value.is_empty() {
@@ -1055,6 +1123,9 @@ impl Settings {
              defaults.browser = {}\n\
              defaults.search = {}\n\
              machines.open_apps_in = {}\n\
+             assistant.use_model = {}\n\
+             assistant.url = {}\n\
+             assistant.model = {}\n\
              {}",
             a.theme.as_str(),
             a.scheme.as_str(),
@@ -1116,6 +1187,9 @@ impl Settings {
             self.defaults.browser,
             self.defaults.search.map_or("", |e| e.as_str()),
             self.machines.open_apps_in,
+            self.assistant.use_model,
+            self.assistant.url,
+            self.assistant.model,
             self.shortcuts.to_text(),
         )
     }

@@ -441,6 +441,10 @@ pub struct PaletteUi {
     seen: u64,
     cleared: u64,
     asks: Vec<Ask>,
+    /// The person's answers to the model's steps that asked, and whether
+    /// they stopped it, since the host last took them.
+    model_answers: Vec<bool>,
+    model_stop: bool,
     query: String,
     shown_query: String,
     selected: usize,
@@ -2944,7 +2948,10 @@ impl ShellUi {
                 Some(query_rows),
             )
         };
-        let query_rows = query_rows.unwrap_or_default();
+        let mut query_rows = query_rows.unwrap_or_default();
+        if let Some(model) = &shell.model {
+            query_rows.offer_model(model);
+        }
         let rows: Vec<&Entry> = palette::list(entries, &hits, &query_rows, &state.query);
         if state.query != state.shown_query {
             state.shown_query = state.query.clone();
@@ -3013,7 +3020,9 @@ impl ShellUi {
             && let Some(turn) = shell.conversation.turns().find(|t| t.id > after)
             && turn.is_settled()
         {
+            // A model's answer stays to be read.
             let went_through = turn.error.is_none()
+                && turn.answer.is_none()
                 && !turn.steps.is_empty()
                 && turn.steps.iter().all(|s| s.status == StepStatus::Done);
             if !went_through {
@@ -3093,6 +3102,7 @@ impl ShellUi {
         };
         let mut chosen = (enter && !state.chat).then_some(state.selected);
         let mut new_conversation = false;
+        let mut model_pressed = ModelPressed::default();
         let card = egui::Area::new(Id::new("derisk-palette"))
             .order(Order::Foreground)
             .fixed_pos(pos2(screen.center().x - width / 2.0, top))
@@ -3203,7 +3213,7 @@ impl ShellUi {
                                 ease::SMOOTH,
                             );
                             ui.multiply_opacity(o);
-                            new_conversation = conversation(
+                            (new_conversation, model_pressed) = conversation(
                                 ui,
                                 &theme,
                                 shell,
@@ -3384,6 +3394,17 @@ impl ShellUi {
             state.seen = shell.conversation.last_id().unwrap_or(0).max(state.seen);
             if new_conversation {
                 state.cleared = state.seen;
+                // A cleared conversation has no turn left to answer.
+                state.model_stop = true;
+            }
+            // Enter with nothing typed allows the step the model asks about.
+            let asking = model_asking(shell);
+            if enter && state.query.trim().is_empty() && asking {
+                model_pressed.allow = Some(true);
+            }
+            state.model_stop |= model_pressed.stop;
+            if let Some(allow) = model_pressed.allow.filter(|_| asking) {
+                state.model_answers.push(allow);
             }
             if enter && !state.query.trim().is_empty() {
                 let text = state.query.trim().to_owned();
@@ -3403,7 +3424,7 @@ impl ShellUi {
         let Some(entry) = chosen.and_then(|i| rows.get(i)).map(|e| (*e).clone()) else {
             return;
         };
-        if entry.actions.is_empty() {
+        if entry.actions.is_empty() && !(entry.category == Category::Ask && query_rows.model) {
             // The assistant did not understand; say why and keep the text.
             state.message = Some(entry.detail.clone());
             return;
@@ -3475,6 +3496,16 @@ impl ShellUi {
     /// run with [`Shell::ask`] as [`Source::User`].
     pub fn take_asks(&mut self) -> Vec<Ask> {
         std::mem::take(&mut self.palette.asks)
+    }
+
+    /// Whether the person allowed each step the language model asked
+    /// about since the last call, and whether they stopped it.
+    pub fn take_model_answers(&mut self) -> (Vec<bool>, bool) {
+        let state = &mut self.palette;
+        (
+            std::mem::take(&mut state.model_answers),
+            std::mem::take(&mut state.model_stop),
+        )
     }
 
     /// Draws the notifications [`Stack::shown`] picks as a column of cards,
@@ -3806,27 +3837,65 @@ pub struct Ask {
     pub confirmed: bool,
 }
 
+/// What was pressed for the language model's request in the conversation.
+#[derive(Clone, Copy, Debug, Default)]
+struct ModelPressed {
+    /// Allow, or don't, the step it asks about.
+    allow: Option<bool>,
+    /// Stop the request.
+    stop: bool,
+}
+
+/// Whether a step of the model's request waits for the person to allow it.
+fn model_asking(shell: &Shell) -> bool {
+    shell
+        .model_running
+        .and_then(|turn| shell.conversation.turn(turn))
+        .is_some_and(|t| t.steps.iter().any(|s| s.status == StepStatus::Asking))
+}
+
 /// The conversation transcript, newest at the bottom. Returns whether
-/// "New conversation" was clicked.
+/// "New conversation" was clicked, and what was pressed for the language
+/// model's request.
 ///
 /// Turns newer than `fresh_after` animate as the film's does: the steps
 /// come in one after another, each check draws itself in when its step is
 /// done, and the reply fades in once every step has finished.
-fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64, fresh_after: u64) -> bool {
+fn conversation(
+    ui: &mut Ui,
+    theme: &Theme,
+    shell: &Shell,
+    cleared: u64,
+    fresh_after: u64,
+) -> (bool, ModelPressed) {
     let turns: Vec<&Turn> = shell
         .conversation
         .turns()
         .filter(|t| t.id > cleared)
         .collect();
     let mut clear = false;
+    let mut pressed = ModelPressed::default();
     ui.horizontal(|ui| {
         ui.label(RichText::new("Conversation").size(11.0).color(theme.border));
+        if let Some(model) = &shell.model {
+            ui.label(
+                RichText::new(format!("· {model}"))
+                    .size(11.0)
+                    .color(theme.border),
+            );
+        }
         if !turns.is_empty() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 clear = ui
                     .add(egui::Button::new(RichText::new("New").size(11.0)).frame(false))
                     .on_hover_text("Start a new conversation")
                     .clicked();
+                if shell.model_running.is_some() {
+                    pressed.stop = ui
+                        .add(egui::Button::new(RichText::new("Stop").size(11.0)).frame(false))
+                        .on_hover_text("Stop the language model's request")
+                        .clicked();
+                }
             });
         }
     });
@@ -3838,7 +3907,7 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64, fresh_a
             )
             .color(theme.border),
         );
-        return clear;
+        return (clear, pressed);
     }
     egui::ScrollArea::vertical()
         .max_height(PALETTE_ROWS as f32 * PALETTE_ROW_HEIGHT)
@@ -3867,6 +3936,7 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64, fresh_a
                     let (icon, color) = match &step.status {
                         StepStatus::Done => (Some("object-select"), theme.accent),
                         StepStatus::Waiting => (Some("view-refresh"), theme.border),
+                        StepStatus::Asking => (Some("dialog-question"), theme.accent),
                         StepStatus::Failed(_) => {
                             (Some("dialog-error"), button_color(Button::Close))
                         }
@@ -3906,6 +3976,24 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64, fresh_a
                                 theme.foreground
                             },
                         ));
+                        // The model waits on this: Allow (or Enter) goes
+                        // ahead, Don't allow tells it no.
+                        if step.status == StepStatus::Asking && shell.model_running == Some(turn.id)
+                        {
+                            if ui
+                                .add(egui::Button::new(RichText::new("Allow").size(11.0)))
+                                .on_hover_text("Let the model do this (Enter)")
+                                .clicked()
+                            {
+                                pressed.allow = Some(true);
+                            }
+                            if ui
+                                .add(egui::Button::new(RichText::new("Don't allow").size(11.0)))
+                                .clicked()
+                            {
+                                pressed.allow = Some(false);
+                            }
+                        }
                     });
                 }
                 ui.horizontal_wrapped(|ui| {
@@ -3932,7 +4020,7 @@ fn conversation(ui: &mut Ui, theme: &Theme, shell: &Shell, cleared: u64, fresh_a
                 });
             }
         });
-    clear
+    (clear, pressed)
 }
 
 /// One palette row: icon, title, detail and shortcut hint, drawn `shift`

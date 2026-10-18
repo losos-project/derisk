@@ -1,5 +1,5 @@
-//! The Wallpaper, Top bar and Shortcuts pages of the Settings app, and the
-//! text being typed into them.
+//! The Wallpaper, Top bar, Assistant and Shortcuts pages of the Settings
+//! app, and the text being typed into them.
 
 use std::path::{Path, PathBuf};
 
@@ -7,7 +7,8 @@ use mcsapi_ui::{Theme, egui};
 
 use crate::{
     model::{
-        BarPosition, Fit, Rgb, Settings, TopBar, Wallpaper, WallpaperKind, web_background_url,
+        AssistantPrefs, BarPosition, Fit, Rgb, Settings, TopBar, Wallpaper, WallpaperKind,
+        model_name, model_server_url, web_background_url,
     },
     shortcuts::{Group, Keys, Shortcut, Shortcuts},
     thumbs::Thumbnails,
@@ -33,6 +34,9 @@ pub(crate) struct Drafts {
     url: String,
     /// The lock screen's picture as typed.
     lock_path: String,
+    /// The model server's address and the model's name, as typed.
+    model_url: String,
+    model: String,
     chords: Vec<String>,
     /// Files and folders offered for the current wallpaper kind.
     candidates: Option<(WallpaperKind, Vec<PathBuf>)>,
@@ -45,6 +49,8 @@ impl Drafts {
             path: settings.wallpaper.path.display().to_string(),
             url: settings.wallpaper.url.clone(),
             lock_path: settings.wallpaper.lock_screen.display().to_string(),
+            model_url: settings.assistant.url.clone(),
+            model: settings.assistant.model.clone(),
             chords: Shortcut::ALL
                 .iter()
                 .map(|s| chord_text(settings.shortcuts.get(*s)))
@@ -240,6 +246,91 @@ fn url_rows(ui: &mut egui::Ui, w: &mut Wallpaper, drafts: &mut Drafts) {
              fails to load, the default shows instead."
         },
     );
+}
+
+/// The Assistant page: whether Ask derisk hands what its rules don't follow
+/// to a language model, and which one, where.
+pub(crate) fn assistant(ui: &mut egui::Ui, a: &mut AssistantPrefs, drafts: &mut Drafts) {
+    ui.label("Language model");
+    ui.checkbox(
+        &mut a.use_model,
+        "Send requests the assistant can't follow to a language model",
+    );
+    ui.end_row();
+    hint(
+        ui,
+        "It works through the desktop's own tools: it opens apps and moves windows \
+         itself, and asks you in the palette before it clicks or types in an app, \
+         changes a setting or ends your session.",
+    );
+    if !a.use_model {
+        return;
+    }
+    ui.label("Server");
+    let edit = ui.add(
+        egui::TextEdit::singleline(&mut drafts.model_url)
+            .hint_text(AssistantPrefs::DEFAULT_URL)
+            .desired_width(ui.spacing().text_edit_width),
+    );
+    let url = drafts.model_url.trim().trim_end_matches('/');
+    let valid = model_server_url(url);
+    if edit.changed() && valid {
+        a.url = url.to_owned();
+    }
+    ui.end_row();
+    let local = a.url == AssistantPrefs::DEFAULT_URL;
+    hint(
+        ui,
+        if !valid {
+            "Type an address starting with http:// or https://."
+        } else if local {
+            "Ollama on this computer. Nothing you ask leaves it."
+        } else {
+            "Any Ollama-compatible server. What you ask, and what the model reads \
+             from your screen to do it, goes to that server."
+        },
+    );
+    if !local && valid {
+        ui.label("");
+        if ui.button("Use this computer").clicked() {
+            a.url = AssistantPrefs::DEFAULT_URL.to_owned();
+            drafts.model_url = a.url.clone();
+        }
+        ui.end_row();
+    }
+    ui.label("Model");
+    let edit = ui.add(
+        egui::TextEdit::singleline(&mut drafts.model)
+            .hint_text(AssistantPrefs::DEFAULT_MODEL)
+            .desired_width(ui.spacing().text_edit_width),
+    );
+    let model = drafts.model.trim();
+    let valid = model_name(model);
+    if edit.changed() && valid {
+        a.model = model.to_owned();
+    }
+    ui.end_row();
+    hint(
+        ui,
+        if !valid {
+            "Type a model's name as the server spells it, such as qwen3:4b-instruct."
+        } else {
+            "The server downloads it the first time you ask, 2.5 GB for the default. \
+             It needs to support tool calling; granite4:micro is smaller, and a bigger \
+             model is better at long requests."
+        },
+    );
+    if a.model != AssistantPrefs::DEFAULT_MODEL {
+        ui.label("");
+        if ui
+            .button(format!("Use {}", AssistantPrefs::DEFAULT_MODEL))
+            .clicked()
+        {
+            a.model = AssistantPrefs::DEFAULT_MODEL.to_owned();
+            drafts.model = a.model.clone();
+        }
+        ui.end_row();
+    }
 }
 
 /// The lock screen's picture: a path, or empty for derisk's gradient.

@@ -24,7 +24,8 @@
 //!   the desktop.
 //! - [`effects`]: translucent, blurred panels and low power mode.
 //! - [`assistant`] and [`ipc`]: natural-language and agent control, and
-//!   [`mcp`]: the agent tools as an MCP server.
+//!   [`mcp`]: the agent tools as an MCP server, and [`model`]: requests
+//!   the assistant's rules don't follow, carried out by a language model.
 //! - [`conversation`]: requests and their progress, shown in the palette.
 //! - [`notification_stack`]: the notifications apps send the session over
 //!   D-Bus, and which of them are on screen.
@@ -83,6 +84,7 @@ pub mod keys;
 pub mod mcp;
 pub mod menu;
 pub mod mobile;
+pub mod model;
 pub mod motion;
 pub mod notification_stack;
 pub mod overview;

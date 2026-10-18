@@ -49,10 +49,11 @@ use mcsapi_ui::{
     error::miette::{MietteDiagnostic, Severity},
 };
 pub use model::{
-    Accent, Appearance, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit, Input, Layout,
-    LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy, PrivacyDisplay, Profile,
-    Rgb, Settings, ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind, Warning, WindowStyle,
-    default_path, machine_name, web_background_url,
+    Accent, Appearance, AssistantPrefs, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit,
+    Input, Layout, LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy,
+    PrivacyDisplay, Profile, Rgb, Settings, ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind,
+    Warning, WindowStyle, default_path, machine_name, model_name, model_server_url,
+    web_background_url,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, Group, KeyName, Keys, Resolved, Shortcut, Shortcuts};
@@ -70,6 +71,9 @@ pub enum Page {
     TopBar,
     /// Layout, gaps, workspaces, profile, and variable refresh rate.
     Desktop,
+    /// The palette's assistant and the language model it can hand
+    /// requests to.
+    Assistant,
     /// Keyboard and pointer.
     Input,
     /// Rebindable keyboard shortcuts.
@@ -101,11 +105,12 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
         Self::Desktop,
+        Self::Assistant,
         Self::Input,
         Self::Shortcuts,
         Self::Network,
@@ -134,6 +139,7 @@ impl Page {
             Self::SignIn => "Sign-in",
             Self::Users => "Users",
             Self::Desktop => "Desktop",
+            Self::Assistant => "Assistant",
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
             Self::Power => "Power",
@@ -151,6 +157,9 @@ impl Page {
             Self::Wallpaper => "What the desktop and the lock screen show behind windows.",
             Self::TopBar => "Where the top bar sits and what it shows.",
             Self::Desktop => "How windows are laid out, and on which workspaces.",
+            Self::Assistant => {
+                "The language model Ask derisk hands requests to, and where it runs."
+            }
             Self::Input => "Scrolling, the touchpad and key repeat.",
             Self::Shortcuts => "Keys for the desktop's actions, single or in sequence.",
             Self::Network => "Wired ports and Wi-Fi networks.",
@@ -560,6 +569,7 @@ impl SettingsApp {
                     theme,
                 ),
                 Page::TopBar => pages::top_bar(ui, &mut s.top_bar),
+                Page::Assistant => pages::assistant(ui, &mut s.assistant, &mut self.drafts),
                 Page::Privacy
                 | Page::SignIn
                 | Page::Users

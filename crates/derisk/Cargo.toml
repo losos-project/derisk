@@ -57,6 +57,9 @@ tokio = { version = "1.43", optional = true, features = ["rt", "net", "io-util",
 zbus = { version = "5.19", optional = true, default-features = false, features = ["tokio"] }
 # Machines' lists come from a watching thread over a bounded channel.
 crossbeam-channel = { workspace = true, optional = true }
+# Ask derisk's language model, on an Ollama-compatible server: blocking,
+# which suits the thread that asks, with rustls for a server over https.
+ureq = { version = "3.4.2", optional = true }
 # Screenshots for agents (`{"method":"screenshot"}`).
 png = { version = "0.18.1", optional = true }
 # GrapheneOS's hardened_malloc as the allocator (`hardened-malloc`). Links the
@@ -78,6 +81,7 @@ host = [
     "dep:tokio",
     "dep:zbus",
     "dep:crossbeam-channel",
+    "dep:ureq",
 ]
 # Make hardened_malloc derisk's allocator, for the Rust heap and every C
 # library in the process. Turn it on only where the system has

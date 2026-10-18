@@ -374,6 +374,40 @@ fn the_machine_apps_open_in_round_trips_and_must_be_a_name() {
 }
 
 #[test]
+fn the_assistant_model_round_trips_and_must_be_a_server_and_a_name() {
+    let mut settings = Settings::default();
+    assert!(settings.assistant.use_model);
+    assert_eq!(settings.assistant.url, "http://localhost:11434");
+    assert_eq!(settings.assistant.model, "qwen3:4b-instruct");
+    settings.assistant.url = "https://models.example.org:8443/ollama".into();
+    settings.assistant.model = "hf.co/org/model:Q4_K_M".into();
+    settings.assistant.use_model = false;
+    let text = settings.to_text();
+    assert!(
+        text.contains("assistant.model = hf.co/org/model:Q4_K_M\n"),
+        "{text}"
+    );
+    let (parsed, warnings) = Settings::parse(&text);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(parsed, settings);
+    // A trailing slash is the same server.
+    let (parsed, _) = Settings::parse("assistant.url = http://box.local:11434/\n");
+    assert_eq!(parsed.assistant.url, "http://box.local:11434");
+    for bad in [
+        "assistant.url = ftp://box",
+        "assistant.url = http://",
+        "assistant.url = file:///etc",
+        "assistant.url = http://a b",
+        "assistant.model = ",
+        "assistant.model = two words",
+    ] {
+        let (parsed, warnings) = Settings::parse(&format!("{bad}\n"));
+        assert_eq!(warnings.len(), 1, "{bad}");
+        assert_eq!(parsed.assistant, Settings::default().assistant, "{bad}");
+    }
+}
+
+#[test]
 fn network_page_says_what_it_sees() {
     use derisk_install::{
         network::{Network, Saved, Security},
