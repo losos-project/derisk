@@ -320,6 +320,12 @@ pub struct Shell {
     /// Natural-language requests and their progress (the palette's agent
     /// conversation).
     pub conversation: Conversation,
+    /// The language model requests the built-in assistant doesn't follow
+    /// go to, by name; `None` when they don't go to one. Set by the host
+    /// from Settings › Assistant ([`crate::model`]).
+    pub model: Option<String>,
+    /// The turn the model is working on, set by the host.
+    pub model_running: Option<u64>,
     /// Failed user units, updated by the host (see [`systemd::failed_units`]).
     pub failed_units: Vec<String>,
     /// Virtual machines that run, updated by the host from libvirt; the
@@ -482,6 +488,8 @@ impl Shell {
             snap_assist: None,
             pending: Vec::new(),
             conversation: Conversation::default(),
+            model: None,
+            model_running: None,
             menus: GlobalMenu::default(),
             tray: Tray::default(),
             widgets: CustomWidgets::default(),
@@ -1602,6 +1610,13 @@ impl Shell {
                 }
             }
         }
+    }
+
+    /// Runs `action` as step `step` of a turn already in the conversation,
+    /// as the language model's steps are: the step is marked done or
+    /// failed.
+    pub fn run_step(&mut self, action: Action, step: StepRef) -> Outcome {
+        self.run_deferred(vec![(action, Some(step))])
     }
 
     /// Runs `actions` like [`Shell::run`], recording them as one turn of

@@ -43,7 +43,7 @@ use derisk::{
     action::{Action, Effect},
     animation,
     backlight::{self, PasswordDim},
-    conversation::Source,
+    conversation::{Source, StepRef},
     desktop::{self, DesktopEntry},
     effects::{Effects, SettingsWatch},
     familiarity::Familiarity,
@@ -54,6 +54,7 @@ use derisk::{
     keyboard::{Output as Typed, Predictor},
     keys::{Key, Mods, Sequence, Step, SuperTap},
     lock::LockScreen,
+    model,
     overview::Battery,
     palette, privacy,
     privacy_display::{self, Area as CoverArea, PrivacyDisplay, Report as FacesReport},
@@ -75,6 +76,7 @@ use mcsapi::WindowId;
 use tracing::{debug, info, warn};
 
 use crate::{
+    ask,
     file_search::FileSearch,
     machines::{self, MachineDisplays},
     notifications, pam, polkit_agent, power, unlock,
@@ -177,7 +179,7 @@ struct Polled {
 
 /// The derisk shell as seen by the compositor.
 pub struct Session {
-    shell: Shell,
+    pub(crate) shell: Shell,
     ui: ShellUi,
     execute: bool,
     wayland_display: String,
@@ -218,6 +220,11 @@ pub struct Session {
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
     settings: SettingsWatch,
+    /// Where Ask derisk sends requests its rules don't follow, when it
+    /// does; from Settings › Assistant.
+    model: Option<model::Config>,
+    /// The language model's thread ([`ask`]), once the compositor runs.
+    asking: Option<ask::Asking>,
     /// Whether the output is phone-sized, shared with [`CoreApps`] so the
     /// apps get touch-sized widgets too.
     phone: Arc<AtomicBool>,
@@ -471,6 +478,8 @@ impl Session {
             installed,
             pending_actions,
             settings: SettingsWatch::new(derisk_settings::default_path()),
+            model: None,
+            asking: None,
             phone,
             words,
             tutorial_mark: tutorial::mark_path(),
@@ -904,7 +913,70 @@ impl Session {
 
     /// Handles one agent request line from connection `conn`; the response
     /// goes to `reply`, now or once the compositor has answered.
-    fn agent_line(
+    /// Starts the model on `text`, in a turn of its own.
+    fn ask_model(&mut self, text: &str, config: model::Config) {
+        let Some(asking) = &mut self.asking else {
+            self.shell.conversation.not_understood(
+                Source::User,
+                text,
+                "The language model's thread did not start",
+            );
+            return;
+        };
+        let turn = self.shell.conversation.start_model(text, "Thinking…");
+        self.shell.model_running = Some(turn);
+        if let Err(e) = asking.ask(turn, text, config) {
+            self.shell.conversation.finish(turn, Err(e.to_owned()));
+            self.shell.model_running = asking.running();
+        }
+    }
+
+    /// The model's thread finished turn `turn`.
+    pub(crate) fn model_finished(
+        &mut self,
+        turn: u64,
+        outcome: std::result::Result<String, String>,
+    ) {
+        self.shell.conversation.finish(turn, outcome);
+        if let Some(asking) = &mut self.asking {
+            asking.finished(turn);
+            self.shell.model_running = asking.running();
+        }
+    }
+
+    /// Whether the lock screen is up, when agents get nothing.
+    pub(crate) fn is_locked(&self) -> bool {
+        self.lock.is_locked()
+    }
+
+    /// Runs one of the model's actions as an agent's, as step `step` of
+    /// its turn when it has one.
+    pub(crate) fn model_act(
+        &mut self,
+        action: Action,
+        step: Option<StepRef>,
+    ) -> std::result::Result<String, String> {
+        let did = model::did(&action);
+        let outcome = self.shell.as_agent(|shell| match step {
+            Some(step) => shell.run_step(action, step),
+            None => shell.run([action]),
+        });
+        self.perform(outcome.effects);
+        outcome.result.map(|()| did).map_err(|e| e.to_string())
+    }
+
+    /// The installed apps as `list_apps` tells them: name and the ID to
+    /// open each by, derisk's own first.
+    pub(crate) fn app_list(&self) -> String {
+        self.core_apps
+            .iter()
+            .chain(&self.installed)
+            .map(|e| format!("{} ({})", e.name, e.id))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub(crate) fn agent_line(
         &mut self,
         conn: u64,
         line: &str,
@@ -1736,6 +1808,12 @@ impl compositor::Shell for Session {
             self.ui.shortcuts = settings.shortcuts;
             self.power = settings.power;
             self.wallpaper.configure(&settings.wallpaper);
+            let assistant = &settings.assistant;
+            self.model = assistant.use_model.then(|| model::Config {
+                url: assistant.url.clone(),
+                model: assistant.model.clone(),
+            });
+            self.shell.model = self.model.as_ref().map(|c| c.model.clone());
             self.lock_wallpaper
                 .configure(&wallpaper::lock_screen(&settings.wallpaper));
             if settings.privacy != self.privacy {
@@ -2126,10 +2204,32 @@ impl compositor::Shell for Session {
         // Requests typed in the palette; their progress shows in its
         // conversation.
         for ask in self.ui.take_asks() {
+            // What the rules don't follow goes to the model, when there is
+            // one; the rules' "I don't know how" otherwise.
+            if let Some(config) = self.model.clone()
+                && derisk::assistant::interpret(&ask.text).is_err()
+            {
+                self.ask_model(&ask.text, config);
+                continue;
+            }
             let outcome = self.shell.ask(&ask.text, Source::User, ask.confirmed);
             self.perform(outcome.effects);
             if let Err(e) = outcome.result {
                 info!("request failed: {e}");
+            }
+        }
+        // Allowing a step the model asked about, or stopping it, only
+        // counts from the person: an agent's injected click on Allow would
+        // let the model approve itself.
+        let (answers, stop) = self.ui.take_model_answers();
+        if let Some(asking) = &self.asking
+            && !self.shell.untrusted()
+        {
+            if stop {
+                asking.stop();
+            }
+            for allow in answers {
+                asking.answer(allow);
             }
         }
         // A window picked in the overview grows out of its card. Worked out
@@ -2510,6 +2610,15 @@ pub fn run(options: Options) -> Result {
     let remote = compositor.remote();
     if let Some(path) = agent_socket(options.socket, remote.clone())? {
         info!("agent protocol on {}", path.display());
+    }
+    // Ask derisk's language model runs its tools as an agent connection of
+    // its own.
+    {
+        let conn = CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+        let for_model = remote.clone();
+        remote.run(move |session: &mut Session| {
+            session.asking = ask::Asking::start(for_model, conn);
+        });
     }
     // Only the real session: a nested one would take its parent's place
     // as the logind session's agent.

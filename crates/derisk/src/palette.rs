@@ -444,6 +444,22 @@ pub struct Rows {
     pub top: Vec<Entry>,
     /// Below them.
     pub bottom: Vec<Entry>,
+    /// Whether a language model takes what the assistant's rules don't
+    /// follow ([`Rows::offer_model`]), so its row is offered like one the
+    /// rules understood.
+    pub model: bool,
+}
+
+impl Rows {
+    /// Offers a request the assistant's rules don't follow to `model`
+    /// ([`crate::model`]): its row says so instead of why the rules
+    /// can't, and Enter sends it.
+    pub fn offer_model(&mut self, model: &str) {
+        if let Some(ask) = self.ask.as_mut().filter(|a| a.actions.is_empty()) {
+            ask.detail = format!("Press Enter to ask {model}");
+            self.model = true;
+        }
+    }
 }
 
 impl Catalog {
@@ -607,7 +623,7 @@ pub fn list<'a>(
     let ask = rows
         .ask
         .as_ref()
-        .filter(|ask| !ask.actions.is_empty() || hits.is_empty());
+        .filter(|ask| !ask.actions.is_empty() || rows.model || hits.is_empty());
     let first = ask.filter(|_| prefer_assistant(entries, hits, query));
     // A request that opens apps lists them under the assistant's row, so
     // they can be opened on their own: a sentence matches no title, so the

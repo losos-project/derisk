@@ -21,6 +21,7 @@ pub const GROUPS: [(&str, &[Page]); 4] = [
             Page::Wallpaper,
             Page::TopBar,
             Page::Desktop,
+            Page::Assistant,
         ],
     ),
     (

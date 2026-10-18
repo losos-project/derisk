@@ -1800,6 +1800,7 @@ dependencies = [
  "tracing",
  "tracing-journald",
  "tracing-subscriber",
+ "ureq",
  "zbus",
 ]
 

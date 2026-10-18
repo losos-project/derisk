@@ -6,6 +6,8 @@
 //! (launching apps as units, session operations) can be executed for real.
 
 #[cfg(feature = "host")]
+mod ask;
+#[cfg(feature = "host")]
 mod auth;
 #[cfg(feature = "host")]
 mod computer;
