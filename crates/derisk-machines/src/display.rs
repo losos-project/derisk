@@ -6,9 +6,8 @@
 //! host, three things meet it:
 //!
 //! 1. [`gate`] accepts on vsock port [`DISPLAY_PORT`]. The kernel stamps each
-//!    connection with the address QEMU gave the sending machine, which no
-//!    two running machines can share, and the gate looks for the running
-//!    machine whose record holds that address.
+//!    connection with the address libvirt gave the sending machine, and the
+//!    gate asks libvirt which machine has that address now.
 //! 2. It hands the connection to that machine's waypipe client, listening on
 //!    [`Sockets::waypipe`], which turns waypipe's stream back into Wayland.
 //! 3. The waypipe client connects to [`Sockets::wayland`], a socket the
@@ -139,7 +138,7 @@ pub fn gate(sockets: &Sockets, hypervisor: &Hypervisor) -> io::Result<()> {
                     continue;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, cid, "cannot find whose address this is");
+                    tracing::warn!(%error, cid, "cannot ask libvirt whose address this is");
                     continue;
                 }
             };
@@ -270,7 +269,7 @@ mod tests {
             cid: Some(3),
         };
         assert!(has_display(&machine));
-        assert_eq!(sandbox(&machine), ["org.quickemu", "work", "u"]);
+        assert_eq!(sandbox(&machine), ["org.libvirt", "work", "u"]);
         for bad in ["", ".", "..", "a/b"] {
             machine.name = bad.into();
             assert!(!has_display(&machine), "{bad:?}");
