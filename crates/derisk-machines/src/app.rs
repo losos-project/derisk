@@ -24,7 +24,7 @@ pub struct MachinesApp {
     #[cfg(not(target_arch = "wasm32"))]
     worker: Worker,
     machines: Vec<Machine>,
-    /// Why the machines cannot be read, while they cannot.
+    /// Why libvirt cannot be reached, while it cannot.
     unavailable: Option<String>,
     selected: Option<String>,
     /// What the worker is doing for the person, while it is.
@@ -83,7 +83,7 @@ impl Default for MachinesApp {
 }
 
 impl MachinesApp {
-    /// Starts watching the person's machines.
+    /// Starts watching libvirt's machines.
     pub fn new() -> Self {
         let mut app = Self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -93,7 +93,7 @@ impl MachinesApp {
             unavailable: None,
             #[cfg(target_arch = "wasm32")]
             unavailable: Some(
-                "Machines run under quickemu on the computer itself, which this demo in a \
+                "Machines run under libvirt on the computer itself, which this demo in a \
                  browser does not have."
                     .into(),
             ),
@@ -554,11 +554,11 @@ impl MachinesApp {
         let (shipped, installed) = (shipped.to_owned(), installed.to_owned());
         let text = match self.plugin {
             Plugin::Outdated { .. } => {
-                "An update brought a new version of pm's quickemu plugin. Set it up again to \
+                "An update brought a new version of pm's libvirt plugin. Set it up again to \
                  sign the new one with your key."
             }
             _ => {
-                "pm makes and removes machines through its quickemu plugin, which it runs only \
+                "pm makes and removes machines through its libvirt plugin, which it runs only \
                  once you have signed it with your own key. Setting it up copies the plugin \
                  into your pm plugins and signs it, making you a key if you have none."
             }
@@ -673,14 +673,10 @@ fn save_open_apps_in(machine: &str) -> Result<(), String> {
 
 /// The second line of a machine's row.
 fn details(machine: &Machine) -> String {
-    // A machine with neither a template nor a system pm made from CDs was
-    // not made by pm at all.
-    let template = match (&machine.template, machine.system.as_deref()) {
-        (Some(t), _) => format!("from {}", t.name),
-        (None, Some("windows")) => "Windows from a CD".to_owned(),
-        (None, Some(_)) => "Linux from a CD".to_owned(),
-        (None, None) => "not made by pm".to_owned(),
-    };
+    let template = machine.template.as_ref().map_or_else(
+        || "not made by pm".to_owned(),
+        |t| format!("from {}", t.name),
+    );
     format!(
         "{} · {} · {} MiB · {} {}",
         machine.label,
@@ -826,16 +822,6 @@ mod tests {
             details(&odd),
             "gray · not made by pm · 2048 MiB · 1 processor"
         );
-        odd.system = Some("windows".into());
-        assert_eq!(
-            details(&odd),
-            "gray · Windows from a CD · 2048 MiB · 1 processor"
-        );
-        odd.system = Some("linux".into());
-        assert_eq!(
-            details(&odd),
-            "gray · Linux from a CD · 2048 MiB · 1 processor"
-        );
         assert_eq!(
             details(&machine("work", Label::Blue)),
             "blue · from losos-guest · 2048 MiB · 2 processors"
@@ -843,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn draws_without_a_hypervisor() {
+    fn draws_without_libvirt() {
         let context = egui::Context::default();
         let mut app = MachinesApp::new();
         app.machines = vec![machine("work", Label::Blue)];

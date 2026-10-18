@@ -322,7 +322,7 @@ pub struct Shell {
     pub conversation: Conversation,
     /// Failed user units, updated by the host (see [`systemd::failed_units`]).
     pub failed_units: Vec<String>,
-    /// Virtual machines that run, updated by the host from the machines' folders; the
+    /// Virtual machines that run, updated by the host from libvirt; the
     /// top bar shows one dot in its label's colour for each.
     pub machines: Vec<WindowMachine>,
     /// Whether logind says the machine can hibernate, updated by the host

@@ -280,7 +280,7 @@ mod machine {
 
     impl Machine {
         /// The machine Flatpak runs in: the first made from
-        /// [`TEMPLATE`], if the person has one.
+        /// [`TEMPLATE`], if libvirt has one.
         pub fn find() -> Option<Machine> {
             let hypervisor = Hypervisor::open().ok()?;
             let name = hypervisor
