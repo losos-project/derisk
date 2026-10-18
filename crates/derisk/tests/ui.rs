@@ -1481,7 +1481,7 @@ fn a_machines_window_wears_its_label() {
         )
         .unwrap();
     let shapes = all_shapes(&shell);
-    // The top bar is filled with the label, and the ring is drawn in it.
+    // The top bar carries a pill in the label, and the ring is drawn in it.
     assert!(
         shapes
             .iter()
@@ -1489,7 +1489,7 @@ fn a_machines_window_wears_its_label() {
     );
     assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Rect(r)
         if r.stroke.color == blue && r.stroke.width == derisk::ui::FOCUS_RING)));
-    // Its name leads the title in the top bar.
+    // Its name, in the pill, leads the title in the top bar.
     let texts = |shapes: &[egui::Shape]| -> Vec<String> {
         shapes
             .iter()
@@ -1500,9 +1500,14 @@ fn a_machines_window_wears_its_label() {
             .collect()
     };
     let named = texts(&shapes);
-    assert!(named.iter().any(|t| t == "[work] notes.md"), "{named:?}");
+    let pill = named.iter().position(|t| t == "work");
+    let title = named.iter().position(|t| t == "notes.md");
+    assert!(
+        pill.is_some_and(|p| title.is_some_and(|t| p < t)),
+        "{named:?}"
+    );
 
-    // Focus elsewhere, the bar names the other window and is not blue, but
+    // Focus elsewhere, the bar names the other window and has no pill, but
     // the machine's window keeps a border in its label all the way round.
     shell
         .apply(Action::Focus {
@@ -1512,7 +1517,7 @@ fn a_machines_window_wears_its_label() {
     let shapes = all_shapes(&shell);
     let named = texts(&shapes);
     assert!(named.iter().any(|t| t == "Files"), "{named:?}");
-    assert!(!named.iter().any(|t| t == "[work] notes.md"), "{named:?}");
+    assert!(!named.iter().any(|t| t == "work"), "{named:?}");
     assert!(
         !shapes
             .iter()

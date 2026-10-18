@@ -26,6 +26,7 @@ use std::{
 };
 
 use derisk_sys::{fs, time::Instant};
+use mcsapi_components::{Button, ButtonVariant, Tokens};
 use mcsapi_ui::{App, Theme, egui};
 use proc::{CpuTimes, Memory, format_duration, format_kib};
 
@@ -214,6 +215,16 @@ pub fn terminate(pid: u32) -> std::io::Result<()> {
     fs::remove_dir_all(format!("/proc/{pid}"))
 }
 
+/// System Monitor's pages.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum View {
+    /// The process table.
+    #[default]
+    Processes,
+    /// CPU history, memory, swap and load.
+    Resources,
+}
+
 /// The System Monitor app.
 #[derive(Debug)]
 pub struct MonitorApp {
@@ -225,10 +236,12 @@ pub struct MonitorApp {
     pub interval: Duration,
     /// Process table order.
     pub sort: SortKey,
+    /// The open page.
+    pub view: View,
     filter: String,
     selected: Option<u32>,
     confirm: Option<u32>,
-    status: Option<String>,
+    status: Option<Result<String, String>>,
 }
 
 impl Default for MonitorApp {
@@ -246,6 +259,7 @@ impl MonitorApp {
             last: None,
             interval: Duration::from_secs(1),
             sort: SortKey::Cpu,
+            view: View::Processes,
             filter: String::new(),
             selected: None,
             confirm: None,
@@ -286,106 +300,304 @@ impl MonitorApp {
         rows
     }
 
-    fn summary(&self, ui: &mut egui::Ui, theme: &Theme) {
-        let s = &self.snapshot;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(ui.available_width() * 0.45);
-                ui.strong(format!("CPU {:.0}%  ·  {} cores", s.cpu, s.cpus));
-                graph(ui, &self.sampler.history, theme);
-            });
-            ui.add_space(16.0);
-            ui.vertical(|ui| {
-                let m = &s.memory;
-                bar(ui, "Memory", m.used(), m.total, theme);
-                bar(ui, "Swap", m.swap_used(), m.swap_total, theme);
-                ui.label(format!(
-                    "Load {:.2} {:.2} {:.2}  ·  Up {}  ·  {} processes",
-                    s.load[0],
-                    s.load[1],
-                    s.load[2],
-                    format_duration(s.uptime),
-                    s.processes.len()
-                ));
-            });
+    fn sidebar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        derisk_frame::navigation(ui, tokens, "monitor-pages", |nav| {
+            nav.section("System Monitor");
+            for (page, label) in [
+                (View::Processes, "Processes"),
+                (View::Resources, "Resources"),
+            ] {
+                if nav.entry(label, self.view == page).clicked() {
+                    self.view = page;
+                }
+            }
         });
     }
 
-    fn table(&mut self, ui: &mut egui::Ui) {
-        // Wraps on a phone. A row wider than the window would widen the
-        // panel under it and push the table's columns off the screen.
-        ui.horizontal_wrapped(|ui| {
-            let color = ui.visuals().weak_text_color();
-            derisk_icons::show(ui, "system-search", 16.0, color);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Name or PID")
-                    .desired_width((ui.available_width() * 0.4).min(240.0)),
-            );
-            ui.label("Sort");
-            for (key, label) in [
-                (SortKey::Cpu, "CPU"),
-                (SortKey::Memory, "Memory"),
-                (SortKey::Pid, "PID"),
-                (SortKey::Name, "Name"),
-            ] {
-                ui.selectable_value(&mut self.sort, key, label);
-            }
-            ui.separator();
-            let selected = self.selected;
-            if ui
-                .add_enabled(selected.is_some(), egui::Button::new("End process"))
-                .clicked()
-            {
-                self.confirm = selected;
-            }
-        });
-        if let Some(pid) = self.confirm {
-            ui.horizontal(|ui| {
-                ui.label(format!("Send SIGTERM to process {pid}?"));
-                if ui.button("End process").clicked() {
-                    self.status = Some(match terminate(pid) {
-                        Ok(()) => format!("Asked process {pid} to end"),
-                        Err(error) => format!("Could not end {pid}: {error}"),
-                    });
-                    self.confirm = None;
+    fn action_bar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let selected = self
+            .selected
+            .and_then(|pid| self.snapshot.processes.iter().find(|p| p.pid == pid));
+        let mut end = false;
+        let mut dismiss = false;
+        derisk_frame::action_bar(ui, tokens, "monitor-actions", |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Ending is the process list's, so Resources leaves it out.
+                if self.view == View::Processes {
+                    end = ui
+                        .add(
+                            Button::new("End process")
+                                .variant(ButtonVariant::Destructive)
+                                .enabled(selected.is_some() && self.confirm.is_none()),
+                        )
+                        .on_disabled_hover_text("Pick a process in the list first")
+                        .clicked();
                 }
-                if ui.button("Cancel").clicked() {
-                    self.confirm = None;
+                if self.status.is_some() {
+                    dismiss = ui
+                        .add(Button::new("Dismiss").variant(ButtonVariant::Ghost))
+                        .clicked();
+                }
+                ui.with_layout(
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| match (&self.status, selected) {
+                        (Some(Ok(done)), _) => {
+                            ui.add(egui::Label::new(done.as_str()).truncate());
+                        }
+                        (Some(Err(error)), _) => {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(error.as_str()).color(tokens.destructive),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        (None, Some(p)) => {
+                            ui.add(
+                                egui::Label::new(format!(
+                                    "{} · {:.1}% CPU · {}",
+                                    p.name,
+                                    p.cpu,
+                                    format_kib(p.rss)
+                                ))
+                                .truncate(),
+                            );
+                        }
+                        (None, None) => {
+                            let m = &self.snapshot.memory;
+                            ui.add(
+                                egui::Label::new(derisk_frame::note(
+                                    tokens,
+                                    &format!(
+                                        "CPU {:.0}% · Memory {} of {}",
+                                        self.snapshot.cpu,
+                                        format_kib(m.used()),
+                                        format_kib(m.total)
+                                    ),
+                                ))
+                                .truncate(),
+                            );
+                        }
+                    },
+                );
+            });
+        });
+        if end {
+            self.confirm = self.selected;
+        }
+        if dismiss {
+            self.status = None;
+        }
+    }
+
+    fn resources(&self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let s = &self.snapshot;
+        derisk_frame::header(
+            ui,
+            tokens,
+            "Resources",
+            &format!(
+                "Up {} · {} processes",
+                format_duration(s.uptime),
+                s.processes.len()
+            ),
+        );
+        derisk_frame::subheading(ui, tokens, "Processor");
+        derisk_frame::card(ui, tokens, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{:.0}%", s.cpu))
+                        .font(egui::FontId::proportional(22.0))
+                        .strong(),
+                );
+                ui.label(derisk_frame::note(
+                    tokens,
+                    &format!(
+                        "busy across {} {}, over the last minute",
+                        s.cpus,
+                        if s.cpus == 1 { "core" } else { "cores" }
+                    ),
+                ));
+            });
+            ui.add_space(8.0);
+            graph(ui, &self.sampler.history, tokens);
+        });
+        derisk_frame::subheading(ui, tokens, "Memory");
+        derisk_frame::card(ui, tokens, |ui| {
+            let m = &s.memory;
+            meter(ui, tokens, "Memory", m.used(), m.total);
+            ui.add_space(14.0);
+            meter(ui, tokens, "Swap", m.swap_used(), m.swap_total);
+        });
+        derisk_frame::subheading(ui, tokens, "Load");
+        derisk_frame::card(ui, tokens, |ui| {
+            derisk_frame::rows(ui, "monitor-load", |ui| {
+                for (label, load) in ["Last minute", "Last 5 minutes", "Last 15 minutes"]
+                    .into_iter()
+                    .zip(s.load)
+                {
+                    ui.label(label);
+                    ui.label(format!("{load:.2}"));
+                    ui.end_row();
                 }
             });
+            ui.add_space(6.0);
+            ui.label(derisk_frame::note(
+                tokens,
+                "How many processes, on average, were running or waiting for a core.",
+            ));
+        });
+    }
+
+    fn processes(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let count = self.rows().len();
+        let phone = ui.available_width() < derisk_frame::PHONE;
+        derisk_frame::header_with(
+            ui,
+            tokens,
+            "Processes",
+            &format!(
+                "{count} of {} · CPU {:.0}%",
+                self.snapshot.processes.len(),
+                self.snapshot.cpu
+            ),
+            |ui| {
+                let width = if phone { ui.available_width() } else { 220.0 };
+                ui.add(
+                    derisk_frame::field(&mut self.filter)
+                        .hint_text("Name or PID")
+                        .desired_width(width),
+                );
+            },
+        );
+        self.confirmation(ui, tokens);
+        derisk_frame::Card::new()
+            .tight()
+            .fill()
+            .show(ui, tokens, |ui| self.table(ui, tokens));
+    }
+
+    fn confirmation(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let Some(pid) = self.confirm else {
+            return;
+        };
+        let name = self
+            .snapshot
+            .processes
+            .iter()
+            .find(|p| p.pid == pid)
+            .map_or_else(|| format!("process {pid}"), |p| p.name.clone());
+        let mut answer = None;
+        derisk_frame::Card::new()
+            .stripe(tokens.destructive)
+            .show(ui, tokens, |ui| {
+                ui.strong(format!("End {name}?"));
+                ui.label(derisk_frame::note(
+                    tokens,
+                    "It is asked to close, so it can save its work first. Anything unsaved \
+                     that it does not save is lost.",
+                ));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(Button::new("End process").variant(ButtonVariant::Destructive))
+                        .clicked()
+                    {
+                        answer = Some(true);
+                    }
+                    if ui
+                        .add(Button::new("Cancel").variant(ButtonVariant::Outline))
+                        .clicked()
+                    {
+                        answer = Some(false);
+                    }
+                });
+            });
+        ui.add_space(12.0);
+        match answer {
+            Some(true) => {
+                self.status = Some(match terminate(pid) {
+                    Ok(()) => Ok(format!("Asked {name} to end")),
+                    Err(error) => Err(format!("Could not end {name}: {error}")),
+                });
+                self.confirm = None;
+            }
+            Some(false) => self.confirm = None,
+            None => {}
         }
-        if let Some(status) = &self.status {
-            ui.label(status);
-        }
+    }
+
+    fn table(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let mut select = None;
+        let mut sort = None;
         let rows = self.rows();
-        let row_height = ui.spacing().interact_size.y;
-        let border = ui.visuals().widgets.noninteractive.bg_stroke.color;
+        if rows.is_empty() {
+            derisk_frame::empty(ui, tokens, "No processes match", "Try another name or PID.");
+            return;
+        }
+        let row_height = ui.spacing().interact_size.y + 4.0;
         let width = ui.available_width();
         let (header, _) =
             ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::hover());
-        cells(
-            ui,
-            header,
-            &COLUMNS.map(|(name, _, _)| egui::RichText::new(name).strong()),
-        );
-        ui.painter().hline(
-            header.x_range(),
-            header.bottom(),
-            egui::Stroke::new(1.0, border),
-        );
+        // Flat headers under one thin rule, as Files' are: a click on one
+        // that has an order sorts by it. Labels rather than buttons, so a
+        // narrow column cuts its header short instead of widening the card.
+        let text = ui.visuals().text_color();
+        for (i, (((name, _, _, _), key), cell)) in COLUMNS
+            .iter()
+            .zip(SORTS)
+            .zip(column_rects(header))
+            .enumerate()
+        {
+            if cell.width() <= 0.0 {
+                continue;
+            }
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(cell)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                |ui| {
+                    if key.is_some_and(|key| key == self.sort) {
+                        // Numbers sort largest first, PIDs and names
+                        // from the start.
+                        let icon = if matches!(self.sort, SortKey::Pid | SortKey::Name) {
+                            "pan-up"
+                        } else {
+                            "pan-down"
+                        };
+                        derisk_icons::show(ui, icon, 12.0, text);
+                    }
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(*name).color(text))
+                            .truncate()
+                            .selectable(false),
+                    );
+                },
+            );
+            if let Some(key) = key {
+                let response = ui
+                    .interact(
+                        cell,
+                        ui.id().with(("monitor-sort", i)),
+                        egui::Sense::click(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if response.clicked() {
+                    sort = Some(key);
+                }
+            }
+        }
+        ui.painter()
+            .hline(header.x_range(), header.bottom(), tokens.border_stroke());
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let width = ui.available_width();
-                for (i, p) in rows.iter().enumerate() {
+                for p in &rows {
                     let selected = self.selected == Some(p.pid);
                     // One target per row: clicking a name or a number selects
                     // the process, not only its PID.
-                    let (rect, row) =
-                        ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
+                    let (rect, row) = derisk_frame::list_row(ui, tokens, row_height, selected);
                     row.widget_info(|| {
                         egui::WidgetInfo::selected(
                             egui::WidgetType::SelectableLabel,
@@ -394,26 +606,13 @@ impl MonitorApp {
                             format!("{} {}", p.pid, p.name),
                         )
                     });
-                    let visuals = ui.visuals();
-                    let fill = if selected {
-                        Some(visuals.selection.bg_fill)
-                    } else if row.hovered() {
-                        Some(visuals.widgets.hovered.weak_bg_fill)
-                    } else if i % 2 == 1 {
-                        Some(visuals.faint_bg_color)
-                    } else {
-                        None
-                    };
-                    if let Some(fill) = fill {
-                        ui.painter().rect_filled(rect, 2.0, fill);
-                    }
                     cells(
                         ui,
                         rect,
                         &[
                             p.pid.to_string(),
                             p.name.clone(),
-                            p.state.to_string(),
+                            state(p.state).to_owned(),
                             format!("{:.1}%", p.cpu),
                             format_kib(p.rss),
                             p.threads.to_string(),
@@ -428,41 +627,91 @@ impl MonitorApp {
         if select.is_some() {
             self.selected = select;
         }
+        if let Some(sort) = sort {
+            self.sort = sort;
+        }
     }
 }
 
-/// Process table columns: a header, its share of the row and the least it
-/// may have, so numbers stay whole on a phone. A share of 0 takes what the
-/// others leave, so the table spans the window.
-const COLUMNS: [(&str, f32, f32); 6] = [
-    ("PID", 0.09, 56.0),
-    ("Name", 0.0, 0.0),
-    ("State", 0.12, 44.0),
-    ("CPU", 0.1, 52.0),
-    ("Memory", 0.13, 72.0),
-    ("Threads", 0.1, 36.0),
+/// What each of [`COLUMNS`] sorts by, if anything.
+const SORTS: [Option<SortKey>; 6] = [
+    Some(SortKey::Pid),
+    Some(SortKey::Name),
+    None,
+    Some(SortKey::Cpu),
+    Some(SortKey::Memory),
+    None,
 ];
 
-/// Lays `texts` out across `row` in [`COLUMNS`].
-fn cells(ui: &mut egui::Ui, row: egui::Rect, texts: &[egui::RichText; 6]) {
-    let width = |share: f32, least: f32| (share * row.width()).max(least);
+/// A process's one-letter state in words, as `ps` documents the letters.
+fn state(letter: char) -> &'static str {
+    match letter {
+        'R' => "Running",
+        'S' => "Sleeping",
+        'D' => "Waiting",
+        'Z' => "Zombie",
+        'T' | 't' => "Stopped",
+        'I' => "Idle",
+        'X' => "Dead",
+        _ => "Unknown",
+    }
+}
+
+/// Process table columns: a header, its share of the row, the least it
+/// may have, so numbers stay whole, and whether a phone keeps it. A share
+/// of 0 takes what the others leave, so the table spans the window.
+const COLUMNS: [(&str, f32, f32, bool); 6] = [
+    ("PID", 0.09, 56.0, true),
+    ("Name", 0.0, 0.0, true),
+    ("State", 0.12, 72.0, false),
+    ("CPU", 0.1, 64.0, true),
+    ("Memory", 0.13, 76.0, true),
+    ("Threads", 0.1, 64.0, false),
+];
+
+/// Below this a row drops the columns a phone does without, so the name
+/// keeps room to be read.
+const ROW_NARROW: f32 = 480.0;
+
+/// Where each of [`COLUMNS`] sits across `row`, inset from its neighbours.
+/// A column a narrow row drops is empty.
+fn column_rects(row: egui::Rect) -> impl Iterator<Item = egui::Rect> {
+    let narrow = row.width() < ROW_NARROW;
+    let width = move |share: f32, least: f32, phone: bool| {
+        if narrow && !phone {
+            0.0
+        } else {
+            (share * row.width()).max(least)
+        }
+    };
     let fixed: f32 = COLUMNS
         .iter()
-        .filter(|(_, share, _)| *share > 0.0)
-        .map(|(_, share, least)| width(*share, *least))
+        .filter(|(_, share, _, _)| *share > 0.0)
+        .map(|(_, share, least, phone)| width(*share, *least, *phone))
         .sum();
-    let pad = 4.0;
+    let pad = 8.0;
     let mut x = row.left();
-    for ((_, share, least), text) in COLUMNS.iter().zip(texts) {
+    COLUMNS.iter().map(move |(_, share, least, phone)| {
         let w = if *share == 0.0 {
             (row.width() - fixed).max(0.0)
         } else {
-            width(*share, *least)
+            width(*share, *least, *phone)
         };
         let cell = egui::Rect::from_min_size(
             egui::pos2(x + pad, row.top()),
             egui::vec2((w - 2.0 * pad).max(0.0), row.height()),
         );
+        x += w;
+        cell
+    })
+}
+
+/// Lays `texts` out across `row` in [`COLUMNS`].
+fn cells(ui: &mut egui::Ui, row: egui::Rect, texts: &[egui::RichText; 6]) {
+    for (cell, text) in column_rects(row).zip(texts) {
+        if cell.width() <= 0.0 {
+            continue;
+        }
         // `put` centers what it adds; cells read from the left.
         ui.scope_builder(
             egui::UiBuilder::new()
@@ -470,32 +719,51 @@ fn cells(ui: &mut egui::Ui, row: egui::Rect, texts: &[egui::RichText; 6]) {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| ui.add(egui::Label::new(text.clone()).truncate().selectable(false)),
         );
-        x += w;
     }
 }
 
-fn bar(ui: &mut egui::Ui, label: &str, used: u64, total: u64, theme: &Theme) {
+/// How much of `total` is `used`: its label and figures over a bar in the
+/// accent, on the same track Store's ratings draw.
+fn meter(ui: &mut egui::Ui, tokens: &Tokens, label: &str, used: u64, total: u64) {
     let fraction = if total == 0 {
         0.0
     } else {
-        used as f32 / total as f32
+        (used as f32 / total as f32).clamp(0.0, 1.0)
     };
     ui.horizontal(|ui| {
         ui.strong(label);
-        ui.label(format!("{} of {}", format_kib(used), format_kib(total)));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(derisk_frame::note(
+                tokens,
+                &if total == 0 {
+                    "None".to_owned()
+                } else {
+                    format!("{} of {}", format_kib(used), format_kib(total))
+                },
+            ));
+        });
     });
-    ui.add(
-        egui::ProgressBar::new(fraction)
-            .fill(theme.accent)
-            .desired_height(8.0),
-    );
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 4.0, tokens.field);
+    let mut filled = rect;
+    filled.set_width(rect.width() * fraction);
+    painter.rect_filled(filled, 4.0, tokens.primary);
 }
 
-fn graph(ui: &mut egui::Ui, history: &VecDeque<f32>, theme: &Theme) {
-    let size = egui::vec2(ui.available_width(), 64.0);
+/// The last [`HISTORY`] CPU samples as a line in the accent, over a faint
+/// fill, with a rule at half.
+fn graph(ui: &mut egui::Ui, history: &VecDeque<f32>, tokens: &Tokens) {
+    let size = egui::vec2(ui.available_width(), 120.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, theme.surface);
+    painter.rect_filled(rect, tokens.control_radius(), tokens.background);
+    painter.hline(
+        rect.x_range(),
+        rect.center().y,
+        egui::Stroke::new(1.0, tokens.border),
+    );
     let step = rect.width() / (HISTORY - 1) as f32;
     let offset = HISTORY - history.len();
     let points: Vec<egui::Pos2> = history
@@ -510,7 +778,7 @@ fn graph(ui: &mut egui::Ui, history: &VecDeque<f32>, theme: &Theme) {
         .collect();
     painter.add(egui::Shape::line(
         points,
-        egui::Stroke::new(2.0, theme.accent),
+        egui::Stroke::new(2.0, tokens.primary),
     ));
 }
 
@@ -524,11 +792,17 @@ impl App for MonitorApp {
             self.refresh();
         }
         ui.ctx().request_repaint_after(self.interval);
-        egui::Panel::top("monitor-summary").show(ui, |ui| {
-            ui.add_space(4.0);
-            self.summary(ui, theme);
-            ui.add_space(4.0);
-        });
-        egui::CentralPanel::default_margins().show(ui, |ui| self.table(ui));
+        let tokens = derisk_frame::begin(ui, theme);
+        self.sidebar(ui, &tokens);
+        self.action_bar(ui, &tokens);
+        match self.view {
+            View::Processes => derisk_frame::Page::new()
+                .wide()
+                .fixed()
+                .show(ui, &tokens, |ui| self.processes(ui, &tokens)),
+            View::Resources => {
+                derisk_frame::Page::new().show(ui, &tokens, |ui| self.resources(ui, &tokens))
+            }
+        }
     }
 }

@@ -146,6 +146,19 @@ fn hint(ui: &mut egui::Ui, text: &str) {
     ui.end_row();
 }
 
+/// A note longer than a row, wrapped at the controls' width instead of
+/// running past the card's edge.
+fn wrapped_hint(ui: &mut egui::Ui, text: &str) {
+    ui.label("");
+    let width = ui.spacing().text_edit_width;
+    let note = crate::layout::note(&mcsapi_components::Tokens::current(ui.ctx()), text);
+    ui.vertical(|ui| {
+        ui.set_max_width(width);
+        ui.add(egui::Label::new(note).wrap());
+    });
+    ui.end_row();
+}
+
 pub(crate) fn wallpaper(
     ui: &mut egui::Ui,
     w: &mut Wallpaper,
@@ -257,7 +270,7 @@ pub(crate) fn assistant(ui: &mut egui::Ui, a: &mut AssistantPrefs, drafts: &mut 
         "Send requests the assistant can't follow to a language model",
     );
     ui.end_row();
-    hint(
+    wrapped_hint(
         ui,
         "It works through the desktop's own tools: it opens apps and moves windows \
          itself, and asks you in the palette before it clicks or types in an app, \
@@ -279,7 +292,7 @@ pub(crate) fn assistant(ui: &mut egui::Ui, a: &mut AssistantPrefs, drafts: &mut 
     }
     ui.end_row();
     let local = a.url == AssistantPrefs::DEFAULT_URL;
-    hint(
+    wrapped_hint(
         ui,
         if !valid {
             "Type an address starting with http:// or https://."
@@ -310,7 +323,7 @@ pub(crate) fn assistant(ui: &mut egui::Ui, a: &mut AssistantPrefs, drafts: &mut 
         a.model = model.to_owned();
     }
     ui.end_row();
-    hint(
+    wrapped_hint(
         ui,
         if !valid {
             "Type a model's name as the server spells it, such as qwen3:4b-instruct."

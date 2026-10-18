@@ -34,6 +34,7 @@ mcsapi-compositor = { git = "https://github.com/dasmatus/mcsapi" }
 mcsapi-hardened-malloc = { git = "https://github.com/dasmatus/mcsapi" }
 derisk-desktop = { path = "crates/derisk-desktop", version = "0.1.0" }
 derisk-geom = { path = "crates/derisk-geom", version = "0.1.0" }
+derisk-frame = { path = "crates/derisk-frame", version = "0.1.0" }
 derisk-install = { path = "crates/derisk-install", version = "0.1.0" }
 derisk-login = { path = "crates/derisk-login", version = "0.1.0" }
 derisk-settings = { path = "crates/derisk-settings", version = "0.1.0" }
