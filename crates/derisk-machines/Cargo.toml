@@ -1,6 +1,6 @@
 [package]
 name = "derisk-machines"
-description = "The machines pm creates, as derisk shows and drives them, and the Machines app"
+description = "The libvirt machines pm creates, as derisk shows and drives them, and the Machines app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# pm's record of a machine, machine.json, and the guest agent's replies.
-serde_json.workspace = true
+# Domain XML: a machine's label and template come from its <metadata>, its
+# vsock address from the live definition.
+roxmltree = "0.21.1"
 thiserror.workspace = true
 miette.workspace = true
 # The Machines app.
@@ -19,10 +20,14 @@ mcsapi-ui.workspace = true
 # Machines app sets and the session reads.
 derisk-settings.workspace = true
 
-# Machines run only on Linux hosts; the browser demo of the core apps
-# builds this crate for wasm32 with the parsing and the labels alone.
+# libvirt itself exists only on Linux hosts; the browser demo of the core
+# apps builds this crate for wasm32 with the parsing and the labels alone.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# libvirt's own C library through its bindgen bindings, in owning structs
+# that close what they open. `qemu` adds the guest-agent call.
+virt = { version = "0.4.3", features = ["qemu"] }
 crossbeam-channel.workspace = true
+serde_json.workspace = true
 # guest-exec hands a program's captured output back base64-encoded.
 base64 = "0.22.1"
 tracing.workspace = true
