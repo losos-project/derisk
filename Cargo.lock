@@ -1951,8 +1951,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
+ "derisk-frame",
+ "derisk-icons",
  "derisk-settings",
  "derisk-sys",
+ "mcsapi-components",
  "mcsapi-ui",
  "miette",
  "serde_json",

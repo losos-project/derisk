@@ -1,7 +1,9 @@
-//! The Machines app: the machines on this computer, with their labels and
-//! states, and the buttons to make, start, stop and remove them.
+//! The Machines app: the machines on this computer in a sidebar, each
+//! marked in its label's colour, and a page per machine with its state,
+//! what it is, the apps it can open and removing it, drawn as Settings is.
 
 use derisk_sys::time::Instant;
+use mcsapi_components::{Button, ButtonVariant, Tokens};
 use mcsapi_ui::{App, Theme, egui};
 
 use crate::{
@@ -43,6 +45,9 @@ pub struct MachinesApp {
     /// asked; forgotten when the machine stops.
     #[cfg(not(target_arch = "wasm32"))]
     apps: std::collections::HashMap<String, (Instant, Option<AppList>)>,
+    /// The machines' apps' icons, by app ID, once looked up.
+    #[cfg(not(target_arch = "wasm32"))]
+    icons: std::collections::HashMap<String, Option<egui::TextureHandle>>,
 }
 
 /// A machine's answer to which apps it has.
@@ -109,6 +114,8 @@ impl MachinesApp {
             open_apps_in: String::new(),
             #[cfg(not(target_arch = "wasm32"))]
             apps: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            icons: std::collections::HashMap::new(),
         };
         app.look();
         app
@@ -131,37 +138,6 @@ impl MachinesApp {
             .map(|(settings, _)| settings.machines.open_apps_in)
             .unwrap_or_default();
         self.looked = Some(Instant::now());
-    }
-
-    /// For the selected machine, whether apps opened from the desktop open
-    /// in it: derisk's `machines.open_apps_in` setting, which the session
-    /// reads when it launches an app. Only a machine pm made has the guest
-    /// side that opens apps.
-    fn default_machine(&mut self, ui: &mut egui::Ui) {
-        let Some(name) = self
-            .selected
-            .as_ref()
-            .and_then(|name| self.machines.iter().find(|m| &m.name == name))
-            .filter(|m| m.from_pm())
-            .map(|m| m.name.clone())
-        else {
-            return;
-        };
-        let mut here = self.open_apps_in == name;
-        let changed = ui
-            .checkbox(&mut here, format!("Open apps in {name}"))
-            .on_hover_text(
-                "Apps you open from the desktop open in this machine instead of on this \
-                 computer, starting it if it is off. derisk's own apps stay here.",
-            )
-            .changed();
-        if changed {
-            let value = if here { name } else { String::new() };
-            match save_open_apps_in(&value) {
-                Ok(()) => self.open_apps_in = value,
-                Err(error) => self.status = Some(Err(error)),
-            }
-        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -221,138 +197,6 @@ impl MachinesApp {
     #[cfg(target_arch = "wasm32")]
     fn receive(&mut self) {}
 
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
-        let idle = self.busy.is_none() && self.unavailable.is_none();
-        let can_create = idle
-            && !self.templates.is_empty()
-            && matches!(self.plugin, Plugin::Ready | Plugin::NotShipped);
-        let selected = self
-            .selected
-            .as_ref()
-            .and_then(|name| self.machines.iter().find(|m| &m.name == name))
-            .cloned();
-        // Wraps on a phone rather than pushing buttons off the window.
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    can_create && self.form.is_none(),
-                    egui::Button::new("New machine"),
-                )
-                .on_disabled_hover_text(if self.templates.is_empty() {
-                    "This system has no templates to make a machine from"
-                } else {
-                    "Set pm up for machines first"
-                })
-                .clicked()
-            {
-                self.form = Some(self.new_form());
-            }
-            ui.separator();
-            let active = selected.as_ref().is_some_and(|m| m.state.is_active());
-            let chosen = selected.is_some();
-            if ui
-                .add_enabled(idle && chosen && !active, egui::Button::new("Start"))
-                .clicked()
-                && let Some(machine) = &selected
-            {
-                self.act(format!("Starting {}", machine.name), Act::Start, machine);
-            }
-            if ui
-                .add_enabled(idle && active, egui::Button::new("Shut down"))
-                .clicked()
-                && let Some(machine) = &selected
-            {
-                self.act(
-                    format!("Shutting {} down", machine.name),
-                    Act::ShutDown,
-                    machine,
-                );
-            }
-            if ui
-                .add_enabled(idle && active, egui::Button::new("Force off"))
-                .clicked()
-                && let Some(machine) = &selected
-            {
-                self.confirm = Some(Confirm::ForceOff(machine.name.clone()));
-            }
-            // pm removes a machine with its disk, so only a machine pm made,
-            // whose disk is pm's to remove, and only while it is off.
-            let removable = selected
-                .as_ref()
-                .is_some_and(|m| m.from_pm() && !m.state.is_active());
-            if ui
-                .add_enabled(idle && removable, egui::Button::new("Remove"))
-                .on_disabled_hover_text("Only a machine pm made, while it is off")
-                .clicked()
-                && let Some(machine) = &selected
-            {
-                self.confirm = Some(Confirm::Remove(machine.name.clone()));
-            }
-        });
-    }
-
-    /// The selected machine's apps, as buttons that open them on the
-    /// desktop. A machine is asked for its list once it runs; one that
-    /// does not answer (it is still booting) is asked again a little later.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn open_in(&mut self, ui: &mut egui::Ui) {
-        let Some(machine) = self
-            .selected
-            .as_ref()
-            .and_then(|name| self.machines.iter().find(|m| &m.name == name))
-            .filter(|m| m.state == crate::State::Running && m.from_pm())
-            .cloned()
-        else {
-            return;
-        };
-        let stale = |asked: &Instant, answer: &Option<Result<_, _>>| match answer {
-            None => false,
-            Some(Ok(_)) => false,
-            Some(Err(_)) => asked.elapsed() >= std::time::Duration::from_secs(5),
-        };
-        let ask = self
-            .apps
-            .get(&machine.name)
-            .is_none_or(|(asked, answer)| stale(asked, answer));
-        if ask && self.worker.send(Order::Apps(machine.name.clone())) {
-            self.apps
-                .insert(machine.name.clone(), (Instant::now(), None));
-        }
-        let idle = self.busy.is_none();
-        let mut open = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("Open in {}:", machine.name));
-            match self.apps.get(&machine.name).and_then(|(_, a)| a.as_ref()) {
-                None => {
-                    ui.spinner();
-                }
-                Some(Err(_)) => {
-                    ui.weak("waiting for the machine to answer");
-                    ui.spinner();
-                }
-                Some(Ok(apps)) if apps.is_empty() => {
-                    ui.weak("it has no apps to show here");
-                }
-                Some(Ok(apps)) => {
-                    for app in apps {
-                        if ui.add_enabled(idle, egui::Button::new(&app.name)).clicked() {
-                            open = Some(app.clone());
-                        }
-                    }
-                }
-            }
-        });
-        if let Some(app) = open {
-            self.order(
-                format!("Opening {} in {}", app.name, machine.name),
-                Order::Open {
-                    machine: machine.name,
-                    app,
-                },
-            );
-        }
-    }
-
     fn new_form(&self) -> NewMachine {
         // The first label nobody uses yet, so two machines made one after
         // the other do not look alike.
@@ -381,68 +225,538 @@ impl MachinesApp {
         }
     }
 
-    fn form(&mut self, ui: &mut egui::Ui) {
+    /// The machine shown: the one picked, else the first.
+    fn shown(&self) -> Option<Machine> {
+        self.selected
+            .as_ref()
+            .and_then(|name| self.machines.iter().find(|m| &m.name == name))
+            .or_else(|| self.machines.first())
+            .cloned()
+    }
+
+    /// Whether a machine can be made now: nothing else under way, a
+    /// template to make it from, and pm able to.
+    fn can_create(&self) -> bool {
+        self.busy.is_none()
+            && self.unavailable.is_none()
+            && !self.templates.is_empty()
+            && matches!(self.plugin, Plugin::Ready | Plugin::NotShipped)
+    }
+
+    /// The machines, each marked in its label's colour, and New machine.
+    fn sidebar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let shown = self.shown().map(|m| m.name);
+        let mut picked = None;
+        let mut new = false;
+        let creating = self.form.is_some();
+        let can_create = self.can_create();
+        derisk_frame::navigation(ui, tokens, "machines-list", |nav| {
+            if !self.machines.is_empty() {
+                nav.section("Your machines");
+            }
+            for machine in &self.machines {
+                let open = !creating && shown.as_ref() == Some(&machine.name);
+                if nav
+                    .entry_dot(colour(machine.label), &machine.name, open)
+                    .clicked()
+                {
+                    picked = Some(machine.name.clone());
+                }
+            }
+            if can_create || creating {
+                nav.section("Add");
+                new = nav
+                    .entry_icon("list-add", "New machine", creating)
+                    .clicked();
+            }
+        });
+        if let Some(name) = picked {
+            self.selected = Some(name);
+            self.form = None;
+        }
+        if new && self.form.is_none() {
+            self.form = Some(self.new_form());
+        }
+    }
+
+    /// What the machines are doing along the bottom, in words rather than
+    /// pm's lines, with New machine at its right.
+    fn action_bar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let can_create = self.can_create() && self.form.is_none();
+        let mut new = false;
+        let mut dismiss = false;
+        derisk_frame::action_bar(ui, tokens, "machines-actions", |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                new = ui
+                    .add(Button::new("New machine").enabled(can_create))
+                    .on_disabled_hover_text(if self.templates.is_empty() {
+                        "This system has no templates to make a machine from"
+                    } else {
+                        "Set pm up for machines first, or wait for what is under way"
+                    })
+                    .clicked();
+                if self.status.is_some() && self.busy.is_none() {
+                    dismiss = ui
+                        .add(Button::new("Dismiss").variant(ButtonVariant::Ghost))
+                        .clicked();
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(busy) = &self.busy {
+                        ui.spinner();
+                        ui.label(busy);
+                        // pm's latest line, quietly, so a slow step shows
+                        // it moves without the bar reading like a log.
+                        if let Some(line) = self.log.last() {
+                            ui.add(egui::Label::new(derisk_frame::note(tokens, line)).truncate());
+                        }
+                        return;
+                    }
+                    match &self.status {
+                        Some(Ok(done)) => {
+                            ui.add(egui::Label::new(done.as_str()).truncate());
+                        }
+                        Some(Err(error)) => {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(error.as_str()).color(tokens.destructive),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        None => {
+                            let count = match self.machines.len() {
+                                0 => "No machines yet".to_owned(),
+                                1 => "1 machine".to_owned(),
+                                n => format!("{n} machines"),
+                            };
+                            ui.label(derisk_frame::note(tokens, &count));
+                        }
+                    }
+                });
+            });
+        });
+        if dismiss {
+            self.status = None;
+        }
+        if new {
+            self.form = Some(self.new_form());
+        }
+    }
+
+    /// Setting pm's quickemu plugin up, as a card over the page while it
+    /// is not.
+    fn plugin_card(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let Some((shipped, installed)) = self.plugin.paths() else {
+            return;
+        };
+        let (shipped, installed) = (shipped.to_owned(), installed.to_owned());
+        let text = match self.plugin {
+            Plugin::Outdated { .. } => {
+                "An update brought a new version of pm's quickemu plugin. Set it up again to \
+                 sign the new one with your key."
+            }
+            _ => {
+                "pm makes and removes machines through its quickemu plugin, which it runs only \
+                 once you have signed it with your own key. Setting it up copies the plugin \
+                 into your pm plugins and signs it, making you a key if you have none."
+            }
+        };
+        let idle = self.busy.is_none();
+        let mut set_up = false;
+        derisk_frame::card(ui, tokens, |ui| {
+            ui.label(egui::RichText::new("Set pm up for machines").strong());
+            ui.label(derisk_frame::note(tokens, text));
+            set_up = ui
+                .add(Button::new("Set up pm for machines").enabled(idle))
+                .clicked();
+        });
+        ui.add_space(8.0);
+        if set_up {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.order(
+                "Setting pm up".into(),
+                Order::SetUpPlugin { shipped, installed },
+            );
+            #[cfg(target_arch = "wasm32")]
+            drop((shipped, installed));
+        }
+    }
+
+    /// Force off and Remove lose something, so they ask first, in a card
+    /// at the top of the page.
+    fn confirmation(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let Some(confirm) = self.confirm.clone() else {
+            return;
+        };
+        let (question, button, act, name) = match &confirm {
+            Confirm::ForceOff(name) => (
+                format!("Force {name} off? Whatever it has not saved is lost."),
+                "Force off",
+                Act::ForceOff,
+                name,
+            ),
+            Confirm::Remove(name) => (
+                format!("Remove {name} and its disk? Its files cannot be brought back."),
+                "Remove",
+                Act::Remove,
+                name,
+            ),
+        };
+        derisk_frame::Card::new()
+            .stripe(tokens.destructive)
+            .show(ui, tokens, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(question);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(Button::new(button).variant(ButtonVariant::Destructive))
+                            .clicked()
+                        {
+                            self.confirm = None;
+                            if let Some(machine) =
+                                self.machines.iter().find(|m| &m.name == name).cloned()
+                            {
+                                let doing = match act {
+                                    Act::Remove => format!("Removing {name}"),
+                                    _ => format!("Forcing {name} off"),
+                                };
+                                self.act(doing, act, &machine);
+                            }
+                        }
+                        if ui
+                            .add(Button::new("Cancel").variant(ButtonVariant::Outline))
+                            .clicked()
+                        {
+                            self.confirm = None;
+                        }
+                    });
+                });
+            });
+        ui.add_space(8.0);
+    }
+
+    fn page(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        if let Some(why) = self.unavailable.clone() {
+            derisk_frame::header(ui, tokens, "Machines", "");
+            derisk_frame::card(ui, tokens, |ui| {
+                derisk_frame::empty(ui, tokens, "Machines are not available", &why);
+            });
+            return;
+        }
+        self.plugin_card(ui, tokens);
+        self.confirmation(ui, tokens);
+        if self.form.is_some() {
+            return self.form(ui, tokens);
+        }
+        let Some(machine) = self.shown() else {
+            derisk_frame::header(
+                ui,
+                tokens,
+                "Machines",
+                "Computers of their own inside this one.",
+            );
+            let can_create = self.can_create();
+            derisk_frame::card(ui, tokens, |ui| {
+                derisk_frame::empty(
+                    ui,
+                    tokens,
+                    "No machines yet",
+                    "A machine is a computer of its own inside this one. Apps you open in it \
+                     cannot see your files or other machines' windows.",
+                );
+                ui.vertical_centered(|ui| {
+                    if ui
+                        .add(Button::new("New machine").enabled(can_create))
+                        .clicked()
+                    {
+                        self.form = Some(self.new_form());
+                    }
+                    ui.add_space(16.0);
+                });
+            });
+            return;
+        };
+        self.machine_page(ui, tokens, &machine);
+    }
+
+    /// One machine: its state with Start or Shut down beside it, a card of
+    /// what it is with its label down the edge, the apps it can open, and
+    /// removing it.
+    fn machine_page(&mut self, ui: &mut egui::Ui, tokens: &Tokens, machine: &Machine) {
+        let idle = self.busy.is_none();
+        let active = machine.state.is_active();
+        let mut act = None;
+        derisk_frame::header_with(ui, tokens, &machine.name, machine.state.describe(), |ui| {
+            // From the right: the step that matters most is rightmost.
+            if active {
+                if ui.add(Button::new("Shut down").enabled(idle)).clicked() {
+                    act = Some(Act::ShutDown);
+                }
+                if ui
+                    .add(
+                        Button::new("Force off")
+                            .variant(ButtonVariant::Outline)
+                            .enabled(idle),
+                    )
+                    .clicked()
+                {
+                    self.confirm = Some(Confirm::ForceOff(machine.name.clone()));
+                }
+            } else if ui.add(Button::new("Start").enabled(idle)).clicked() {
+                act = Some(Act::Start);
+            }
+        });
+        match act {
+            Some(Act::Start) => self.act(format!("Starting {}", machine.name), Act::Start, machine),
+            Some(Act::ShutDown) => self.act(
+                format!("Shutting {} down", machine.name),
+                Act::ShutDown,
+                machine,
+            ),
+            _ => {}
+        }
+        derisk_frame::Card::new()
+            .stripe(colour(machine.label))
+            .show(ui, tokens, |ui| {
+                derisk_frame::rows(ui, ("machine", &machine.name), |ui| {
+                    ui.label("Label");
+                    ui.horizontal(|ui| {
+                        let (dot, _) =
+                            ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                        ui.painter()
+                            .circle_filled(dot.center(), 6.0, colour(machine.label));
+                        ui.label(capitalised(machine.label.name()));
+                    });
+                    ui.end_row();
+                    ui.label("Made from");
+                    ui.label(made_from(machine));
+                    ui.end_row();
+                    ui.label("Memory");
+                    ui.label(format!("{} MiB", machine.memory_mib));
+                    ui.end_row();
+                    ui.label("Processors");
+                    ui.label(machine.cpus.to_string());
+                    ui.end_row();
+                });
+            });
+        if machine.from_pm() {
+            derisk_frame::subheading(ui, tokens, "Apps");
+            derisk_frame::card(ui, tokens, |ui| self.apps(ui, tokens, machine));
+        }
+        derisk_frame::subheading(ui, tokens, "Remove");
+        derisk_frame::card(ui, tokens, |ui| {
+            // pm removes a machine with its disk, so only a machine pm made,
+            // whose disk is pm's to remove, and only while it is off.
+            let removable = machine.from_pm() && !active;
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(format!("Remove {} and its disk", machine.name));
+                    let why = if !machine.from_pm() {
+                        "Only a machine pm made can be removed here."
+                    } else if active {
+                        "Shut it down first."
+                    } else {
+                        "Its files go with it and cannot be brought back."
+                    };
+                    ui.label(derisk_frame::note(tokens, why));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let remove = Button::new("Remove")
+                        .variant(ButtonVariant::Destructive)
+                        .enabled(idle && removable);
+                    if ui.add(remove).clicked() {
+                        self.confirm = Some(Confirm::Remove(machine.name.clone()));
+                    }
+                });
+            });
+        });
+    }
+
+    /// The apps `machine` can open, as icons that open them on the
+    /// desktop, and whether apps opened from the desktop open in it.
+    fn apps(&mut self, ui: &mut egui::Ui, tokens: &Tokens, machine: &Machine) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.app_icons(ui, tokens, machine);
+        ui.add_space(8.0);
+        ui.separator();
+        // derisk's `machines.open_apps_in` setting, which the session reads
+        // when it launches an app; only a machine pm made has the guest
+        // side that opens apps.
+        let mut here = self.open_apps_in == machine.name;
+        let changed = ui
+            .checkbox(
+                &mut here,
+                format!("Open apps from the desktop in {}", machine.name),
+            )
+            .changed();
+        ui.label(derisk_frame::note(
+            tokens,
+            &format!(
+                "Apps you open from the desktop or the palette open in {} instead of on this \
+                 computer, starting it if it is off. derisk's own apps stay here.",
+                machine.name
+            ),
+        ));
+        if changed {
+            let value = if here {
+                machine.name.clone()
+            } else {
+                String::new()
+            };
+            match save_open_apps_in(&value) {
+                Ok(()) => self.open_apps_in = value,
+                Err(error) => self.status = Some(Err(error)),
+            }
+        }
+    }
+
+    /// The running machine's apps as icons. A machine is asked for its
+    /// list once it runs; one that does not answer (it is still booting) is
+    /// asked again a little later.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn app_icons(&mut self, ui: &mut egui::Ui, tokens: &Tokens, machine: &Machine) {
+        if machine.state != crate::State::Running {
+            ui.label(derisk_frame::note(
+                tokens,
+                &format!("Start {} to open its apps from here.", machine.name),
+            ));
+            return;
+        }
+        let stale = |asked: &Instant, answer: &Option<Result<_, _>>| match answer {
+            None => false,
+            Some(Ok(_)) => false,
+            Some(Err(_)) => asked.elapsed() >= std::time::Duration::from_secs(5),
+        };
+        let ask = self
+            .apps
+            .get(&machine.name)
+            .is_none_or(|(asked, answer)| stale(asked, answer));
+        if ask && self.worker.send(Order::Apps(machine.name.clone())) {
+            self.apps
+                .insert(machine.name.clone(), (Instant::now(), None));
+        }
+        let idle = self.busy.is_none();
+        let mut open = None;
+        match self.apps.get(&machine.name).and_then(|(_, a)| a.as_ref()) {
+            None | Some(Err(_)) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(derisk_frame::note(
+                        tokens,
+                        &format!("Asking {} which apps it has", machine.name),
+                    ));
+                });
+            }
+            Some(Ok(apps)) if apps.is_empty() => {
+                ui.label(derisk_frame::note(tokens, "It has no apps to show here."));
+            }
+            Some(Ok(apps)) => {
+                let apps = apps.clone();
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                    for app in &apps {
+                        let texture = self.icon(ui.ctx(), &app.id);
+                        let response = app_tile(ui, tokens, &app.name, texture.as_ref());
+                        if idle && response.clicked() {
+                            open = Some(app.clone());
+                        }
+                    }
+                });
+            }
+        }
+        if let Some(app) = open {
+            self.order(
+                format!("Opening {} in {}", app.name, machine.name),
+                Order::Open {
+                    machine: machine.name.clone(),
+                    app,
+                },
+            );
+        }
+    }
+
+    /// App `id`'s icon from the icon theme, looked up once.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn icon(&mut self, ctx: &egui::Context, id: &str) -> Option<egui::TextureHandle> {
+        self.icons
+            .entry(id.to_owned())
+            .or_insert_with(|| {
+                let path = derisk_icons::find(id, 48)?;
+                let image = derisk_icons::load(&path, 48)?;
+                Some(ctx.load_texture(
+                    format!("derisk-machines-app:{id}"),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ))
+            })
+            .clone()
+    }
+
+    fn form(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let Some(form) = &mut self.form else {
             return;
         };
         let mut close = false;
         let mut create = None;
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.strong("New machine");
-            egui::Grid::new("new-machine")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label("Name");
-                    ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(200.0));
-                    ui.end_row();
+        derisk_frame::header(
+            ui,
+            tokens,
+            "New machine",
+            "A computer of its own inside this one: apps you open in it cannot see your \
+             files or other machines' windows.",
+        );
+        derisk_frame::card(ui, tokens, |ui| {
+            derisk_frame::rows(ui, "new-machine", |ui| {
+                ui.label("Name");
+                ui.add(derisk_frame::field(&mut form.name).desired_width(220.0));
+                ui.end_row();
 
-                    ui.label("Template");
-                    let current = self
-                        .templates
-                        .get(form.template)
-                        .map_or("", |t| t.name.as_str());
-                    egui::ComboBox::from_id_salt("template")
-                        .selected_text(current)
-                        .show_ui(ui, |ui| {
-                            for (i, template) in self.templates.iter().enumerate() {
-                                ui.selectable_value(&mut form.template, i, &template.name);
-                            }
-                        });
-                    ui.end_row();
-
-                    ui.label("Label");
-                    ui.horizontal_wrapped(|ui| {
-                        for label in Label::ALL {
-                            let picked = form.label == label;
-                            if swatch_button(ui, label, picked).clicked() {
-                                form.label = label;
-                            }
+                ui.label("Template");
+                let current = self
+                    .templates
+                    .get(form.template)
+                    .map_or("", |t| t.name.as_str());
+                egui::ComboBox::from_id_salt("template")
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        for (i, template) in self.templates.iter().enumerate() {
+                            ui.selectable_value(&mut form.template, i, &template.name);
                         }
                     });
-                    ui.end_row();
+                ui.end_row();
 
-                    ui.label("Memory");
-                    ui.add(
-                        egui::DragValue::new(&mut form.memory_mib)
-                            .range(256..=262_144)
-                            .speed(64)
-                            .suffix(" MiB"),
-                    );
-                    ui.end_row();
-
-                    ui.label("Processors");
-                    ui.add(egui::DragValue::new(&mut form.cpus).range(1..=256));
-                    ui.end_row();
-
-                    ui.label("Disk");
-                    ui.add(
-                        egui::DragValue::new(&mut form.disk_gib)
-                            .range(1..=65_536)
-                            .suffix(" GiB"),
-                    );
-                    ui.end_row();
+                ui.label("Label");
+                ui.horizontal_wrapped(|ui| {
+                    for label in Label::ALL {
+                        let picked = form.label == label;
+                        if swatch_button(ui, tokens, label, picked).clicked() {
+                            form.label = label;
+                        }
+                    }
                 });
+                ui.end_row();
+
+                ui.label("Memory");
+                ui.add(
+                    egui::DragValue::new(&mut form.memory_mib)
+                        .range(256..=262_144)
+                        .speed(64)
+                        .suffix(" MiB"),
+                );
+                ui.end_row();
+
+                ui.label("Processors");
+                ui.add(egui::DragValue::new(&mut form.cpus).range(1..=256));
+                ui.end_row();
+
+                ui.label("Disk");
+                ui.add(
+                    egui::DragValue::new(&mut form.disk_gib)
+                        .range(1..=65_536)
+                        .suffix(" GiB"),
+                );
+                ui.end_row();
+            });
             let taken = self.machines.iter().any(|m| m.name == form.name);
             let problem = if !setup::valid_name(&form.name) {
                 Some(
@@ -454,22 +768,27 @@ impl MachinesApp {
             } else {
                 None
             };
-            if let Some(problem) = problem {
-                ui.colored_label(ui.visuals().error_fg_color, problem);
-            }
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(problem.is_none(), egui::Button::new("Create"))
-                    .clicked()
-                {
-                    create = self
-                        .templates
-                        .get(form.template)
-                        .map(|t| (t.path.clone(), form.clone()));
+                if let Some(problem) = problem {
+                    ui.label(egui::RichText::new(problem).color(tokens.destructive));
                 }
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(Button::new("Create").enabled(problem.is_none()))
+                        .clicked()
+                    {
+                        create = self
+                            .templates
+                            .get(form.template)
+                            .map(|t| (t.path.clone(), form.clone()));
+                    }
+                    if ui
+                        .add(Button::new("Cancel").variant(ButtonVariant::Outline))
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
             });
         });
         if close {
@@ -510,145 +829,6 @@ impl MachinesApp {
         #[cfg(target_arch = "wasm32")]
         drop((doing, act, machine));
     }
-
-    fn confirmation(&mut self, ui: &mut egui::Ui) {
-        let Some(confirm) = self.confirm.clone() else {
-            return;
-        };
-        let (question, button, act, name) = match &confirm {
-            Confirm::ForceOff(name) => (
-                format!("Force {name} off? Whatever it has not saved is lost."),
-                "Force off",
-                Act::ForceOff,
-                name,
-            ),
-            Confirm::Remove(name) => (
-                format!("Remove {name} and its disk? Its files cannot be brought back."),
-                "Remove",
-                Act::Remove,
-                name,
-            ),
-        };
-        ui.horizontal_wrapped(|ui| {
-            ui.label(question);
-            if ui.button(button).clicked() {
-                self.confirm = None;
-                if let Some(machine) = self.machines.iter().find(|m| &m.name == name).cloned() {
-                    let doing = match act {
-                        Act::Remove => format!("Removing {name}"),
-                        _ => format!("Forcing {name} off"),
-                    };
-                    self.act(doing, act, &machine);
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                self.confirm = None;
-            }
-        });
-    }
-
-    fn plugin_banner(&mut self, ui: &mut egui::Ui) {
-        let Some((shipped, installed)) = self.plugin.paths() else {
-            return;
-        };
-        let (shipped, installed) = (shipped.to_owned(), installed.to_owned());
-        let text = match self.plugin {
-            Plugin::Outdated { .. } => {
-                "An update brought a new version of pm's quickemu plugin. Set it up again to \
-                 sign the new one with your key."
-            }
-            _ => {
-                "pm makes and removes machines through its quickemu plugin, which it runs only \
-                 once you have signed it with your own key. Setting it up copies the plugin \
-                 into your pm plugins and signs it, making you a key if you have none."
-            }
-        };
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.label(text);
-            let idle = self.busy.is_none();
-            if ui
-                .add_enabled(idle, egui::Button::new("Set up pm for machines"))
-                .clicked()
-            {
-                #[cfg(not(target_arch = "wasm32"))]
-                self.order(
-                    "Setting pm up".into(),
-                    Order::SetUpPlugin { shipped, installed },
-                );
-                #[cfg(target_arch = "wasm32")]
-                drop((shipped, installed));
-            }
-        });
-    }
-
-    fn list(&mut self, ui: &mut egui::Ui) {
-        if self.machines.is_empty() {
-            ui.add_space(24.0);
-            ui.vertical_centered(|ui| {
-                ui.heading("No machines yet");
-                ui.label(
-                    "A machine is a computer of its own inside this one. Apps you open in it \
-                     cannot see your files or other machines' windows.",
-                );
-            });
-            return;
-        }
-        let row_height = 2.0 * ui.spacing().interact_size.y;
-        let mut select = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                let width = ui.available_width();
-                for machine in &self.machines {
-                    let selected = self.selected.as_ref() == Some(&machine.name);
-                    let (rect, row) =
-                        ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
-                    row.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::WidgetType::SelectableLabel,
-                            true,
-                            selected,
-                            format!("{}, {}", machine.name, machine.state.describe()),
-                        )
-                    });
-                    let visuals = ui.visuals();
-                    if selected {
-                        ui.painter()
-                            .rect_filled(rect, 4.0, visuals.selection.bg_fill);
-                    } else if row.hovered() {
-                        ui.painter()
-                            .rect_filled(rect, 4.0, visuals.widgets.hovered.weak_bg_fill);
-                    }
-                    // The label as a bar down the row's left edge: the same
-                    // colour as the machine's window borders.
-                    let bar = egui::Rect::from_min_size(rect.min, egui::vec2(6.0, rect.height()));
-                    ui.painter().rect_filled(bar, 2.0, colour(machine.label));
-                    let text = rect.shrink2(egui::vec2(16.0, 4.0));
-                    let details = details(machine);
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(text), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(&machine.name).strong())
-                                    .selectable(false),
-                            );
-                            ui.add(egui::Label::new(machine.state.describe()).selectable(false));
-                        });
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(details).weak())
-                                .truncate()
-                                .selectable(false),
-                        );
-                    });
-                    if row.clicked() {
-                        select = Some(machine.name.clone());
-                    }
-                }
-            });
-        if select.is_some() {
-            self.selected = select;
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -671,28 +851,62 @@ fn save_open_apps_in(machine: &str) -> Result<(), String> {
         .map_err(|e| format!("Cannot save {}: {e}", path.display()))
 }
 
-/// The second line of a machine's row.
-fn details(machine: &Machine) -> String {
+/// What a machine was made from, for its card.
+fn made_from(machine: &Machine) -> String {
     // A machine with neither a template nor a system pm made from CDs was
     // not made by pm at all.
-    let template = match (&machine.template, machine.system.as_deref()) {
-        (Some(t), _) => format!("from {}", t.name),
+    match (&machine.template, machine.system.as_deref()) {
+        (Some(t), _) => t.name.clone(),
         (None, Some("windows")) => "Windows from a CD".to_owned(),
         (None, Some(_)) => "Linux from a CD".to_owned(),
-        (None, None) => "not made by pm".to_owned(),
-    };
-    format!(
-        "{} · {} · {} MiB · {} {}",
-        machine.label,
-        template,
-        machine.memory_mib,
-        machine.cpus,
-        if machine.cpus == 1 {
-            "processor"
-        } else {
-            "processors"
-        }
-    )
+        (None, None) => "Not made by pm".to_owned(),
+    }
+}
+
+/// `name` with a capital first letter, as a label's name reads on its own.
+fn capitalised(name: &str) -> String {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// One of a machine's apps: its icon over its name, a tile that opens it.
+/// An app the host has no icon for shows its initial.
+#[cfg(not(target_arch = "wasm32"))]
+fn app_tile(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    name: &str,
+    icon: Option<&egui::TextureHandle>,
+) -> egui::Response {
+    derisk_frame::tile(ui, tokens, egui::vec2(96.0, 92.0), name, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(4.0);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
+            match icon {
+                Some(texture) => {
+                    egui::Image::new(texture)
+                        .fit_to_exact_size(rect.size())
+                        .paint_at(ui, rect);
+                }
+                None => {
+                    ui.painter().rect_filled(rect, 8.0, tokens.field);
+                    let initial: String =
+                        name.chars().take(1).flat_map(char::to_uppercase).collect();
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        initial,
+                        egui::FontId::proportional(20.0),
+                        tokens.muted_foreground,
+                    );
+                }
+            }
+            ui.add(egui::Label::new(name).truncate().selectable(false));
+        });
+    })
 }
 
 /// A label's colour as egui draws it.
@@ -701,7 +915,7 @@ pub fn colour(label: Label) -> egui::Color32 {
     egui::Color32::from_rgb(r, g, b)
 }
 
-fn swatch_button(ui: &mut egui::Ui, label: Label, picked: bool) -> egui::Response {
+fn swatch_button(ui: &mut egui::Ui, tokens: &Tokens, label: Label, picked: bool) -> egui::Response {
     let size = egui::vec2(24.0, 24.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     response.widget_info(|| {
@@ -714,11 +928,21 @@ fn swatch_button(ui: &mut egui::Ui, label: Label, picked: bool) -> egui::Respons
     painter.circle_stroke(
         rect.center(),
         9.0,
-        egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+        egui::Stroke::new(1.0, tokens.muted_foreground),
     );
-    if picked || response.hovered() {
-        let stroke = ui.visuals().widgets.active.fg_stroke;
-        painter.circle_stroke(rect.center(), 11.0, stroke);
+    // Ringed as Settings rings the accent it has picked.
+    if picked {
+        painter.circle_stroke(
+            rect.center(),
+            11.5,
+            egui::Stroke::new(2.0, tokens.foreground),
+        );
+    } else if response.hovered() {
+        painter.circle_stroke(
+            rect.center(),
+            11.5,
+            egui::Stroke::new(1.0, tokens.muted_foreground),
+        );
     }
     response.on_hover_text(label.name())
 }
@@ -728,9 +952,9 @@ impl App for MachinesApp {
         "Machines"
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _theme: &Theme) {
+    fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         self.receive();
-        // While pm works the log moves; otherwise the list changes at most
+        // While pm works its lines move; otherwise the list changes at most
         // as often as the worker reads it.
         let every = if self.busy.is_some() { 250 } else { 1000 };
         ui.ctx()
@@ -741,43 +965,10 @@ impl App for MachinesApp {
         {
             self.look();
         }
-
-        egui::Panel::top("machines-toolbar").show(ui, |ui| {
-            ui.add_space(4.0);
-            if let Some(why) = &self.unavailable {
-                ui.colored_label(ui.visuals().warn_fg_color, why);
-                return;
-            }
-            self.plugin_banner(ui);
-            self.toolbar(ui);
-            self.confirmation(ui);
-            self.default_machine(ui);
-            #[cfg(not(target_arch = "wasm32"))]
-            self.open_in(ui);
-            self.form(ui);
-            if let Some(busy) = &self.busy {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(busy);
-                });
-                if let Some(line) = self.log.last() {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(line).weak().monospace()).truncate(),
-                    );
-                }
-            }
-            match &self.status {
-                Some(Ok(done)) => {
-                    ui.label(done);
-                }
-                Some(Err(error)) => {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                None => {}
-            }
-            ui.add_space(4.0);
-        });
-        egui::CentralPanel::default_margins().show(ui, |ui| self.list(ui));
+        let tokens = derisk_frame::begin(ui, theme);
+        self.sidebar(ui, &tokens);
+        self.action_bar(ui, &tokens);
+        derisk_frame::Page::new().show(ui, &tokens, |ui| self.page(ui, &tokens));
     }
 }
 
@@ -818,28 +1009,16 @@ mod tests {
     }
 
     #[test]
-    fn rows_say_where_a_machine_came_from() {
+    fn cards_say_where_a_machine_came_from() {
         let mut odd = machine("win", Label::Gray);
         odd.template = None;
-        odd.cpus = 1;
-        assert_eq!(
-            details(&odd),
-            "gray · not made by pm · 2048 MiB · 1 processor"
-        );
+        assert_eq!(made_from(&odd), "Not made by pm");
         odd.system = Some("windows".into());
-        assert_eq!(
-            details(&odd),
-            "gray · Windows from a CD · 2048 MiB · 1 processor"
-        );
+        assert_eq!(made_from(&odd), "Windows from a CD");
         odd.system = Some("linux".into());
-        assert_eq!(
-            details(&odd),
-            "gray · Linux from a CD · 2048 MiB · 1 processor"
-        );
-        assert_eq!(
-            details(&machine("work", Label::Blue)),
-            "blue · from losos-guest · 2048 MiB · 2 processors"
-        );
+        assert_eq!(made_from(&odd), "Linux from a CD");
+        assert_eq!(made_from(&machine("work", Label::Blue)), "losos-guest");
+        assert_eq!(capitalised(Label::Blue.name()), "Blue");
     }
 
     #[test]

@@ -173,6 +173,21 @@ fn paint_app_icon(app_icons: &AppIcons, theme: &Theme, painter: &Painter, r: Rec
 
 /// Black or white, whichever reads on `fill`: a label's colour is fixed,
 /// so the text on it cannot follow the theme.
+/// `text` on a pill filled with `fill`, in whichever of black and white
+/// reads on it: a machine's name in its label's colour.
+fn pill(ui: &mut Ui, text: &str, fill: Color32) -> egui::Response {
+    let font = egui::FontId::proportional(13.0);
+    let ink = on(fill);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
+    let pad = vec2(8.0, 2.0);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + 2.0 * pad, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
+        ui.painter().galley(rect.min + pad, galley, ink);
+    }
+    response
+}
+
 fn on(fill: Color32) -> Color32 {
     let [r, g, b, _] = fill.to_array();
     // Rec. 709 luma, near enough for picking between two colours.
@@ -1592,28 +1607,27 @@ impl ShellUi {
         self.bar_rect = Some(bar);
         let opacity = frame.shell_opacity.max(0.0);
         let focused = shell.focused();
-        // The bar is tinted for the focused window, since windows have no
-        // title bars of their own: a virtual machine's window fills it with
-        // its machine's label, solid, as Qubes colours a title bar, and the
-        // shell draws it, so no window can paint a label it does not have.
-        // Any other window lifts it to the surface colour.
-        let machine = focused.and_then(|w| shell.window_machine(w));
-        let label = machine.map(|m| derisk_machines::colour(m.label));
-        let fill = match (label, focused) {
-            (Some(colour), _) => colour.gamma_multiply(opacity),
-            (None, Some(_)) => self
+        // The bar is lifted to the surface colour for a focused window,
+        // since windows have no title bars of their own. A virtual
+        // machine's window does not fill it with its label: a whole bar in
+        // red reads as an alarm, and in yellow as nothing at all. Its
+        // label is a pill behind the machine's name in the title instead
+        // (`window_controls`), beside the border the window wears, and the
+        // shell draws both, so no window can paint a label it does not
+        // have.
+        let fill = match focused {
+            Some(_) => self
                 .theme
                 .surface
                 .gamma_multiply(self.look.top_bar * opacity),
-            (None, None) => self
+            None => self
                 .theme
                 .background
                 .gamma_multiply(self.look.top_bar * opacity),
         };
-        let ink = label.map_or(self.theme.foreground, on);
-        if label.is_none() {
-            self.frost(bar, 0, self.look.top_bar * opacity);
-        }
+        let machine = focused.and_then(|w| shell.window_machine(w));
+        let ink = self.theme.foreground;
+        self.frost(bar, 0, self.look.top_bar * opacity);
         ui.painter().rect_filled(bar, 0, fill);
         ui.scope_builder(
             UiBuilder::new()
@@ -1755,16 +1769,23 @@ impl ShellUi {
             self.paint_app_icon(ui.painter(), r, &look);
         }
         let title = if title.is_empty() { &look.name } else { title };
-        // The machine's name leads the title, so the colour is never the
-        // only way to tell: not everyone sees it, and two labels can look
-        // alike.
+        // The machine's name leads the title, on a pill in its label's
+        // colour, so the colour is never the only way to tell: not everyone
+        // sees it, and two labels can look alike.
+        if let Some(machine) = machine {
+            pill(ui, &machine.name, derisk_machines::colour(machine.label));
+        }
         let title = match machine {
             Some(machine) => format!("[{}] {title}", machine.name),
             None => title.to_owned(),
         };
+        let shown = match machine {
+            Some(machine) => &title[machine.name.len() + 3..],
+            None => title.as_str(),
+        };
         let room = (ui.available_width() * 0.4).clamp(80.0, 480.0);
         let text = ui.add(
-            egui::Label::new(RichText::new(elide(&title, room, 14.0)).strong())
+            egui::Label::new(RichText::new(elide(shown, room, 14.0)).strong())
                 .selectable(false)
                 .sense(Sense::hover()),
         );
