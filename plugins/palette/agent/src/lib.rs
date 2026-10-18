@@ -1,7 +1,7 @@
-//! Sonne's agent: a request the built-in assistant does not understand is
-//! offered to the agent set up in Sonne, which can do far more with the
-//! model key or agent CLI the person installed there. It only opens the
-//! request in Sonne's agent panel, for the person to send.
+//! The Agent: a request the built-in assistant does not understand is
+//! offered to the Agent (`derisk-agent`), which can do far more with the
+//! agent CLI it runs, derisk's MCP tools and its skills. It only opens the
+//! request in a new chat, for the person to send.
 
 use derisk_palette_sdk::{
     Category, Entry, Guest, Hook, Manifest, Position, View, export, interpret, json,
@@ -13,7 +13,7 @@ impl Guest for Agent {
     fn describe() -> Manifest {
         Manifest::new(
             "agent",
-            "Handing a request the assistant cannot follow to Sonne's agent",
+            "Handing a request the assistant cannot follow to the Agent",
         )
         .hooks(&[Hook::Query])
         .categories(&[Category::Agent])
@@ -38,10 +38,10 @@ pub fn query(text: &str, understood: impl Fn(&str) -> bool) -> Option<Entry> {
         Entry::new(
             Category::Agent,
             "tool-magic",
-            format!("Ask Sonne's agent: {text}"),
+            format!("Ask the agent: {text}"),
             &[json!({"action": "ask_agent", "text": text})],
         )
-        .detail("Opens in Sonne, with the model or agent CLI set up there")
+        .detail("Opens a new chat in Agent, for you to send")
         .at(Position::Bottom),
     )
 }
@@ -56,6 +56,6 @@ mod tests {
     fn only_what_the_assistant_cannot_do() {
         assert!(query("open files", |_| true).is_none());
         let row = query("frobnicate the flux", |_| false).unwrap();
-        assert_eq!(row.title, "Ask Sonne's agent: frobnicate the flux");
+        assert_eq!(row.title, "Ask the agent: frobnicate the flux");
     }
 }

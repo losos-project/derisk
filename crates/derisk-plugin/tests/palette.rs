@@ -142,7 +142,7 @@ fn query_rows_use_the_assistant() {
         ask("frob"),
         [
             (Category::Ask, "Ask derisk: frob".to_owned()),
-            (Category::Agent, "Ask Sonne's agent: frob".to_owned()),
+            (Category::Agent, "Ask the agent: frob".to_owned()),
             (Category::Web, "Search the web for “frob”".to_owned()),
         ]
     );

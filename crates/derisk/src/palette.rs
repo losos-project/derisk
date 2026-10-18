@@ -12,7 +12,7 @@
 //! - a browser's tabs and extensions, virtual machines and the apps in
 //!   them, files by name, files by what is in them (from `derisk-index`,
 //!   the user service indexing home), and
-//! - for the typed text itself, the assistant, Sonne's agent, an address to
+//! - for the typed text itself, the assistant, the Agent, an address to
 //!   open and a web search.
 //!
 //! Every one of those rows comes from a plugin: a WebAssembly component

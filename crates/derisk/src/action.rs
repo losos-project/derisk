@@ -212,11 +212,11 @@ pub enum Action {
         /// The command, as the source documents it.
         command: serde_json::Value,
     },
-    /// Hand a request the built-in assistant can't follow to the agent set
-    /// up in Sonne, with whichever model key or agent CLI the person chose
-    /// there. It opens in Sonne's agent panel for the person to send, so
-    /// nothing runs on an agent's say-so, and that agent drives the desktop
-    /// through `derisk mcp`.
+    /// Hand a request the built-in assistant can't follow to the Agent
+    /// (`derisk-agent`), which runs it through the agent CLI set up there.
+    /// It opens in a new chat for the person to send, so nothing runs on an
+    /// agent's say-so, and that agent drives the desktop through
+    /// `derisk mcp`.
     AskAgent {
         /// The request, as typed.
         text: String,
@@ -354,7 +354,7 @@ impl Action {
             Self::SearchWeb { query } => format!("Search the web for {query}"),
             Self::OpenUrl { url } => format!("Open {url}"),
             Self::PaletteCommand { source, command } => format!("Tell {source}: {command}"),
-            Self::AskAgent { text } => format!("Ask Sonne's agent: {text}"),
+            Self::AskAgent { text } => format!("Ask the agent: {text}"),
             Self::ActivateMenu { item, .. } => format!("Choose menu item {item}"),
             Self::Session { op, .. } => format!("{op:?}"),
             Self::ActivateTray { id, .. } => format!("Activate tray item {id}"),

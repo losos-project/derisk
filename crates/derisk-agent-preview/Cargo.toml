@@ -1,0 +1,30 @@
+[package]
+name = "derisk-agent-preview"
+description = "Live previews of the apps the derisk Agent builds: the guest that draws them and the host that paints them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# The side that spawns a preview and paints it inside an mcsapi window.
+host = ["dep:mcsapi-ui", "dep:tracing"]
+# Runs a wasm32-wasip2 preview component in-process with wasmtime and WASI.
+# Only the Agent's own binary turns it on: derisk's plugin host links no WASI,
+# and a separate process keeps it that way.
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:miette"]
+
+[dependencies]
+egui = { version = "0.36.2", default-features = false, features = ["serde"] }
+miette = { workspace = true, optional = true }
+mcsapi-ui = { workspace = true, optional = true }
+postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
+serde.workspace = true
+tracing = { workspace = true, optional = true }
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { version = "49.0.0", default-features = false, features = ["p2"], optional = true }
+
+[[example]]
+name = "preview_counter"

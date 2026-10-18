@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Agent
+Comment=Build apps, change the desktop and run routines with an agent
+Exec=derisk-agent %u
+Icon=assistant
+Terminal=false
+Categories=Development;Utility;
+Keywords=ai;assistant;claude;skills;build;app;customize;routine;
+MimeType=x-scheme-handler/derisk-agent;
+StartupNotify=true
+StartupWMClass=org.derisk.agent

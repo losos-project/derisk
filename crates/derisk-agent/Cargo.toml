@@ -1,0 +1,38 @@
+[package]
+name = "derisk-agent"
+description = "derisk Agent: chats with an agent CLI that builds apps, customizes the desktop and runs routines, with live previews"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "derisk-agent"
+path = "src/main.rs"
+
+[features]
+default = ["wasm"]
+# Runs wasm32-wasip2 previews in a process of their own; off, the Agent
+# previews native programs only.
+wasm = ["derisk-agent-preview/wasm"]
+
+[dependencies]
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde", "std"] }
+derisk-agent-preview = { path = "../derisk-agent-preview", features = ["host"] }
+dirs = "6.0.0"
+eframe.workspace = true
+egui = "0.36.2"
+mcsapi-components.workspace = true
+mcsapi-ui.workspace = true
+miette = { workspace = true, features = ["fancy"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# Forges' REST APIs and MCP servers over HTTP.
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "json", "platform-verifier"] }
+uuid = { version = "1.27.0", features = ["v4", "v7"] }
+
+[dev-dependencies]
+tempfile = "3.20.0"
