@@ -103,6 +103,8 @@ struct Greeter {
     auto_submit: bool,
     output: (i32, i32),
     clock: Clock,
+    /// The clock the last frame showed.
+    drawn_clock: Option<Clock>,
     last_tick: Option<Instant>,
     theme: Theme,
     to_greetd: mpsc::Sender<Request>,
@@ -336,8 +338,25 @@ impl compositor::Shell for Greeter {
             (GreeterInput::None, None) => None,
         };
         self.send(request);
-        // greetd's answers arrive between frames; keep drawing so they show.
-        ui.ctx().request_repaint();
+        // greetd's answers, and loginctl's, arrive between frames: while one
+        // is awaited, look for it every frame, as the arrival and leaving
+        // animations need every frame too. Otherwise the screen waits for a
+        // key; drawing it sixty times a second for nothing kept a software
+        // renderer busy while the login screen sat there.
+        let awaiting = self.switching.is_some()
+            || matches!(
+                self.login.phase(),
+                Phase::Waiting | Phase::Starting | Phase::Cancelling { .. } | Phase::Started
+            );
+        if awaiting || self.leaving.is_some() || !login.arrived(elapsed_ms) {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// The clock's minute is the one thing here that changes on its own.
+    fn needs_frame(&mut self) -> bool {
+        let clock = Some(self.clock);
+        clock != std::mem::replace(&mut self.drawn_clock, clock)
     }
 
     fn take_commands(&mut self) -> Vec<Command> {
@@ -516,6 +535,7 @@ pub fn run(options: Options) -> Result {
         switching: None,
         output: (1280, 800),
         clock: Clock::now_local(),
+        drawn_clock: None,
         last_tick: None,
         theme: Theme::default(),
         to_greetd,

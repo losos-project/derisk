@@ -3223,6 +3223,10 @@ impl ShellUi {
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
                                     let mut heading = None;
+                                    // Headings shown so far, as a category
+                                    // can head two runs of rows (best
+                                    // matches first, then the rest).
+                                    let mut headed = Vec::new();
                                     for (i, entry) in rows.iter().enumerate() {
                                         // A row fades in when it first shows
                                         // (10 frames) and glides when rows
@@ -3232,18 +3236,30 @@ impl ShellUi {
                                         let key = Id::new(("derisk-palette-row", entry.key()));
                                         if heading != Some(entry.category) {
                                             heading = Some(entry.category);
+                                            headed.push(entry.category);
                                             let hid = key.with("heading");
                                             let (slot, _) = ui.allocate_exact_size(
                                                 vec2(ui.available_width(), 18.0),
                                                 Sense::hover(),
                                             );
                                             // Relative to the list, so
-                                            // scrolling doesn't glide.
+                                            // scrolling doesn't glide. Each
+                                            // run's heading glides on its
+                                            // own: two sharing an ID pulled
+                                            // it between both places every
+                                            // frame, so it never settled
+                                            // and the palette redrew until
+                                            // it closed.
+                                            let nth = headed
+                                                .iter()
+                                                .filter(|c| **c == entry.category)
+                                                .count();
                                             let shift = motion::glide(
                                                 ui.ctx(),
                                                 Id::new((
                                                     "derisk-palette-heading",
                                                     entry.category.heading(),
+                                                    nth,
                                                 )),
                                                 (slot.min - ui.max_rect().min).to_pos2(),
                                                 f(18),

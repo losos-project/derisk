@@ -90,6 +90,12 @@ impl<F: Flow> compositor::Shell for Host<F> {
         timing.refresh_interval()
     }
 
+    /// Its chrome asks egui for every frame it needs (below), and nothing
+    /// changes between them on its own.
+    fn needs_frame(&mut self) -> bool {
+        false
+    }
+
     fn chrome(&mut self, ui: &mut egui::Ui, _elapsed_ms: u32) {
         let screen = egui::Rect::from_min_size(
             egui::Pos2::ZERO,
