@@ -1952,6 +1952,7 @@ version = "0.1.0"
 name = "derisk-editor"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-sys",
  "mcsapi-components",
  "mcsapi-ui",
