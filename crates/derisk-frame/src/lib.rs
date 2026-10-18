@@ -226,6 +226,16 @@ impl Nav<'_> {
         self.entry_with(Some(icon), label, open)
     }
 
+    /// A page marked with a dot in `colour` before its name, as a
+    /// machine's in its label: the colour says whose, the fill still says
+    /// which is open.
+    pub fn entry_dot(&mut self, colour: Color32, label: &str, open: bool) -> Response {
+        if self.narrow {
+            return self.ui.selectable_label(open, label);
+        }
+        entry(self.ui, self.tokens, Lead::Dot(colour), label, open)
+    }
+
     fn entry_with(&mut self, icon: Option<&str>, label: &str, open: bool) -> Response {
         if self.narrow {
             let ui = &mut *self.ui;
@@ -238,13 +248,24 @@ impl Nav<'_> {
                 None => ui.selectable_label(open, label),
             };
         }
-        entry(self.ui, self.tokens, icon, label, open)
+        let lead = icon.map_or(Lead::None, Lead::Icon);
+        entry(self.ui, self.tokens, lead, label, open)
     }
+}
+
+/// What a sidebar page shows before its name.
+#[derive(Clone, Copy)]
+enum Lead<'a> {
+    None,
+    /// A symbolic icon, by its freedesktop name.
+    Icon(&'a str),
+    /// A dot in a colour that says whose the page is.
+    Dot(Color32),
 }
 
 /// One page in the sidebar: a full-width row, filled with the accent's tint
 /// while open and the hover colour under the pointer.
-fn entry(ui: &mut Ui, tokens: &Tokens, icon: Option<&str>, label: &str, open: bool) -> Response {
+fn entry(ui: &mut Ui, tokens: &Tokens, lead: Lead<'_>, label: &str, open: bool) -> Response {
     let height = 36.0;
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::click());
@@ -270,14 +291,21 @@ fn entry(ui: &mut Ui, tokens: &Tokens, icon: Option<&str>, label: &str, open: bo
             tokens.foreground.gamma_multiply(0.85)
         };
         let mut x = rect.left() + 14.0;
-        if let Some(icon) = icon {
-            let size = 18.0;
-            let at = Rect::from_min_size(
-                egui::pos2(x, rect.center().y - size / 2.0),
-                egui::vec2(size, size),
-            );
-            derisk_icons::paint(painter, at, icon, color);
-            x += size + 10.0;
+        match lead {
+            Lead::None => {}
+            Lead::Icon(icon) => {
+                let size = 18.0;
+                let at = Rect::from_min_size(
+                    egui::pos2(x, rect.center().y - size / 2.0),
+                    egui::vec2(size, size),
+                );
+                derisk_icons::paint(painter, at, icon, color);
+                x += size + 10.0;
+            }
+            Lead::Dot(colour) => {
+                painter.circle_filled(egui::pos2(x + 5.0, rect.center().y), 5.0, colour);
+                x += 20.0;
+            }
         }
         painter.text(
             egui::pos2(x, rect.center().y),
@@ -565,6 +593,7 @@ pub fn card<R>(ui: &mut Ui, tokens: &Tokens, content: impl FnOnce(&mut Ui) -> R)
 pub struct Card {
     tight: bool,
     fill: bool,
+    stripe: Option<Color32>,
 }
 
 impl Card {
@@ -573,6 +602,7 @@ impl Card {
         Self {
             tight: false,
             fill: false,
+            stripe: None,
         }
     }
 
@@ -590,6 +620,13 @@ impl Card {
         self
     }
 
+    /// A strip of `colour` down the card's left edge, saying whose it is
+    /// (a machine's label) while the card itself stays the theme's.
+    pub const fn stripe(mut self, colour: Color32) -> Self {
+        self.stripe = Some(colour);
+        self
+    }
+
     /// Draws the card with `content` in it.
     pub fn show<R>(self, ui: &mut Ui, tokens: &Tokens, content: impl FnOnce(&mut Ui) -> R) -> R {
         let phone = ui.available_width() < PHONE;
@@ -598,7 +635,7 @@ impl Card {
             (false, true) => Margin::symmetric(14, 14),
             (false, false) => Margin::symmetric(24, 20),
         };
-        egui::Frame::new()
+        let shown = egui::Frame::new()
             .fill(tokens.card)
             .stroke(tokens.border_stroke())
             .corner_radius(tokens.card_radius())
@@ -609,8 +646,23 @@ impl Card {
                     ui.set_min_height(ui.available_height());
                 }
                 content(ui)
-            })
-            .inner
+            });
+        if let Some(colour) = self.stripe {
+            let rect = shown.response.rect;
+            let strip = Rect::from_min_size(rect.min, egui::vec2(4.0, rect.height()));
+            let radius = tokens.card_radius();
+            ui.painter().rect_filled(
+                strip,
+                CornerRadius {
+                    nw: radius.nw,
+                    sw: radius.sw,
+                    ne: 0,
+                    se: 0,
+                },
+                colour,
+            );
+        }
+        shown.inner
     }
 }
 

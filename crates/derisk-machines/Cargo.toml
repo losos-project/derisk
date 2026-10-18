@@ -14,7 +14,10 @@ roxmltree = "0.21.1"
 thiserror.workspace = true
 miette.workspace = true
 # The Machines app.
+derisk-frame.workspace = true
+derisk-icons.workspace = true
 derisk-sys.workspace = true
+mcsapi-components.workspace = true
 mcsapi-ui.workspace = true
 # Which machine apps open in by default is a desktop setting, which the
 # Machines app sets and the session reads.
