@@ -16,6 +16,7 @@
 
 use std::fmt;
 
+use mcsapi_components::{Button, ButtonSize, ButtonVariant, Tokens};
 use mcsapi_ui::{App, Theme, egui};
 
 /// Why an expression could not be evaluated.
@@ -340,57 +341,109 @@ impl CalculatorApp {
     }
 }
 
-/// Below this width the history moves from a side column to the bottom.
-const NARROW: f32 = 560.0;
+/// What a key does, which sets how it is drawn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Kind {
+    /// A digit, the point or `ans`: what the number is made of.
+    Digit,
+    /// An operator, a bracket or a function.
+    Operator,
+    /// `C`, which throws the input away.
+    Clear,
+    /// `=`, the one key in the accent.
+    Equals,
+}
 
-impl App for CalculatorApp {
-    fn title(&self) -> &str {
-        "Calculator"
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        let history = |ui: &mut egui::Ui| {
-            ui.horizontal(|ui| {
-                ui.strong("History");
-                if ui.small_button("Clear").clicked() {
-                    self.history.clear();
-                }
-            });
-            egui::ScrollArea::vertical()
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    let mut reuse = None;
-                    for (expression, value) in &self.history {
-                        let text = format!("{expression}\n= {}", format_number(*value));
-                        if ui
-                            .selectable_label(false, text)
-                            .on_hover_text("Use again")
-                            .clicked()
-                        {
-                            reuse = Some(expression.clone());
-                        }
-                    }
-                    if let Some(expression) = reuse {
-                        self.input = expression;
-                    }
-                });
-        };
-        if ui.available_width() < NARROW {
-            // A phone has no width for a side column; the history goes under
-            // the keypad instead, a few lines tall.
-            egui::Panel::bottom("calculator-history")
-                .exact_size(160.0)
-                .show(ui, history);
-        } else {
-            egui::Panel::right("calculator-history")
-                .default_size(220.0)
-                .show(ui, history);
+impl Kind {
+    fn of(key: &str) -> Self {
+        match key {
+            "=" => Self::Equals,
+            "C" => Self::Clear,
+            "ans" | "." => Self::Digit,
+            key if key.chars().all(|c| c.is_ascii_digit()) => Self::Digit,
+            _ => Self::Operator,
         }
-        egui::CentralPanel::default_margins().show(ui, |ui| {
+    }
+}
+
+/// Width of the history beside the keypad.
+const HISTORY: f32 = 260.0;
+
+/// Gap between keys.
+const GAP: f32 = 8.0;
+
+/// One keypad key: a rounded face in the theme's colours for its
+/// [`Kind`], with the key's text or, for backspace, an icon.
+fn key(ui: &mut egui::Ui, tokens: &Tokens, size: egui::Vec2, key: &str) -> egui::Response {
+    let kind = Kind::of(key);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let name = if key == "⬅" { "Backspace" } else { key };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered();
+        let (fill, ink) = match kind {
+            Kind::Equals => (
+                if hovered {
+                    tokens.primary.gamma_multiply(0.85)
+                } else {
+                    tokens.primary
+                },
+                tokens.primary_foreground,
+            ),
+            Kind::Digit => (
+                if hovered {
+                    tokens.hover
+                } else {
+                    tokens.secondary
+                },
+                tokens.foreground,
+            ),
+            Kind::Operator => (
+                if hovered { tokens.hover } else { tokens.field },
+                tokens.foreground,
+            ),
+            Kind::Clear => (
+                if hovered { tokens.hover } else { tokens.field },
+                tokens.destructive,
+            ),
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, tokens.control_radius(), fill);
+        if response.has_focus() {
+            painter.rect_stroke(
+                rect,
+                tokens.control_radius(),
+                tokens.ring_stroke(),
+                egui::StrokeKind::Outside,
+            );
+        }
+        if key == "⬅" {
+            let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(20.0, 20.0));
+            derisk_icons::paint(painter, icon, "edit-clear", ink);
+        } else {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                key,
+                egui::FontId::proportional(20.0),
+                ink,
+            );
+        }
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+impl CalculatorApp {
+    /// The expression being typed and, under it, what it comes to or why
+    /// it does not.
+    fn display(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        derisk_frame::card(ui, tokens, |ui| {
             let field = ui.add(
                 egui::TextEdit::singleline(&mut self.input)
-                    .font(egui::TextStyle::Heading)
+                    .font(egui::FontId::proportional(30.0))
                     .hint_text("2 × (3 + 4)")
+                    .horizontal_align(egui::Align::RIGHT)
+                    .frame(egui::Frame::NONE)
                     .desired_width(f32::INFINITY),
             );
             if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -398,55 +451,158 @@ impl App for CalculatorApp {
                 field.request_focus();
             }
             let preview = match &self.error {
-                Some(error) => egui::RichText::new(error.to_string()).color(theme.accent),
+                Some(error) => egui::RichText::new(error.to_string()).color(tokens.destructive),
                 None => match evaluate(&self.input, self.ans()) {
-                    Ok(value) => egui::RichText::new(format!("= {}", format_number(value))),
+                    Ok(value) => egui::RichText::new(format!("= {}", format_number(value)))
+                        .color(tokens.muted_foreground),
                     Err(_) => egui::RichText::new(" "),
                 },
             };
-            ui.label(preview.size(18.0));
-            ui.add_space(8.0);
-            let size = egui::vec2(
-                ((ui.available_width() - 4.0 * 6.0) / 5.0).max(40.0),
-                ((ui.available_height() - 4.0 * 6.0) / 5.0).clamp(32.0, 96.0),
-            );
-            egui::Grid::new("calculator-keys")
-                .spacing([6.0, 6.0])
-                .show(ui, |ui| {
-                    for row in KEYS {
-                        for key in row {
-                            let mut label = egui::RichText::new(key).size(18.0);
-                            if key == "=" {
-                                label = label.color(theme.background);
-                            }
-                            // Backspace is an icon; the rest are what they type.
-                            let mut button = if key == "⬅" {
-                                let color = ui.visuals().text_color();
-                                derisk_icons::button(ui.ctx(), "edit-clear", 18.0, color)
-                            } else {
-                                egui::Button::new(label)
-                            }
-                            .min_size(size);
-                            if key == "=" {
-                                button = button.fill(theme.accent);
-                            }
-                            let response = ui.add(button);
-                            if key == "⬅" {
-                                response.widget_info(|| {
-                                    egui::WidgetInfo::labeled(
-                                        egui::WidgetType::Button,
-                                        true,
-                                        "Backspace",
-                                    )
-                                });
-                            }
-                            if response.clicked() {
-                                self.press(key);
-                            }
+            // Top down rather than right to left, which would centre the
+            // line in all the height below it.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                ui.label(preview.size(18.0));
+            });
+        });
+        ui.add_space(4.0);
+    }
+
+    /// The keypad, its keys sharing the room left in the column.
+    fn keypad(&mut self, ui: &mut egui::Ui, tokens: &Tokens, height: f32) {
+        let columns = KEYS[0].len() as f32;
+        let rows = KEYS.len() as f32;
+        let size = egui::vec2(
+            ((ui.available_width() - (columns - 1.0) * GAP) / columns).max(44.0),
+            ((height - (rows - 1.0) * GAP) / rows).clamp(44.0, 100.0),
+        );
+        let mut pressed = None;
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+            for row in KEYS {
+                ui.horizontal(|ui| {
+                    for k in row {
+                        if key(ui, tokens, size, k).clicked() {
+                            pressed = Some(k);
                         }
-                        ui.end_row();
                     }
                 });
+            }
         });
+        if let Some(k) = pressed {
+            self.press(k);
+        }
+    }
+
+    /// Evaluated expressions, newest last; a click puts one back in the
+    /// input.
+    fn history(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        derisk_frame::Card::new()
+            .tight()
+            .fill()
+            .show(ui, tokens, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("History")
+                            .font(egui::FontId::proportional(16.0))
+                            .strong(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                Button::new("Clear")
+                                    .variant(ButtonVariant::Ghost)
+                                    .size(ButtonSize::Sm)
+                                    .enabled(!self.history.is_empty()),
+                            )
+                            .clicked()
+                        {
+                            self.history.clear();
+                        }
+                    });
+                });
+                if self.history.is_empty() {
+                    derisk_frame::empty(ui, tokens, "Nothing yet", "Results show up here.");
+                    return;
+                }
+                let mut reuse = None;
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for (expression, value) in &self.history {
+                            let (rect, row) = derisk_frame::list_row(ui, tokens, 52.0, false);
+                            let row = row.on_hover_text("Use again");
+                            let inner = rect.shrink2(egui::vec2(10.0, 6.0));
+                            let painter = ui.painter();
+                            painter.text(
+                                inner.right_top(),
+                                egui::Align2::RIGHT_TOP,
+                                expression,
+                                tokens.small_font(),
+                                tokens.muted_foreground,
+                            );
+                            painter.text(
+                                inner.right_bottom(),
+                                egui::Align2::RIGHT_BOTTOM,
+                                format!("= {}", format_number(*value)),
+                                egui::FontId::proportional(17.0),
+                                tokens.foreground,
+                            );
+                            if row.clicked() {
+                                reuse = Some(expression.clone());
+                            }
+                        }
+                    });
+                if let Some(expression) = reuse {
+                    self.input = expression;
+                }
+            });
+    }
+}
+
+impl App for CalculatorApp {
+    fn title(&self) -> &str {
+        "Calculator"
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+        let tokens = derisk_frame::begin(ui, theme);
+        derisk_frame::Page::new()
+            .wide()
+            .fixed()
+            .show(ui, &tokens, |ui| {
+                let width = ui.available_width();
+                if width < derisk_frame::NARROW {
+                    // A phone has no width for a side column; the history
+                    // goes under the keypad instead, a few lines tall.
+                    self.display(ui, &tokens);
+                    let keys = (ui.available_height() - 180.0).max(5.0 * 44.0 + 4.0 * GAP);
+                    self.keypad(ui, &tokens, keys);
+                    ui.add_space(12.0);
+                    self.history(ui, &tokens);
+                    return;
+                }
+                let height = ui.available_height();
+                let keypad = (width - HISTORY - derisk_frame::GUTTER).min(560.0);
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(keypad, height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            self.display(ui, &tokens);
+                            let keys = ui.available_height();
+                            self.keypad(ui, &tokens, keys);
+                        },
+                    );
+                    ui.add_space(derisk_frame::GUTTER);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| self.history(ui, &tokens),
+                    );
+                });
+            });
     }
 }

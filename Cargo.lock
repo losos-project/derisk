@@ -1938,7 +1938,9 @@ dependencies = [
 name = "derisk-calculator"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
+ "mcsapi-components",
  "mcsapi-ui",
  "miette",
  "thiserror 2.0.21",
@@ -1952,6 +1954,7 @@ version = "0.1.0"
 name = "derisk-editor"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-sys",
  "mcsapi-components",
  "mcsapi-ui",
@@ -1971,9 +1974,19 @@ dependencies = [
 name = "derisk-files"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
  "derisk-sys",
  "libc",
+ "mcsapi-components",
+ "mcsapi-ui",
+]
+
+[[package]]
+name = "derisk-frame"
+version = "0.1.0"
+dependencies = [
+ "derisk-icons",
  "mcsapi-components",
  "mcsapi-ui",
 ]
@@ -2052,8 +2065,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
+ "derisk-frame",
+ "derisk-icons",
  "derisk-settings",
  "derisk-sys",
+ "mcsapi-components",
  "mcsapi-ui",
  "miette",
  "roxmltree 0.21.1",
@@ -2068,8 +2084,10 @@ dependencies = [
 name = "derisk-monitor"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
  "derisk-sys",
+ "mcsapi-components",
  "mcsapi-ui",
 ]
 
@@ -2112,6 +2130,7 @@ dependencies = [
 name = "derisk-settings"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
  "derisk-install",
  "derisk-sys",
@@ -2130,11 +2149,13 @@ name = "derisk-store"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "derisk-frame",
  "derisk-icons",
  "derisk-machines",
  "derisk-sys",
  "flate2",
  "image",
+ "mcsapi-components",
  "mcsapi-ui",
  "quick-xml",
  "serde",

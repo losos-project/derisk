@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+derisk-frame.workspace = true
 derisk-icons.workspace = true
 derisk-sys.workspace = true
 # Wallpaper thumbnails, in the formats the session decodes.

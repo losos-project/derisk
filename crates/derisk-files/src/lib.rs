@@ -35,7 +35,7 @@ use std::{
 
 pub use browser::{Browser, ClipboardOp, SortKey};
 pub use fs_ops::{Entry, Kind, Trash};
-use mcsapi_components::{ErrorDialog, Tokens};
+use mcsapi_components::{Button, ButtonVariant, ErrorDialog, Tokens};
 use mcsapi_ui::{App, Context as _, DocLink, Error, Theme, egui};
 
 /// The documentation section that explains why Files could not open or
@@ -232,93 +232,96 @@ impl FilesApp {
         self.report(result.map(|_| None));
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui) {
+    /// Back, forward, up and refresh: beside the folder's title.
+    fn moves(&mut self, ui: &mut egui::Ui) {
         let Some(browser) = &self.browser else {
             return;
         };
         let (back, forward) = (browser.can_go_back(), browser.can_go_forward());
+        // Laid out from the right, so the last added sits leftmost.
+        if derisk_icons::tool(ui, true, "view-refresh", "Refresh").clicked() {
+            self.go(Browser::refresh);
+        }
+        if derisk_icons::tool(ui, true, "go-up", "Parent folder").clicked() {
+            self.go(Browser::go_up);
+        }
+        if derisk_icons::tool(ui, forward, "go-next", "Forward").clicked() {
+            self.go(Browser::go_forward);
+        }
+        if derisk_icons::tool(ui, back, "go-previous", "Back").clicked() {
+            self.go(Browser::go_back);
+        }
+    }
+
+    /// The location to type a path into, the filter and whether hidden
+    /// files show: over the listing, under the folder's title.
+    fn location_row(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if derisk_icons::tool(ui, back, "go-previous", "Back").clicked() {
-                self.go(Browser::go_back);
-            }
-            if derisk_icons::tool(ui, forward, "go-next", "Forward").clicked() {
-                self.go(Browser::go_forward);
-            }
-            if derisk_icons::tool(ui, true, "go-up", "Parent folder").clicked() {
-                self.go(Browser::go_up);
-            }
-            if derisk_icons::tool(ui, true, "view-refresh", "Refresh").clicked() {
-                self.go(Browser::refresh);
-            }
             // On a phone the filter and the location share what is left.
-            let search_width = (ui.available_width() * 0.35).min(180.0);
-            let location = ui.add(
-                egui::TextEdit::singleline(&mut self.location)
-                    .desired_width((ui.available_width() - search_width - 16.0).max(60.0)),
-            );
+            let search_width = (ui.available_width() * 0.35).min(200.0);
+            let hidden_width = if ui.available_width() < derisk_frame::PHONE {
+                0.0
+            } else {
+                120.0
+            };
+            let location = ui.add(derisk_frame::field(&mut self.location).desired_width(
+                (ui.available_width() - search_width - hidden_width - 20.0).max(60.0),
+            ));
             if location.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 let target = PathBuf::from(&self.location);
                 self.go(|b| b.navigate(target));
             }
             if let Some(browser) = &mut self.browser {
-                let color = ui.visuals().weak_text_color();
-                derisk_icons::show(ui, "system-search", 16.0, color);
                 ui.add(
-                    egui::TextEdit::singleline(&mut browser.filter)
+                    derisk_frame::field(&mut browser.filter)
                         .hint_text("Filter")
-                        .desired_width(search_width - 20.0),
+                        .desired_width(search_width),
                 );
+                if hidden_width > 0.0 {
+                    ui.checkbox(&mut browser.show_hidden, "Hidden files");
+                }
             }
         });
+    }
+
+    /// What acts on the folder and the selection, along the action bar:
+    /// laid out from the right, so the first added sits rightmost.
+    fn actions(&mut self, ui: &mut egui::Ui) {
         let Some(browser) = &mut self.browser else {
             return;
         };
         let selected = browser.selection().len();
         let mut action = None;
-        // Wraps onto a second line where the window is too narrow for it.
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("New folder").clicked() {
-                action = Some("folder");
-            }
-            if ui.button("New file").clicked() {
-                action = Some("file");
-            }
-            ui.separator();
-            if ui
-                .add_enabled(selected == 1, egui::Button::new("Rename"))
-                .clicked()
-            {
-                action = Some("rename");
-            }
-            if ui
-                .add_enabled(selected > 0, egui::Button::new("Copy"))
-                .clicked()
-            {
-                browser.set_clipboard(ClipboardOp::Copy);
-            }
-            if ui
-                .add_enabled(selected > 0, egui::Button::new("Cut"))
-                .clicked()
-            {
-                browser.set_clipboard(ClipboardOp::Cut);
-            }
-            let can_paste = browser.clipboard().is_some();
-            if ui
-                .add_enabled(can_paste, egui::Button::new("Paste"))
-                .clicked()
-            {
-                action = Some("paste");
-            }
-            let can_trash = selected > 0 && browser.trash().is_some();
-            if ui
-                .add_enabled(can_trash, egui::Button::new("Move to trash"))
-                .clicked()
-            {
-                action = Some("trash");
-            }
-            ui.separator();
-            ui.checkbox(&mut browser.show_hidden, "Hidden files");
-        });
+        let can_trash = selected > 0 && browser.trash().is_some();
+        let trash = Button::new("Move to trash")
+            .variant(ButtonVariant::Destructive)
+            .enabled(can_trash);
+        if ui.add(trash).clicked() {
+            action = Some("trash");
+        }
+        let outline = |label| Button::new(label).variant(ButtonVariant::Outline);
+        if ui
+            .add(outline("Paste").enabled(browser.clipboard().is_some()))
+            .clicked()
+        {
+            action = Some("paste");
+        }
+        if ui.add(outline("Cut").enabled(selected > 0)).clicked() {
+            browser.set_clipboard(ClipboardOp::Cut);
+        }
+        if ui.add(outline("Copy").enabled(selected > 0)).clicked() {
+            browser.set_clipboard(ClipboardOp::Copy);
+        }
+        if ui.add(outline("Rename").enabled(selected == 1)).clicked() {
+            action = Some("rename");
+        }
+        ui.separator();
+        if ui.add(outline("New file")).clicked() {
+            action = Some("file");
+        }
+        if ui.add(Button::new("New folder")).clicked() {
+            action = Some("folder");
+        }
         self.run_action(action);
     }
 
@@ -379,14 +382,16 @@ impl FilesApp {
                 PromptKind::NewFile => "File name",
                 PromptKind::Rename(_) => "New name",
             });
-            let field = ui.text_edit_singleline(&mut prompt.text);
+            let field = ui.add(derisk_frame::field(&mut prompt.text));
             if !field.has_focus() && !field.lost_focus() {
                 field.request_focus();
             }
             submit = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            submit |= ui.button("OK").clicked();
-            cancel =
-                ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
+            submit |= ui.add(Button::new("OK")).clicked();
+            cancel = ui
+                .add(Button::new("Cancel").variant(ButtonVariant::Outline))
+                .clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Escape));
         });
         if submit {
             self.submit_prompt();
@@ -430,9 +435,22 @@ impl FilesApp {
         }
     }
 
-    fn listing(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+    /// The open folder's name as the page's title: the place's name for a
+    /// place, so home reads "Home" and `/` "Computer".
+    fn title_of_cwd(&self) -> String {
+        let Some(cwd) = self.browser.as_ref().map(Browser::cwd) else {
+            return "Files".to_owned();
+        };
+        self.places()
+            .find(|(_, _, path)| path == cwd)
+            .map(|(_, label, _)| label.to_owned())
+            .or_else(|| cwd.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| cwd.display().to_string())
+    }
+
+    fn listing(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let Some(browser) = &mut self.browser else {
-            ui.label("Choose a place on the left.");
+            derisk_frame::empty(ui, tokens, "No folder open", "Choose a place on the left.");
             return;
         };
         let (key, descending) = browser.sort();
@@ -489,7 +507,7 @@ impl FilesApp {
         ui.painter().hline(
             header_rect.x_range(),
             header_rect.bottom(),
-            egui::Stroke::new(1.0, theme.border),
+            tokens.border_stroke(),
         );
         egui::ScrollArea::vertical()
             .auto_shrink(false)
@@ -497,7 +515,7 @@ impl FilesApp {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let width = ui.available_width();
                 let [name_w, size_w, _] = columns(width);
-                for (i, entry) in browser.visible().enumerate() {
+                for entry in browser.visible() {
                     let icon = match (entry.kind, entry.symlink) {
                         (Kind::Directory, _) => "folder",
                         (_, true) => "insert-link",
@@ -518,24 +536,16 @@ impl FilesApp {
                             &name,
                         )
                     });
-                    let visuals = ui.visuals();
-                    let fill = if selected {
-                        Some(visuals.selection.bg_fill)
-                    } else if row.hovered() {
-                        Some(visuals.widgets.hovered.weak_bg_fill)
-                    } else if i % 2 == 1 {
-                        Some(visuals.faint_bg_color)
-                    } else {
-                        None
-                    };
-                    if let Some(fill) = fill {
-                        ui.painter().rect_filled(rect, 2.0, fill);
-                    }
+                    // Filled as a sidebar's page is, so a selected file and
+                    // the open place read alike.
+                    let fill = derisk_frame::row_fill(tokens, selected, row.hovered());
+                    ui.painter()
+                        .rect_filled(rect, tokens.control_radius(), fill);
                     let mut text = egui::RichText::new(&entry.name);
                     let mut color = ui.visuals().text_color();
                     if entry.is_hidden() {
-                        text = text.color(theme.border);
-                        color = theme.border;
+                        text = text.color(tokens.muted_foreground);
+                        color = tokens.muted_foreground;
                     }
                     let size = match entry.kind {
                         Kind::Directory => "—".to_owned(),
@@ -596,9 +606,6 @@ impl FilesApp {
     }
 }
 
-/// Below this width the places move from a sidebar to a row on top.
-const NARROW: f32 = 560.0;
-
 impl App for FilesApp {
     fn title(&self) -> &str {
         "Files"
@@ -606,73 +613,85 @@ impl App for FilesApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         self.keyboard(ui);
-        egui::Panel::top("files-toolbar").show(ui, |ui| {
-            self.toolbar(ui);
-            self.prompt_ui(ui);
-        });
-        egui::Panel::bottom("files-status").show(ui, |ui| {
-            let summary = self.browser.as_ref().map(|b| {
-                let selected = b.selection().len();
-                let shown = b.visible().count();
-                let clip = match b.clipboard() {
-                    Some((ClipboardOp::Copy, p)) => format!(" · {} to copy", p.len()),
-                    Some((ClipboardOp::Cut, p)) => format!(" · {} to move", p.len()),
-                    None => String::new(),
-                };
-                format!("{shown} items · {selected} selected{clip}")
-            });
-            ui.horizontal(|ui| {
-                ui.label(summary.unwrap_or_default());
-                // An error has its own dialog, so the line does not
-                // repeat it.
-                if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
-                    ui.separator();
-                    ui.label(egui::RichText::new(status).color(theme.accent));
-                }
-            });
-        });
-        if self.error.is_some() {
-            Tokens::from_theme(theme).install(ui.ctx());
-            let shown = ErrorDialog::new("files-error", &mut self.error).show(ui.ctx());
-            if shown.closed {
-                self.status = None;
-            }
-        }
+        let tokens = derisk_frame::begin(ui, theme);
         let mut place = None;
-        let mut places = |ui: &mut egui::Ui| {
-            let cwd = self.browser.as_ref().map(|b| b.cwd().to_owned());
-            let color = ui.visuals().text_color();
+        let cwd = self.browser.as_ref().map(|b| b.cwd().to_owned());
+        derisk_frame::navigation(ui, &tokens, "files-places", |nav| {
+            let mut section = None;
             for (icon, label, path) in self.places() {
-                let atom = derisk_icons::atom(ui.ctx(), icon, 16.0, color);
-                if ui
-                    .add(egui::Button::selectable(
-                        cwd.as_ref() == Some(&path),
-                        (atom, label),
-                    ))
+                // Your folders, then the trash and the whole computer.
+                let title = if matches!(label, "Trash" | "Computer") {
+                    "System"
+                } else {
+                    "Places"
+                };
+                if section != Some(title) {
+                    nav.section(title);
+                    section = Some(title);
+                }
+                if nav
+                    .entry_icon(icon, label, cwd.as_ref() == Some(&path))
                     .clicked()
                 {
                     place = Some(path);
                 }
             }
-        };
-        if ui.available_width() < NARROW {
-            // On a phone the places sidebar would take half the screen, so
-            // they become a row across the top that scrolls sideways.
-            egui::Panel::top("files-places").show(ui, |ui| {
-                egui::ScrollArea::horizontal().show(ui, |ui| ui.horizontal(&mut places));
-            });
-        } else {
-            // Wide enough for the longest place name, and no wider: on a big
-            // window the listing gets the room, not the sidebar.
-            let sidebar = (ui.available_width() * 0.16).clamp(140.0, 220.0);
-            egui::Panel::left("files-places")
-                .resizable(false)
-                .exact_size(sidebar)
-                .show(ui, places);
-        }
+        });
         if let Some(path) = place {
             self.open_place(&path);
         }
-        egui::CentralPanel::default_margins().show(ui, |ui| self.listing(ui, theme));
+        let summary = self.browser.as_ref().map(|b| {
+            let selected = b.selection().len();
+            let shown = b.visible().count();
+            let clip = match b.clipboard() {
+                Some((ClipboardOp::Copy, p)) => format!(" · {} to copy", p.len()),
+                Some((ClipboardOp::Cut, p)) => format!(" · {} to move", p.len()),
+                None => String::new(),
+            };
+            format!("{shown} items · {selected} selected{clip}")
+        });
+        let narrow = derisk_frame::is_narrow(ui);
+        derisk_frame::action_bar(ui, &tokens, "files-actions", |ui| {
+            // An error has its own dialog, so the line does not repeat it.
+            if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(status).color(theme.accent)).truncate(),
+                );
+            }
+            let layout = if narrow {
+                // A phone has no room for the line beside the buttons, and
+                // the buttons wrap onto a second row.
+                egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true)
+            } else {
+                egui::Layout::right_to_left(egui::Align::Center)
+            };
+            ui.with_layout(layout, |ui| self.actions(ui));
+        });
+        if self.error.is_some() {
+            let shown = ErrorDialog::new("files-error", &mut self.error).show(ui.ctx());
+            if shown.closed {
+                self.status = None;
+            }
+        }
+        derisk_frame::Page::new()
+            .wide()
+            .fixed()
+            .show(ui, &tokens, |ui| {
+                let title = self.title_of_cwd();
+                derisk_frame::header_with(
+                    ui,
+                    &tokens,
+                    &title,
+                    summary.as_deref().unwrap_or_default(),
+                    |ui| self.moves(ui),
+                );
+                self.location_row(ui);
+                self.prompt_ui(ui);
+                ui.add_space(4.0);
+                derisk_frame::Card::new()
+                    .tight()
+                    .fill()
+                    .show(ui, &tokens, |ui| self.listing(ui, &tokens));
+            });
     }
 }
