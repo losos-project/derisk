@@ -157,6 +157,24 @@ fn gpui_apps() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// What the chrome shows of the state [`Session`]'s tick reads, so a
+/// frame is drawn when it changes and not otherwise.
+#[derive(PartialEq)]
+struct Polled {
+    clock: Clock,
+    battery: Option<Battery>,
+    failed_units: Vec<String>,
+    machines: Vec<WindowMachine>,
+    can_hibernate: bool,
+    dimmed: bool,
+    locked: bool,
+    cover: Option<CoverArea>,
+    /// Where each window is drawn: it changes every frame a window moves.
+    shown: HashMap<WindowId, Shown>,
+    /// The cards showing, and how many notifications there are at all.
+    notifications: (Vec<u32>, usize),
+}
+
 /// The derisk shell as seen by the compositor.
 pub struct Session {
     shell: Shell,
@@ -186,6 +204,12 @@ pub struct Session {
     /// Time spent at the desktop, which sets how fast everything moves.
     familiarity: Familiarity,
     shown: HashMap<WindowId, Shown>,
+    /// What [`Shell::needs_frame`](compositor::Shell::needs_frame) last
+    /// saw of the state [`tick`](compositor::Shell::tick) changes.
+    polled: Option<Polled>,
+    /// [`tick`](compositor::Shell::tick) changed something the chrome
+    /// shows that [`Polled`] does not hold.
+    redraw: bool,
     last_tick: Option<Instant>,
     last_sleep_check: Option<Instant>,
     palette_open: bool,
@@ -437,6 +461,8 @@ impl Session {
             motion_ms: 0.0,
             familiarity: Familiarity::open(familiarity::default_path()),
             shown: HashMap::new(),
+            polled: None,
+            redraw: true,
             last_tick: None,
             last_sleep_check: None,
             palette_open: false,
@@ -1620,6 +1646,7 @@ impl compositor::Shell for Session {
                 self.dispatch(vec![Action::Tutorial {
                     visible: Some(true),
                 }]);
+                self.redraw = true;
             }
         }
         // Every frame, so a banner goes when its time is up rather than
@@ -1632,12 +1659,14 @@ impl compositor::Shell for Session {
             && let Some(found) = search.poll(self.ui.palette.file_search())
         {
             self.ui.palette.set_file_matches(found);
+            self.redraw = true;
         }
         // Every frame, before the host asks where the windows are.
         self.move_windows();
         if !self.ending.is_empty() && self.ui.has_shut() {
             let ending = std::mem::take(&mut self.ending);
             self.perform(ending);
+            self.redraw = true;
             self.ended = Some(Instant::now());
         }
         // Still here a while later (refused, or not --execute): the screen
@@ -1648,6 +1677,7 @@ impl compositor::Shell for Session {
         {
             self.ended = None;
             self.ui.open_up();
+            self.redraw = true;
         }
         if self
             .last_tick
@@ -1699,6 +1729,7 @@ impl compositor::Shell for Session {
         self.shell.clock = Clock::now_local();
         self.shell.battery = Battery::read(Path::new("/sys/class/power_supply"));
         if let Some(settings) = self.settings.poll() {
+            self.redraw = true;
             self.shell.effects = Effects::from_settings(&settings);
             self.shell.set_gaps(settings.desktop.gaps);
             self.shortcuts = settings.shortcuts;
@@ -1957,6 +1988,32 @@ impl compositor::Shell for Session {
             _ => return,
         };
         self.dispatch(vec![action]);
+    }
+
+    /// The chrome asks egui for the frames its own motion needs; this adds
+    /// the ones for what the tick polled, so a still desktop draws once a
+    /// minute for the clock rather than every refresh.
+    fn needs_frame(&mut self) -> bool {
+        let stack = self.notifications.stack();
+        let do_not_disturb = self.settings.current().notifications.do_not_disturb;
+        let polled = Polled {
+            clock: self.shell.clock,
+            battery: self.shell.battery,
+            failed_units: self.shell.failed_units.clone(),
+            machines: self.shell.machines.clone(),
+            can_hibernate: self.shell.can_hibernate,
+            dimmed: self.shell.dimmed,
+            locked: self.lock.is_locked(),
+            cover: self.shell.privacy_cover,
+            shown: self.shown.clone(),
+            notifications: (
+                stack.shown(do_not_disturb).map(|n| n.id).collect(),
+                stack.len(),
+            ),
+        };
+        let changed = self.polled.as_ref() != Some(&polled);
+        self.polled = Some(polled);
+        std::mem::take(&mut self.redraw) || changed
     }
 
     fn theme(&self) -> Theme {

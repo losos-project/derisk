@@ -4655,7 +4655,7 @@ dependencies = [
 [[package]]
 name = "mcsapi"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "egui",
  "gpui",
@@ -4669,7 +4669,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "egui",
  "mcsapi-ui",
@@ -4678,7 +4678,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-components-gpui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "gpui",
  "libc",
@@ -4694,7 +4694,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-compositor"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4712,12 +4712,12 @@ dependencies = [
 [[package]]
 name = "mcsapi-hardened-malloc"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 
 [[package]]
 name = "mcsapi-runtime"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "miette",
  "thiserror 2.0.21",
@@ -4726,7 +4726,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "miette",
  "thiserror 2.0.21",
@@ -4735,7 +4735,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "egui",
  "mcsapi",
@@ -4745,7 +4745,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-component"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "collections",
  "gpui",
@@ -4758,7 +4758,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-icons"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "serde",
  "strum",
@@ -4767,7 +4767,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-menu"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "gpui",
 ]
@@ -4775,7 +4775,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-theme"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4791,7 +4791,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-ui"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "chrono",
  "documented",
@@ -4816,7 +4816,7 @@ dependencies = [
 [[package]]
 name = "mcsapi-zed-ui-macros"
 version = "0.1.0"
-source = "git+https://github.com/dasmatus/mcsapi#488fb87e2fde5285a8d25ffe65cd222d6f7cbab8"
+source = "git+https://github.com/dasmatus/mcsapi#f7ee216bbc4e001a6cc978171a075918ffbc7dfb"
 dependencies = [
  "quote",
  "syn 2.0.119",
