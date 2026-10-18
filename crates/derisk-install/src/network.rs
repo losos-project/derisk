@@ -1,52 +1,104 @@
 //! The network, as the setup screens need it: whether the machine is online,
-//! what each wired port is doing, and Wi-Fi through wpa_supplicant.
+//! what each wired port is doing, and Wi-Fi, all through NetworkManager.
 //!
-//! Links are systemd-networkd's: it runs DHCP on every wired port with a
-//! cable and on whatever wireless link wpa_supplicant brings up, and writes
-//! its verdict under /run/systemd/netif. `routable` there means some link has
-//! an address and a route beyond itself, which is what downloading an image
-//! or a time zone's clock needs. So joining a Wi-Fi network is all there is
-//! to do here; a cable plugged in gets the machine online with nothing asked.
+//! NetworkManager runs DHCP on every wired port with a cable and on the
+//! Wi-Fi network it joins, so joining one is all there is to do here; a
+//! cable plugged in gets the machine online with nothing asked. It is spoken
+//! to through `nmcli` in terse mode (`-t`), whose fields are separated by
+//! colons, with a colon or backslash inside a value escaped by a backslash:
+//! nmcli is NetworkManager's own client, does the D-Bus and polkit work, and
+//! keeps a passphrase out of any command line by reading it from a pipe.
 //!
-//! wpa_supplicant's control interface is spoken directly: one datagram per
-//! command and one per reply over a Unix socket, which is less code than
-//! parsing `wpa_cli`'s output and needs no second process. Two details come
-//! from how NixOS runs the daemon: it is unprivileged and sandboxed, with
-//! the control sockets under /run/wpa_supplicant/control, and it can only
-//! answer a client socket that sits under /run/wpa_supplicant/client and that
-//! its group may write. nixpkgs patches `wpa_ctrl.c` to do exactly that for
-//! `wpa_cli`; [`Control::open_at`] does the same here.
-//!
-//! This came from LosOS's text installer, which the setup screens replaced.
+//! wpa_supplicant's control socket and networkd's state files were spoken to
+//! directly before, and went with networkd: on NetworkManager, wpa_supplicant
+//! has no control socket and networkd does not run.
 
 use std::{
-    fs, io,
-    os::unix::{fs::PermissionsExt, net::UnixDatagram},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
+    io::{self, Write},
+    process::{Child, Command, Stdio},
 };
 
-/// networkd's overall state file.
-pub const NETIF_STATE: &str = "/run/systemd/netif/state";
-/// networkd's per-link state files, named by ifindex.
-pub const NETIF_LINKS: &str = "/run/systemd/netif/links";
-/// Network devices.
-pub const SYS_CLASS_NET: &str = "/sys/class/net";
+/// NetworkManager's client, from the system profile.
+pub const NMCLI: &str = "nmcli";
 
-/// Whether networkd says some link is routable.
-pub fn online(state_file: &Path) -> bool {
-    fs::read_to_string(state_file)
-        .map(|state| parse_online(&state))
-        .unwrap_or(false)
+/// Runs `nmcli -t` with `args` and returns what it printed. Its own error
+/// line, without the `Error: ` in front, is the error; a polkit refusal is
+/// [`io::ErrorKind::PermissionDenied`].
+pub fn nmcli(args: &[&str]) -> io::Result<String> {
+    let out = Command::new(NMCLI)
+        .arg("-t")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(nmcli_error(&String::from_utf8_lossy(&out.stderr)))
+    }
 }
 
-/// Whether a networkd state file's `OPER_STATE` is `routable`.
-pub fn parse_online(state: &str) -> bool {
-    state
+/// An error from nmcli's stderr.
+pub fn nmcli_error(stderr: &str) -> io::Error {
+    let line = stderr
         .lines()
-        .filter_map(|line| line.split_once('='))
-        .any(|(key, value)| key == "OPER_STATE" && value == "routable")
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("nmcli failed")
+        .trim();
+    let line = line.strip_prefix("Error: ").unwrap_or(line);
+    let lower = line.to_lowercase();
+    if lower.contains("not authorized") || lower.contains("insufficient privileges") {
+        io::Error::new(io::ErrorKind::PermissionDenied, line.to_owned())
+    } else {
+        io::Error::other(line.to_owned())
+    }
+}
+
+/// One line of terse output, split at the colons that are not escaped, with
+/// the escapes undone.
+pub fn fields(line: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    out.last_mut().expect("never empty").push(next);
+                }
+            }
+            ':' => out.push(String::new()),
+            c => out.last_mut().expect("never empty").push(c),
+        }
+    }
+    out
+}
+
+/// Whether `nmcli -t -f STATE general` says the machine reaches beyond its
+/// own networks: `connected`, and not `connected (site only)` or
+/// `(local only)`.
+pub fn parse_online(general: &str) -> bool {
+    general.lines().next().map(str::trim) == Some("connected")
+}
+
+/// A network device, from `nmcli -t -f DEVICE,TYPE,STATE device`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Device {
+    /// The interface name.
+    pub name: String,
+    /// NetworkManager's type for it, such as `ethernet` or `wifi`.
+    pub kind: String,
+    /// Its state, such as `connected`, `unavailable` or `connecting
+    /// (getting IP configuration)`.
+    pub state: String,
+}
+
+/// `nmcli -t -f DEVICE,TYPE,STATE device`, one device a line.
+pub fn parse_devices(text: &str) -> Vec<Device> {
+    text.lines()
+        .filter_map(|line| {
+            let [name, kind, state]: [String; 3] = fields(line).try_into().ok()?;
+            Some(Device { name, kind, state })
+        })
+        .collect()
 }
 
 /// What a wired port is doing, in the order someone plugging in a cable
@@ -81,220 +133,48 @@ pub struct Wired {
     pub state: WiredState,
 }
 
-/// The physical wired ports under `sys_class_net`, as the installer's
-/// `20-wired` network matches them: Ethernet hardware (`type` 1, ARPHRD_ETHER)
-/// with a device behind it, which leaves out loopback, bridges and veths,
-/// and without a `wireless` directory, which leaves out Wi-Fi, whose type is
-/// Ethernet too. Each one's state comes from its carrier and from networkd's
-/// own file for it under `netif_links`, named by ifindex.
-pub fn wired(sys_class_net: &Path, netif_links: &Path) -> Vec<Wired> {
-    let mut ports: Vec<Wired> = fs::read_dir(sys_class_net)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let dir = entry.path();
-            let read = |name: &str| {
-                fs::read_to_string(dir.join(name))
-                    .map(|s| s.trim().to_string())
-                    .ok()
-            };
-            if read("type").as_deref() != Some("1")
-                || !dir.join("device").exists()
-                || dir.join("wireless").exists()
-            {
-                return None;
-            }
-            // Reading `carrier` fails while the link is down, which is the
-            // same answer: nothing on the other end yet.
-            let state = if read("carrier").as_deref() != Some("1") {
+/// The wired ports among `devices`: NetworkManager's `ethernet` ones that it
+/// manages, which leaves out loopback, bridges, veths and the machines'
+/// ports, which it is told to leave alone. `unavailable` is NetworkManager's
+/// word for a port with no carrier.
+pub fn wired(devices: &[Device]) -> Vec<Wired> {
+    let mut ports: Vec<Wired> = devices
+        .iter()
+        .filter(|d| d.kind == "ethernet" && d.state != "unmanaged")
+        .map(|d| Wired {
+            name: d.name.clone(),
+            state: if d.state == "unavailable" {
                 WiredState::NoCable
-            } else if read("ifindex")
-                .and_then(|index| fs::read_to_string(netif_links.join(index)).ok())
-                .is_some_and(|link| parse_online(&link))
-            {
+            } else if d.state.starts_with("connected") {
                 WiredState::Online
             } else {
                 WiredState::Configuring
-            };
-            Some(Wired {
-                name: entry.file_name().into_string().ok()?,
-                state,
-            })
+            },
         })
         .collect();
     ports.sort_by(|a, b| a.name.cmp(&b.name));
     ports
 }
 
-/// Where NixOS's wpa_supplicant puts its control sockets.
-pub const CONTROL_DIR: &str = "/run/wpa_supplicant/control";
-/// Where a client's reply socket must sit for the daemon to answer it.
-pub const CLIENT_DIR: &str = "/run/wpa_supplicant/client";
-
-static CLIENTS: AtomicUsize = AtomicUsize::new(0);
-
-/// A connection to one interface's wpa_supplicant control socket.
-pub struct Control {
-    socket: UnixDatagram,
-    local: PathBuf,
+/// The first Wi-Fi device among `devices`, by name.
+pub fn wifi_device(devices: &[Device]) -> Option<&Device> {
+    devices
+        .iter()
+        .filter(|d| d.kind == "wifi")
+        .min_by(|a, b| a.name.cmp(&b.name))
 }
 
-impl Control {
-    /// Connects to `interface`'s control socket.
-    pub fn open(interface: &str) -> io::Result<Self> {
-        Self::open_at(
-            &Path::new(CONTROL_DIR).join(interface),
-            Path::new(CLIENT_DIR),
-        )
-    }
-
-    /// Connects to the control socket at `remote`, replying through a socket
-    /// in `client_dir`.
-    pub fn open_at(remote: &Path, client_dir: &Path) -> io::Result<Self> {
-        let local = client_dir.join(format!(
-            "derisk-{}-{}",
-            std::process::id(),
-            CLIENTS.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_file(&local);
-        let socket = UnixDatagram::bind(&local)?;
-        let control = Control { socket, local };
-        // A datagram reply needs write permission on the socket it is sent
-        // to, and the daemon runs as its own user.
-        if let Some(gid) = group_id(Path::new("/etc/group"), "wpa_supplicant") {
-            let _ = std::os::unix::fs::chown(&control.local, None, Some(gid));
-        }
-        fs::set_permissions(&control.local, fs::Permissions::from_mode(0o660))?;
-        control.socket.connect(remote)?;
-        control
-            .socket
-            .set_read_timeout(Some(Duration::from_secs(5)))?;
-        Ok(control)
-    }
-
-    /// Sends a command and returns its reply.
-    pub fn request(&self, command: &str) -> io::Result<String> {
-        self.socket.send(command.as_bytes())?;
-        // SCAN_RESULTS is the longest reply, and wpa_supplicant caps every
-        // reply at 4096 bytes itself.
-        let mut buf = vec![0u8; 8192];
-        loop {
-            let n = self.socket.recv(&mut buf)?;
-            let reply = String::from_utf8_lossy(&buf[..n]).into_owned();
-            // An unsolicited event, which only an ATTACHed client receives.
-            // This one never attaches; skipping them costs nothing if it did.
-            if reply.starts_with('<') {
-                continue;
-            }
-            return Ok(reply);
-        }
-    }
-
-    /// A command whose only successful answer is `OK`.
-    pub fn ok(&self, command: &str) -> io::Result<()> {
-        let reply = self.request(command)?;
-        if reply.trim_end() == "OK" {
-            Ok(())
-        } else {
-            // The command line holds no secret worth hiding from the person who
-            // typed it, but it is not needed to say what failed either.
-            let verb = command
-                .split_whitespace()
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" ");
-            Err(io::Error::other(format!(
-                "wpa_supplicant refused {verb}: {}",
-                reply.trim_end()
-            )))
-        }
-    }
-
-    /// STATUS, as key-value pairs.
-    pub fn status(&self) -> io::Result<Vec<(String, String)>> {
-        Ok(parse_status(&self.request("STATUS")?))
-    }
-
-    /// Adds a network for `network` and selects it, which disables every
-    /// other one. Returns the network id, for [`Control::forget`].
-    pub fn connect(&self, network: &Network, passphrase: &str) -> io::Result<u32> {
-        let reply = self.request("ADD_NETWORK")?;
-        let id: u32 = reply.trim().parse().map_err(|_| {
-            io::Error::other(format!("wpa_supplicant: ADD_NETWORK said {}", reply.trim()))
-        })?;
-        let set = |key: &str, value: &str| self.ok(&format!("SET_NETWORK {id} {key} {value}"));
-        let result = (|| {
-            // Hex, so an SSID may hold quotes, spaces or bytes that are not
-            // UTF-8 without any quoting rule mattering.
-            set("ssid", &hex(&network.ssid))?;
-            for (key, value) in network.security.settings(passphrase)? {
-                set(key, &value)?;
-            }
-            self.ok(&format!("SELECT_NETWORK {id}"))
-        })();
-        match result {
-            Ok(()) => Ok(id),
-            Err(e) => {
-                let _ = self.forget(id);
-                Err(e)
-            }
-        }
-    }
-
-    /// Writes the networks wpa_supplicant knows to its configuration file,
-    /// so a network joined during setup is joined again after a reboot.
-    /// Needs `update_config=1`, which NixOS sets for a user-controlled
-    /// wpa_supplicant.
-    pub fn save(&self) -> io::Result<()> {
-        self.ok("SAVE_CONFIG")
-    }
-
-    /// Removes a network added with [`Control::connect`].
-    pub fn forget(&self, id: u32) -> io::Result<()> {
-        self.ok(&format!("REMOVE_NETWORK {id}"))
-    }
-
-    /// The networks wpa_supplicant knows, joined before or added now.
-    pub fn saved(&self) -> io::Result<Vec<Saved>> {
-        Ok(parse_list_networks(&self.request("LIST_NETWORKS")?))
-    }
-
-    /// Joins a network wpa_supplicant already knows, which, like
-    /// [`Control::connect`], disables every other one.
-    pub fn select(&self, id: u32) -> io::Result<()> {
-        self.ok(&format!("SELECT_NETWORK {id}"))
-    }
-
-    /// Lets wpa_supplicant pick among every known network again, after a
-    /// SELECT_NETWORK disabled the rest. Without it, the networks saved
-    /// before would be written to the configuration as disabled and never
-    /// joined by themselves again.
-    pub fn enable_all(&self) -> io::Result<()> {
-        self.ok("ENABLE_NETWORK all")
-    }
+/// Whether a Wi-Fi device in `state` can scan and join: not while its radio
+/// is off or wpa_supplicant is not up yet (`unavailable`), nor when
+/// NetworkManager does not manage it.
+pub fn wifi_ready(state: &str) -> bool {
+    !matches!(state, "unavailable" | "unmanaged")
 }
 
-impl Drop for Control {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.local);
-    }
-}
+/// `nmcli connection add`'s property-value pairs.
+pub type Settings = Vec<(&'static str, String)>;
 
-fn group_id(group_file: &Path, name: &str) -> Option<u32> {
-    let groups = fs::read_to_string(group_file).ok()?;
-    groups.lines().find_map(|line| {
-        let mut fields = line.split(':');
-        (fields.next()? == name).then_some(())?;
-        fields.nth(1)?.parse().ok()
-    })
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// How a network asks to be joined, read from the flags in a scan result.
+/// How a network asks to be joined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Security {
     /// No encryption.
@@ -303,30 +183,34 @@ pub enum Security {
     Owe,
     /// WPA2-Personal, WPA3-Personal, or a transition network offering both.
     Passphrase {
-        /// WPA2-Personal.
+        /// WPA2-Personal (or the first WPA).
         psk: bool,
         /// WPA3-Personal.
         sae: bool,
     },
     /// 802.1X and WEP. The first needs more than a passphrase to describe,
-    /// and the second is not worth describing; `wpa_cli` on another terminal
+    /// and the second is not worth describing; `nmcli` on another terminal
     /// can still join either.
     Unsupported(&'static str),
 }
 
 impl Security {
-    /// Reads a scan result's flags, such as `[WPA2-PSK-CCMP][ESS]`.
-    pub fn from_flags(flags: &str) -> Self {
-        if flags.contains("EAP") {
+    /// Reads `nmcli device wifi list`'s SECURITY, such as `WPA2`, `WPA1
+    /// WPA2`, `WPA2 WPA3`, `WPA3 802.1X`, `OWE` or nothing for an open
+    /// network.
+    pub fn from_nm(security: &str) -> Self {
+        let words: Vec<&str> = security.split_whitespace().collect();
+        let has = |word: &str| words.contains(&word);
+        if has("802.1X") {
             Security::Unsupported("802.1X")
-        } else if flags.contains("WEP") {
+        } else if has("WEP") {
             Security::Unsupported("WEP")
-        } else if flags.contains("PSK") || flags.contains("SAE") {
+        } else if has("WPA1") || has("WPA2") || has("WPA3") {
             Security::Passphrase {
-                psk: flags.contains("PSK"),
-                sae: flags.contains("SAE"),
+                psk: has("WPA1") || has("WPA2"),
+                sae: has("WPA3"),
             }
-        } else if flags.contains("OWE") {
+        } else if words.iter().any(|w| w.starts_with("OWE")) {
             Security::Owe
         } else {
             Security::Open
@@ -353,23 +237,29 @@ impl Security {
         }
     }
 
-    /// The SET_NETWORK settings for this network beside its SSID.
-    pub fn settings(self, passphrase: &str) -> io::Result<Vec<(&'static str, String)>> {
+    /// The `nmcli connection add` settings for this network beside its SSID,
+    /// and the secret to hand over when it is brought up, as a line of
+    /// nmcli's `passwd-file`.
+    pub fn settings(self, passphrase: &str) -> io::Result<(Settings, Option<String>)> {
         match self {
-            Security::Open => Ok(vec![("key_mgmt", "NONE".into())]),
+            Security::Open => Ok((Vec::new(), None)),
             // OWE requires management frame protection by definition.
-            Security::Owe => Ok(vec![("key_mgmt", "OWE".into()), ("ieee80211w", "2".into())]),
-            Security::Passphrase { psk, sae } => {
+            Security::Owe => Ok((
+                vec![
+                    ("wifi-sec.key-mgmt", "owe".into()),
+                    ("wifi-sec.pmf", "required".into()),
+                ],
+                None,
+            )),
+            Security::Passphrase { psk, .. } => {
                 if passphrase.chars().any(char::is_control) {
                     return Err(io::Error::other(
                         "The passphrase cannot hold control characters.",
                     ));
                 }
-                let mut mgmt = Vec::new();
-                let mut out = Vec::new();
                 if psk {
-                    // WPA2's passphrase is 8 to 63 printable ASCII characters;
-                    // 64 hex digits are the raw key and go unquoted.
+                    // WPA2's passphrase is 8 to 63 printable ASCII characters,
+                    // or 64 hex digits that are the raw key.
                     let raw =
                         passphrase.len() == 64 && passphrase.bytes().all(|b| b.is_ascii_hexdigit());
                     let ascii = passphrase.bytes().all(|b| (0x20..0x7f).contains(&b));
@@ -379,34 +269,27 @@ impl Security {
                             "A WPA2 passphrase is 8 to 63 ASCII characters long.",
                         ));
                     }
-                    mgmt.push("WPA-PSK WPA-PSK-SHA256");
-                    out.push((
-                        "psk",
-                        if raw {
-                            passphrase.to_owned()
-                        } else {
-                            format!("\"{passphrase}\"")
-                        },
-                    ));
+                } else if passphrase.is_empty() {
+                    return Err(io::Error::other("The passphrase is empty."));
                 }
-                if sae {
-                    if passphrase.is_empty() {
-                        return Err(io::Error::other("The passphrase is empty."));
-                    }
-                    mgmt.push("SAE");
-                    // wpa_supplicant reads a quoted value up to its last quote,
-                    // so a quote inside the passphrase survives.
-                    out.push(("sae_password", format!("\"{passphrase}\"")));
-                }
-                // WPA3 alone requires protected management frames; a
-                // transition network only offers them.
-                let pmf = if sae && !psk { "2" } else { "1" };
-                out.insert(0, ("key_mgmt", mgmt.join(" ")));
-                out.push(("ieee80211w", pmf.into()));
-                Ok(out)
+                // A transition network is joined as WPA2, which every card
+                // can do; WPA3 alone requires protected management frames.
+                let settings = if psk {
+                    vec![("wifi-sec.key-mgmt", "wpa-psk".into())]
+                } else {
+                    vec![
+                        ("wifi-sec.key-mgmt", "sae".into()),
+                        ("wifi-sec.pmf", "required".into()),
+                    ]
+                };
+                // NetworkManager keeps WPA3's passphrase in `psk` too.
+                Ok((
+                    settings,
+                    Some(format!("802-11-wireless-security.psk:{passphrase}")),
+                ))
             }
             Security::Unsupported(what) => Err(io::Error::other(format!(
-                "{what} networks cannot be joined from here; use wpa_cli in a terminal."
+                "{what} networks cannot be joined from here; use nmcli in a terminal."
             ))),
         }
     }
@@ -417,8 +300,9 @@ impl Security {
 pub struct Network {
     /// The SSID's raw bytes.
     pub ssid: Vec<u8>,
-    /// dBm, the strongest of every access point broadcasting the SSID.
-    pub signal: i32,
+    /// From 0 to 100, as NetworkManager reports it: the strongest of every
+    /// access point broadcasting the SSID.
+    pub signal: u8,
     /// How it asks to be joined.
     pub security: Security,
 }
@@ -430,27 +314,30 @@ impl Network {
     }
 }
 
-/// SCAN_RESULTS: a header line, then one tab-separated line per access point
-/// -- bssid, frequency, signal, flags, ssid. One network per SSID, strongest
-/// first; hidden networks, which broadcast an empty SSID, are left out.
-pub fn parse_scan_results(reply: &str) -> Vec<Network> {
+/// `nmcli -t -f IN-USE,SSID-HEX,SIGNAL,SECURITY device wifi list`, one access
+/// point a line: one network per SSID, strongest first, and the SSID of the
+/// one in use, if any. Hidden networks, which broadcast no SSID, are left
+/// out.
+pub fn parse_wifi_list(text: &str) -> (Vec<Network>, Option<Vec<u8>>) {
     let mut networks: Vec<Network> = Vec::new();
-    for line in reply.lines().skip(1) {
-        let fields: Vec<&str> = line.splitn(5, '\t').collect();
-        let [_, _, signal, flags, ssid] = fields[..] else {
+    let mut in_use = None;
+    for line in text.lines() {
+        let Ok([used, ssid, signal, security]) = <[String; 4]>::try_from(fields(line)) else {
             continue;
         };
-        let Ok(signal) = signal.parse::<i32>() else {
+        let (Some(ssid), Ok(signal)) = (decode_hex(&ssid), signal.parse::<u8>()) else {
             continue;
         };
-        let ssid = decode_ssid(ssid);
         if ssid.iter().all(|&b| b == 0) {
             continue;
+        }
+        if used.trim() == "*" {
+            in_use = Some(ssid.clone());
         }
         let network = Network {
             ssid,
             signal,
-            security: Security::from_flags(flags),
+            security: Security::from_nm(&security),
         };
         match networks
             .iter_mut()
@@ -462,57 +349,29 @@ pub fn parse_scan_results(reply: &str) -> Vec<Network> {
         }
     }
     networks.sort_by(|a, b| b.signal.cmp(&a.signal).then_with(|| a.ssid.cmp(&b.ssid)));
-    networks
+    (networks, in_use)
 }
 
-/// Undoes wpa_supplicant's printf_encode(), which is how an SSID's raw bytes
-/// reach a text protocol.
-pub fn decode_ssid(text: &str) -> Vec<u8> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'\\' || i + 1 == bytes.len() {
-            out.push(bytes[i]);
-            i += 1;
-            continue;
-        }
-        i += 1;
-        match bytes[i] {
-            b'n' => out.push(b'\n'),
-            b'r' => out.push(b'\r'),
-            b't' => out.push(b'\t'),
-            b'e' => out.push(0x1b),
-            b'x' => match bytes.get(i + 1..i + 3) {
-                Some(&[hi, lo]) if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() => {
-                    out.push(hex_value(hi) << 4 | hex_value(lo));
-                    i += 2;
-                }
-                _ => out.extend_from_slice(b"\\x"),
-            },
-            other => out.push(other),
-        }
-        i += 1;
+/// SSID-HEX's bytes; nothing for an empty or malformed one.
+pub fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    let text = text.trim();
+    if text.is_empty() || !text.len().is_multiple_of(2) {
+        return None;
     }
-    out
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
-fn hex_value(digit: u8) -> u8 {
-    match digit {
-        b'0'..=b'9' => digit - b'0',
-        b'a'..=b'f' => digit - b'a' + 10,
-        _ => digit - b'A' + 10,
-    }
-}
-
-/// A network wpa_supplicant knows, from LIST_NETWORKS.
+/// A saved Wi-Fi connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Saved {
-    /// wpa_supplicant's id for it.
-    pub id: u32,
-    /// The SSID's raw bytes.
+    /// NetworkManager's UUID for it.
+    pub id: String,
+    /// The SSID's bytes, as nmcli prints it.
     pub ssid: Vec<u8>,
-    /// Whether it is the network in use.
+    /// Whether it is the connection in use.
     pub current: bool,
 }
 
@@ -523,46 +382,88 @@ impl Saved {
     }
 }
 
-/// LIST_NETWORKS: a header line, then one tab-separated line per network --
-/// id, ssid, bssid, flags such as `[CURRENT]` or `[DISABLED]`.
-pub fn parse_list_networks(reply: &str) -> Vec<Saved> {
-    reply
-        .lines()
-        .skip(1)
+/// `nmcli -t -f UUID,TYPE,ACTIVE connection show`: the UUIDs of the Wi-Fi
+/// connections, and whether each is active.
+pub fn parse_connections(text: &str) -> Vec<(String, bool)> {
+    text.lines()
         .filter_map(|line| {
-            let mut fields = line.splitn(4, '\t');
-            let id = fields.next()?.parse().ok()?;
-            let ssid = decode_ssid(fields.next()?);
-            let flags = fields.nth(1).unwrap_or_default();
-            Some(Saved {
-                id,
-                ssid,
-                current: flags.contains("[CURRENT]"),
-            })
+            let [uuid, kind, active]: [String; 3] = fields(line).try_into().ok()?;
+            (kind == "802-11-wireless").then_some((uuid, active == "yes"))
         })
         .collect()
 }
 
-/// STATUS's reply as key-value pairs.
-pub fn parse_status(reply: &str) -> Vec<(String, String)> {
-    reply
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-        .collect()
+/// The UUID in `nmcli connection add`'s "Connection 'name' (uuid)
+/// successfully added."
+pub fn parse_added(text: &str) -> Option<String> {
+    let start = text.rfind('(')? + 1;
+    let end = start + text[start..].find(')')?;
+    Some(text[start..end].to_owned())
 }
 
-/// Wireless interfaces are the network devices with a `wireless` directory.
-pub fn interfaces(sys_class_net: &Path) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(sys_class_net)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.path().join("wireless").is_dir())
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect();
-    names.sort();
-    names
+/// The arguments of `nmcli connection add` for `network` on `interface`. A
+/// connection added with `save` false lives only until NetworkManager
+/// restarts, as on the live installer, which has nowhere to keep it.
+pub fn add_args(
+    network: &Network,
+    interface: &str,
+    settings: &Settings,
+    save: bool,
+) -> Vec<String> {
+    let name = network.name();
+    let mut args: Vec<String> = [
+        "connection",
+        "add",
+        "type",
+        "wifi",
+        "ifname",
+        interface,
+        "con-name",
+        &name,
+        "ssid",
+        &name,
+        "save",
+        if save { "yes" } else { "no" },
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    for (key, value) in settings {
+        args.push((*key).to_owned());
+        args.push(value.clone());
+    }
+    args
+}
+
+/// How long `nmcli connection up` waits for association, the handshake and
+/// DHCP. A wrong passphrase looks like a handshake that never completes, so
+/// this is also how long it takes to say so.
+pub const CONNECT_SECONDS: u32 = 30;
+
+/// Brings up the connection `uuid` in the background, handing `secret` (a
+/// `passwd-file` line) through a pipe. The child's exit says whether the
+/// join worked.
+pub fn bring_up(uuid: &str, secret: Option<&str>) -> io::Result<Child> {
+    let wait = CONNECT_SECONDS.to_string();
+    let mut command = Command::new(NMCLI);
+    command.args(["--wait", &wait, "connection", "up", "uuid", uuid]);
+    if secret.is_some() {
+        command.args(["passwd-file", "/dev/stdin"]);
+    }
+    let mut child = command
+        .stdin(if secret.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let (Some(secret), Some(mut stdin)) = (secret, child.stdin.take()) {
+        stdin.write_all(secret.as_bytes())?;
+        stdin.write_all(b"\n")?;
+    }
+    Ok(child)
 }
 
 #[cfg(test)]
@@ -570,18 +471,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn group_lookup() {
-        let dir = std::env::temp_dir().join(format!("derisk-group-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("group");
-        fs::write(&file, "root:x:0:\nwpa_supplicant:x:991:\nwheel:x:1:a\n").unwrap();
-        assert_eq!(group_id(&file, "wpa_supplicant"), Some(991));
-        assert_eq!(group_id(&file, "nobody"), None);
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn hex_ssid() {
-        assert_eq!(hex(b"a \"b\""), "6120226222");
+        assert_eq!(decode_hex("6120226222"), Some(b"a \"b\"".to_vec()));
+        assert_eq!(decode_hex(""), None);
+        assert_eq!(decode_hex("6"), None);
+        assert_eq!(decode_hex("zz"), None);
     }
 }

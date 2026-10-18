@@ -151,7 +151,7 @@ fn the_plan_saves_everything_and_creates_the_account_last() {
             weakness: None,
         },
         password_age: PasswordAge::default(),
-        groups: vec!["wpa_supplicant".into()],
+        groups: vec!["networkmanager".into()],
     };
     let plan = setup::plan(&choices);
     let argv: Vec<Vec<&str>> = plan
@@ -169,7 +169,7 @@ fn the_plan_saves_everything_and_creates_the_account_last() {
                 "create",
                 "matus",
                 "--real-name=Matúš Novák",
-                "--member-of=wheel,wpa_supplicant",
+                "--member-of=wheel,networkmanager",
                 "--timezone=Europe/Bratislava",
             ],
         ]
@@ -350,8 +350,8 @@ fn the_account_joins_only_device_groups_that_exist() {
     let dir = std::env::temp_dir().join(format!("derisk-setup-groups-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("group");
-    std::fs::write(&file, "root:x:0:\nwheel:x:1:\nwpa_supplicant:x:991:\n").unwrap();
-    assert_eq!(setup::device_groups(&file), ["wpa_supplicant"]);
+    std::fs::write(&file, "root:x:0:\nwheel:x:1:\nnetworkmanager:x:991:\n").unwrap();
+    assert_eq!(setup::device_groups(&file), ["networkmanager"]);
     std::fs::write(&file, "root:x:0:\nwheel:x:1:\n").unwrap();
     assert!(setup::device_groups(&file).is_empty());
     assert!(setup::device_groups(&dir.join("missing")).is_empty());

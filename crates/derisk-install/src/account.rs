@@ -72,10 +72,10 @@ pub fn user_name_problem(name: &str) -> Option<&'static str> {
 }
 
 /// Groups that let a session use a device, which the first account joins
-/// when the system has them. `wpa_supplicant` owns the control sockets that
-/// the Settings app's Network page joins Wi-Fi networks through; setup
-/// itself runs as root and needs no group for its own Network page.
-pub const DEVICE_GROUPS: &[&str] = &["wpa_supplicant"];
+/// when the system has them. NixOS's polkit rule lets `networkmanager`
+/// change the networks the Settings app's Network page joins and forgets;
+/// setup itself runs as root and needs no group for its own Network page.
+pub const DEVICE_GROUPS: &[&str] = &["networkmanager"];
 
 /// Which of [`DEVICE_GROUPS`] `group_file` (`/etc/group`) lists. homectl
 /// refuses an account in a group that does not exist, so a system without

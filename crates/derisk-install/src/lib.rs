@@ -7,8 +7,8 @@
 //!   program that installs.
 //! - [`locale`]: languages, keyboard layouts and time zones through
 //!   localectl and timedatectl.
-//! - [`network`]: whether the machine is online, and Wi-Fi through
-//!   wpa_supplicant.
+//! - [`network`]: whether the machine is online, and Wi-Fi, through
+//!   NetworkManager.
 //! - [`wifi`]: [`network`] watched from a thread of its own, for a page to
 //!   draw.
 
@@ -18,8 +18,8 @@
 pub mod account;
 pub mod install;
 pub mod locale;
-// wpa_supplicant and the kernel are reached over Unix sockets, which a
-// browser page (the Settings app's demo) has none of.
+// NetworkManager is reached by running nmcli, which a browser page (the
+// Settings app's demo) cannot do.
 #[cfg(unix)]
 pub mod network;
 #[cfg(unix)]

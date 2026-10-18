@@ -148,12 +148,13 @@ impl NetworkPage {
     }
 }
 
-/// Signal strength as one to four bars.
-fn bars(dbm: i32) -> &'static str {
-    match dbm {
-        d if d >= -55 => "▂▄▆█",
-        d if d >= -67 => "▂▄▆",
-        d if d >= -78 => "▂▄",
+/// Signal strength, 0 to 100, as one to four bars, where nmcli's own BARS
+/// put them.
+fn bars(signal: u8) -> &'static str {
+    match signal {
+        81.. => "▂▄▆█",
+        56.. => "▂▄▆",
+        31.. => "▂▄",
         _ => "▂",
     }
 }

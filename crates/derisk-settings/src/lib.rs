@@ -26,8 +26,8 @@ mod layout;
 mod model;
 #[cfg(not(target_family = "wasm"))]
 pub mod network;
-// A browser page has no wpa_supplicant to talk to, and std there has no Unix
-// sockets to talk to it with.
+// A browser page has no NetworkManager to talk to, and std there cannot run
+// nmcli.
 #[cfg(target_family = "wasm")]
 #[path = "network_demo.rs"]
 mod network;
