@@ -243,6 +243,11 @@ impl MachinesApp {
             && matches!(self.plugin, Plugin::Ready | Plugin::NotShipped)
     }
 
+    /// Whether the sidebar has anything to list: a machine, or New machine.
+    fn has_sidebar(&self) -> bool {
+        !self.machines.is_empty() || self.form.is_some() || self.can_create()
+    }
+
     /// The machines, each marked in its label's colour, and New machine.
     fn sidebar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let shown = self.shown().map(|m| m.name);
@@ -962,7 +967,11 @@ impl App for MachinesApp {
             self.look();
         }
         let tokens = derisk_frame::begin(ui, theme);
-        self.sidebar(ui, &tokens);
+        // With no machine to list and none to make yet, the sidebar would
+        // be an empty column; the page says why instead.
+        if self.has_sidebar() {
+            self.sidebar(ui, &tokens);
+        }
         self.action_bar(ui, &tokens);
         derisk_frame::Page::new().show(ui, &tokens, |ui| self.page(ui, &tokens));
     }
@@ -1011,6 +1020,15 @@ mod tests {
         assert_eq!(made_from(&odd), "Not made by pm");
         assert_eq!(made_from(&machine("work", Label::Blue)), "losos-guest");
         assert_eq!(capitalised(Label::Blue.name()), "Blue");
+    }
+
+    #[test]
+    fn the_sidebar_shows_only_with_something_in_it() {
+        let mut app = MachinesApp::new();
+        app.unavailable = Some("no libvirt".into());
+        assert!(!app.has_sidebar());
+        app.machines = vec![machine("work", Label::Blue)];
+        assert!(app.has_sidebar());
     }
 
     #[test]
