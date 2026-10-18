@@ -1,6 +1,13 @@
-//! The System page: the security report and the factory reset.
+//! The System page: the release cadence updates follow, the security report
+//! and the factory reset.
 //!
-//! Neither is derisk's own setting. The report is `io.losos.Security1` on
+//! None is derisk's own setting. The cadence is LosOS's: which of its
+//! releases, nightly, weekly, monthly or yearly, the machine updates to.
+//! `losos-update-channel` prints it, and starting
+//! `losos-update-channel@<cadence>.service` changes it, after polkit asks
+//! an administrator, as for any unit started by hand. A system without that
+//! command (another OS, or LosOS updating from a proxy) has no choice to
+//! offer, and the page says so. The report is `io.losos.Security1` on
 //! the system bus, LosOS's OS-level checks (disk encryption, kernel
 //! lockdown, the usual hardening sysctls), each with where it looked; it is
 //! asked through `busctl --json`. The factory reset is systemd's: starting
@@ -77,6 +84,59 @@ pub const REPORT_ARGV: [&str; 8] = [
     "GetHostSecurityAttrs",
 ];
 
+/// One release cadence LosOS publishes, as `losos-update-channel` names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Cadence {
+    /// The name `losos-update-channel` and its unit take.
+    pub id: &'static str,
+    /// What the page calls it.
+    pub name: &'static str,
+    /// One line on how often it brings an update.
+    pub detail: &'static str,
+}
+
+/// Every cadence, fastest first.
+pub const CADENCES: [Cadence; 4] = [
+    Cadence {
+        id: "nightly",
+        name: "Nightly",
+        detail: "Every build that passes its checks, often more than once a day.",
+    },
+    Cadence {
+        id: "weekly",
+        name: "Weekly",
+        detail: "One release each week, out on Monday.",
+    },
+    Cadence {
+        id: "monthly",
+        name: "Monthly",
+        detail: "One release each month, out on the 1st.",
+    },
+    Cadence {
+        id: "yearly",
+        name: "Yearly",
+        detail: "One release each year, out on 1 January. The release GitHub shows as latest.",
+    },
+];
+
+/// The command that prints the cadence this machine follows.
+pub const CADENCE_ARGV: [&str; 1] = ["losos-update-channel"];
+
+/// The command that makes the machine follow `cadence`.
+pub fn set_cadence_argv(cadence: &str) -> [String; 3] {
+    [
+        "systemctl".into(),
+        "start".into(),
+        format!("losos-update-channel@{cadence}.service"),
+    ]
+}
+
+/// Reads `losos-update-channel`'s answer: the cadence's name on one line.
+pub fn parse_cadence(out: &str) -> Option<&'static str> {
+    let name = out.lines().next()?.trim();
+    CADENCES.iter().find(|c| c.id == name).map(|c| c.id)
+}
+
 /// systemd's factory reset Varlink socket.
 const FACTORY_RESET: &str = "/run/systemd/io.systemd.FactoryReset";
 
@@ -140,6 +200,8 @@ fn stdout(argv: &[&str]) -> Result<String, String> {
 
 #[derive(Clone, Debug)]
 struct Snapshot {
+    /// `None` when this system has no cadence to choose.
+    cadence: Option<&'static str>,
     /// `None` when this system has no security service.
     report: Option<Vec<Check>>,
     reset: Reset,
@@ -147,6 +209,7 @@ struct Snapshot {
 
 fn read() -> Snapshot {
     Snapshot {
+        cadence: stdout(&CADENCE_ARGV).ok().and_then(|o| parse_cadence(&o)),
         report: stdout(&REPORT_ARGV).ok().and_then(|j| parse_report(&j)),
         reset: parse_reset(
             &varlink("CanRequestFactoryReset"),
@@ -164,6 +227,9 @@ pub(crate) struct SystemUi {
     confirm: bool,
     resetting: Option<mpsc::Receiver<Result<String, String>>>,
     error: Option<String>,
+    /// The cadence being switched to, while polkit asks and the unit runs.
+    switching: Option<(&'static str, mpsc::Receiver<Result<String, String>>)>,
+    cadence_error: Option<String>,
 }
 
 impl SystemUi {
@@ -184,7 +250,26 @@ impl SystemUi {
         self.resetting = Some(rx);
     }
 
+    fn switch(&mut self, cadence: &'static str) {
+        let (tx, rx) = mpsc::channel();
+        derisk_sys::thread::detach(move || {
+            let argv = set_cadence_argv(cadence);
+            let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+            let _ = tx.send(stdout(&argv));
+        });
+        self.cadence_error = None;
+        self.switching = Some((cadence, rx));
+    }
+
     fn poll(&mut self) {
+        if let Some((_, rx)) = &self.switching
+            && let Ok(done) = rx.try_recv()
+        {
+            // Read back rather than assumed: the file is what updates use.
+            self.cadence_error = done.err();
+            self.switching = None;
+            self.refresh();
+        }
         if let Some(rx) = &self.reading
             && let Ok(snapshot) = rx.try_recv()
         {
@@ -218,7 +303,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
         state.refresh();
     }
     state.poll();
-    if state.reading.is_some() || state.resetting.is_some() {
+    if state.reading.is_some() || state.resetting.is_some() || state.switching.is_some() {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(200));
     }
@@ -226,6 +311,49 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
         ui.spinner();
         return;
     };
+
+    ui.heading(egui::RichText::new("Updates").color(theme.foreground));
+    match snapshot.cadence {
+        None => hint(
+            ui,
+            "This system does not offer a choice of releases to update to.",
+        ),
+        Some(current) => {
+            hint(
+                ui,
+                "Which releases this machine updates to. Changing it asks for an administrator's password. A slower choice keeps the version you have until it has a newer one.",
+            );
+            let pending = state.switching.as_ref().map(|(c, _)| *c);
+            let mut picked = None;
+            ui.add_enabled_ui(pending.is_none(), |ui| {
+                for cadence in &CADENCES {
+                    let selected = pending.unwrap_or(current) == cadence.id;
+                    ui.horizontal(|ui| {
+                        if ui.radio(selected, cadence.name).clicked() && !selected {
+                            picked = Some(cadence.id);
+                        }
+                        ui.label(crate::layout::note(
+                            &mcsapi_components::Tokens::current(ui.ctx()),
+                            cadence.detail,
+                        ));
+                    });
+                }
+            });
+            if let Some(cadence) = picked {
+                state.switch(cadence);
+            }
+            if pending.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Changing which releases this machine updates to…");
+                });
+            }
+            if let Some(error) = &state.cadence_error {
+                ui.label(egui::RichText::new(error).color(RED));
+            }
+        }
+    }
+    ui.add_space(16.0);
 
     ui.heading(egui::RichText::new("Security report").color(theme.foreground));
     match &snapshot.report {
@@ -309,5 +437,26 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
         });
     } else if ui.button("Reset this machine…").clicked() {
         state.confirm = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cadence_is_one_settings_knows() {
+        assert_eq!(parse_cadence("weekly\n"), Some("weekly"));
+        assert_eq!(parse_cadence("yearly"), Some("yearly"));
+        assert_eq!(parse_cadence("hourly\n"), None);
+        assert_eq!(parse_cadence(""), None);
+    }
+
+    #[test]
+    fn a_cadence_is_set_through_its_unit() {
+        assert_eq!(
+            set_cadence_argv("monthly"),
+            ["systemctl", "start", "losos-update-channel@monthly.service"]
+        );
     }
 }
