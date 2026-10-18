@@ -1868,6 +1868,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "derisk-frame"
+version = "0.1.0"
+dependencies = [
+ "derisk-icons",
+ "mcsapi-components",
+ "mcsapi-ui",
+]
+
+[[package]]
 name = "derisk-geom"
 version = "0.1.0"
 dependencies = [
@@ -1999,6 +2008,7 @@ dependencies = [
 name = "derisk-settings"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
  "derisk-install",
  "derisk-sys",

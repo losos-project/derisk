@@ -722,108 +722,42 @@ impl App for SettingsApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        let narrow = ui.available_width() < NARROW;
         // Everything below draws with the theme's component tokens, so a
         // theme restyles the app along with the desktop.
-        let tokens = Tokens::from_theme(theme);
-        tokens.install(ui.ctx());
-        layout::style(ui, &tokens);
-        if narrow {
-            // A sidebar would leave a phone half a page, so the
-            // pages become a row of tabs across the top that scrolls sideways.
-            egui::Panel::top("settings-pages").show(ui, |ui| {
-                egui::ScrollArea::horizontal().show(ui, |ui| {
-                    ui.horizontal(|ui| self.page_buttons(ui));
-                });
+        let tokens = derisk_frame::begin(ui, theme);
+        derisk_frame::navigation(ui, &tokens, "settings-pages", |nav| {
+            let listed = |page| self.listed(page);
+            if let Some(page) = layout::sidebar(nav, self.page, listed) {
+                self.page = page;
+            }
+        });
+        derisk_frame::action_bar(ui, &tokens, "settings-actions", |ui| {
+            let dirty = self.is_dirty();
+            if dirty {
+                ui.label(egui::RichText::new("Unsaved changes").color(theme.accent));
+            } else if let Some(status) = self.status.as_ref().filter(|_| self.error.is_none()) {
+                // An error has its own dialog, so the line does not
+                // repeat it.
+                ui.label(egui::RichText::new(status).color(tokens.muted_foreground));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(Button::new("Save").enabled(dirty)).clicked() {
+                    self.save();
+                }
+                let revert = Button::new("Revert")
+                    .variant(ButtonVariant::Outline)
+                    .enabled(dirty);
+                if ui.add(revert).clicked() {
+                    self.revert();
+                }
             });
-        } else {
-            let sidebar = (ui.available_width() * 0.2).clamp(200.0, 248.0);
-            egui::Panel::left("settings-pages")
-                .resizable(false)
-                .exact_size(sidebar)
-                .frame(
-                    egui::Frame::new()
-                        .fill(tokens.card)
-                        .stroke(tokens.border_stroke())
-                        .inner_margin(egui::Margin::symmetric(12, 8)),
-                )
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let listed = |page| self.listed(page);
-                        if let Some(page) = layout::sidebar(ui, &tokens, self.page, listed) {
-                            self.page = page;
-                        }
-                    });
-                });
-        }
-        egui::Panel::bottom("settings-actions")
-            .frame(
-                egui::Frame::new()
-                    .fill(tokens.background)
-                    .stroke(tokens.border_stroke())
-                    .inner_margin(egui::Margin::symmetric(20, 12)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let dirty = self.is_dirty();
-                    if dirty {
-                        ui.label(egui::RichText::new("Unsaved changes").color(theme.accent));
-                    } else if let Some(status) =
-                        self.status.as_ref().filter(|_| self.error.is_none())
-                    {
-                        // An error has its own dialog, so the line does not
-                        // repeat it.
-                        ui.label(egui::RichText::new(status).color(tokens.muted_foreground));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(Button::new("Save").enabled(dirty)).clicked() {
-                            self.save();
-                        }
-                        let revert = Button::new("Revert")
-                            .variant(ButtonVariant::Outline)
-                            .enabled(dirty);
-                        if ui.add(revert).clicked() {
-                            self.revert();
-                        }
-                    });
-                });
-            });
+        });
         if self.error.is_some() {
             let shown = ErrorDialog::new("settings-error", &mut self.error).show(ui.ctx());
             if shown.closed {
                 self.status = None;
             }
         }
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            ui.painter()
-                .rect_filled(ui.max_rect(), 0, tokens.background);
-            // A row of controls wider than a phone scrolls rather than being
-            // cut off where nothing can reach it.
-            let scroll = if narrow {
-                egui::ScrollArea::both()
-            } else {
-                egui::ScrollArea::vertical()
-            };
-            scroll.show(ui, |ui| {
-                layout::column(ui, |ui| self.page_ui(ui, theme, &tokens));
-            });
-        });
-    }
-}
-
-/// Below this width the page list moves from a sidebar to tabs on top.
-const NARROW: f32 = 560.0;
-
-impl SettingsApp {
-    fn page_buttons(&mut self, ui: &mut egui::Ui) {
-        let pages: Vec<Page> = Page::ALL.into_iter().filter(|&p| self.listed(p)).collect();
-        for page in pages {
-            if ui
-                .selectable_label(self.page == page, page.label())
-                .clicked()
-            {
-                self.page = page;
-            }
-        }
+        derisk_frame::Page::new().show(ui, &tokens, |ui| self.page_ui(ui, theme, &tokens));
     }
 }
