@@ -638,6 +638,12 @@ pub fn rows<R>(
         .inner
 }
 
+/// A one-line text field as tall as the buttons beside it, as Settings'
+/// fields are.
+pub fn field(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).margin(Margin::symmetric(8, 7))
+}
+
 /// A note under a row, in the muted colour the theme gives descriptions.
 pub fn note(tokens: &Tokens, text: &str) -> RichText {
     RichText::new(text)
