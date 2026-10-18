@@ -1,10 +1,10 @@
-//! The Machines app's thread: everything that drives machines or runs pm.
+//! The Machines app's thread: everything that talks to libvirt or runs pm.
 //!
 //! The app is drawn on the compositor's thread, between every other
-//! window's frames, so nothing it does there may wait. Starting a machine
-//! waits on its service, a guest agent can take seconds to answer, and
-//! `pm machine create` copies in a template of gigabytes. So the app hands
-//! orders to this thread and reads its events each frame.
+//! window's frames, so nothing it does there may wait. libvirt answers on a
+//! local socket but can take seconds (a polkit prompt, a machine slow to
+//! shut down), and `pm machine create` uploads a template of gigabytes. So
+//! the app hands orders to this thread and reads its events each frame.
 
 use std::{
     io::{BufRead, BufReader},
@@ -15,10 +15,10 @@ use std::{
 
 use crossbeam_channel::{Receiver, Sender, bounded, select};
 
-use crate::{Hypervisor, Label, Machine, setup::LIBVIRT_PLUGIN};
+use crate::{Hypervisor, Label, Machine, URI};
 
 /// How often the list is read again when nothing has been asked of the
-/// thread, so a machine started from pm or quickemu shows up.
+/// thread, so a machine started from virsh or pm shows up.
 const REFRESH: Duration = Duration::from_secs(2);
 
 /// What the app asks for.
@@ -36,7 +36,7 @@ pub(crate) enum Order {
         machine: String,
         app: crate::GuestApp,
     },
-    /// Copy the OS's quickemu plugin into the person's plugin directory and
+    /// Copy the OS's libvirt plugin into the person's plugin directory and
     /// sign it with their own key.
     SetUpPlugin {
         shipped: PathBuf,
@@ -81,7 +81,7 @@ impl Create {
 pub(crate) enum Event {
     /// The machines, whenever they change.
     Machines(Vec<Machine>),
-    /// The machines cannot be read, and why.
+    /// libvirt cannot be reached, and why.
     Unavailable(String),
     /// A line of what pm is printing.
     Line(String),
@@ -127,16 +127,19 @@ impl Worker {
 }
 
 fn run(orders: &Receiver<Order>, events: &Sender<Event>) {
-    let hypervisor = match Hypervisor::open() {
+    let looking = match Hypervisor::open_read_only() {
         Ok(hypervisor) => hypervisor,
         Err(error) => {
             let _ = events.send(Event::Unavailable(error.to_string()));
             return;
         }
     };
+    // Opened at the first order that changes something: polkit may ask for a
+    // password, and only a person pressing a button should cause that.
+    let mut changing: Option<Hypervisor> = None;
     let mut last: Option<Vec<Machine>> = None;
     loop {
-        match hypervisor.machines() {
+        match looking.machines() {
             Ok(machines) => {
                 let machines: Vec<Machine> = machines.collect();
                 if last.as_ref() != Some(&machines) {
@@ -158,13 +161,14 @@ fn run(orders: &Receiver<Order>, events: &Sender<Event>) {
                 // Asked in the background, when a machine is chosen: its
                 // answer is a list, not something the person did.
                 Ok(Order::Apps(machine)) => {
-                    let apps = hypervisor.guest_apps(&machine).map_err(|e| e.to_string());
+                    let apps = changing_connection(&mut changing)
+                        .and_then(|h| h.guest_apps(&machine).map_err(|e| e.to_string()));
                     if events.send(Event::Apps { machine, apps }).is_err() {
                         return;
                     }
                 }
                 Ok(order) => {
-                    let done = carry_out(order, &hypervisor, events);
+                    let done = carry_out(order, &mut changing, events);
                     if events.send(Event::Done(done)).is_err() {
                         return;
                     }
@@ -178,19 +182,19 @@ fn run(orders: &Receiver<Order>, events: &Sender<Event>) {
 
 fn carry_out(
     order: Order,
-    hypervisor: &Hypervisor,
+    changing: &mut Option<Hypervisor>,
     events: &Sender<Event>,
 ) -> Result<String, String> {
     match order {
-        Order::Start(name) => hypervisor
+        Order::Start(name) => changing_connection(changing)?
             .start(&name)
             .map(|()| format!("Started {name}"))
             .map_err(|e| e.to_string()),
-        Order::ShutDown(name) => hypervisor
+        Order::ShutDown(name) => changing_connection(changing)?
             .shut_down(&name)
             .map(|()| format!("Asked {name} to shut down"))
             .map_err(|e| e.to_string()),
-        Order::ForceOff(name) => hypervisor
+        Order::ForceOff(name) => changing_connection(changing)?
             .force_off(&name)
             .map(|()| format!("Forced {name} off"))
             .map_err(|e| e.to_string()),
@@ -202,7 +206,7 @@ fn carry_out(
             pm(&["machine".into(), "remove".into(), name.clone()], events)?;
             Ok(format!("Removed {name}"))
         }
-        Order::Open { machine, app } => hypervisor
+        Order::Open { machine, app } => changing_connection(changing)?
             .open_app(&machine, &app.id)
             .map(|()| format!("Opened {} in {machine}", app.name))
             .map_err(|e| e.to_string()),
@@ -213,6 +217,14 @@ fn carry_out(
             Ok("pm can manage machines now".into())
         }
     }
+}
+
+/// The read-write connection, opened the first time it is needed.
+fn changing_connection(slot: &mut Option<Hypervisor>) -> Result<&Hypervisor, String> {
+    if slot.is_none() {
+        *slot = Some(Hypervisor::open().map_err(|e| e.to_string())?);
+    }
+    Ok(slot.as_ref().expect("opened above"))
 }
 
 /// Copies the OS's plugin in and signs it with `pm sign`, which makes the
@@ -226,17 +238,6 @@ fn set_up_plugin(
         .parent()
         .ok_or_else(|| format!("{} has no directory", installed.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
-    // The libvirt plugin this app set up before still answers for a
-    // machine's apps, through a libvirt that no longer has the machines.
-    // Only a plain file is the app's own copy: a link is Home Manager's
-    // (losos-desktop's `homeModules.pm`), and stays for it to take out.
-    for stale in [LIBVIRT_PLUGIN.to_owned(), format!("{LIBVIRT_PLUGIN}.sig")] {
-        let stale = dir.join(stale);
-        if std::fs::symlink_metadata(&stale).is_ok_and(|m| m.is_file()) {
-            std::fs::remove_file(&stale)
-                .map_err(|e| format!("cannot remove {}: {e}", stale.display()))?;
-        }
-    }
     // A copy, not a link: the signature covers these bytes, and an update
     // that changed the file under a link would leave pm refusing it.
     std::fs::copy(shipped, installed)
@@ -249,6 +250,11 @@ fn set_up_plugin(
 fn pm(args: &[String], events: &Sender<Event>) -> Result<(), String> {
     let mut child = Command::new("pm")
         .args(args)
+        // virsh, which pm's plugin runs, connects where this says. LosOS
+        // makes it the default for everyone; saying so here keeps a person
+        // whose environment says otherwise from making machines the
+        // desktop cannot see.
+        .env("LIBVIRT_DEFAULT_URI", URI)
         // Its lines are shown as they are, in the app rather than a
         // terminal: without this its log lines carry colour escapes.
         .env("NO_COLOR", "1")
@@ -323,8 +329,8 @@ mod tests {
             Some("no plugin manages machines here, so pm cannot create work")
         );
         assert_eq!(
-            complaint(&["Error: qemu-img failed".to_owned()]).as_deref(),
-            Some("qemu-img failed")
+            complaint(&["Error: virsh failed".to_owned()]).as_deref(),
+            Some("virsh failed")
         );
         assert_eq!(complaint(&["odd".to_owned()]).as_deref(), Some("odd"));
         assert_eq!(complaint(&[]), None);
