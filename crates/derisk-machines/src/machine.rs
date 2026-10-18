@@ -1,17 +1,11 @@
-use serde_json::Value;
+use crate::{Error, Label, METADATA_NAMESPACE, Result};
 
-use crate::{Error, Label, Result};
-
-/// Whether a machine runs.
-///
-/// quickemu tells only whether QEMU is there, so a machine is
-/// [`State::Running`] or [`State::Off`]; the rest are kept for what a
-/// desktop may come to know of a machine some other way.
+/// Whether a machine runs, as libvirt reports it.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum State {
     /// Running, or blocked waiting on the host, which to a person is running.
     Running,
-    /// Paused by a person; it holds its memory but runs nothing.
+    /// Paused by libvirt or a person; it holds its memory but runs nothing.
     Paused,
     /// Asked to shut down and on its way.
     ShuttingDown,
@@ -25,6 +19,20 @@ pub enum State {
 }
 
 impl State {
+    /// From libvirt's `virDomainState`, as `virDomainGetState` returns it.
+    pub fn from_libvirt(state: u32) -> State {
+        // VIR_DOMAIN_NOSTATE (0) is a domain libvirt has not looked at yet,
+        // which only happens to one that is starting.
+        match state {
+            0..=2 => State::Running,
+            3 => State::Paused,
+            4 => State::ShuttingDown,
+            6 => State::Crashed,
+            7 => State::Suspended,
+            _ => State::Off,
+        }
+    }
+
     /// Whether the machine has a QEMU process, and so can have windows.
     pub fn is_active(self) -> bool {
         matches!(
@@ -46,8 +54,8 @@ impl State {
     }
 }
 
-/// The template a machine was made from: a disk image pm copied in
-/// read-only, which the machine's own disk is layered on.
+/// The template a machine was made from: a disk image pm turned into a
+/// read-only base volume, which the machine's own disk is layered on.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct TemplateRef {
     /// The template's name, from its image's file name or the package.
@@ -57,13 +65,12 @@ pub struct TemplateRef {
     pub digest: String,
 }
 
-/// One of the user's machines, as derisk shows it.
+/// One libvirt domain, as derisk shows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Machine {
-    /// Its name, which is what pm and quickemu call it.
+    /// The domain's name, which is what pm and virsh call it.
     pub name: String,
-    /// Its UUID, which pm drew when it made it and which stays the same for
-    /// the machine's life.
+    /// The domain's UUID, which stays the same for the machine's life.
     pub uuid: String,
     /// The colour its windows are drawn in.
     pub label: Label,
@@ -72,9 +79,9 @@ pub struct Machine {
     /// The system it installed from CDs, when pm made it to install one
     /// (`pm machine create --installer`): `linux` or `windows`.
     pub system: Option<String>,
-    /// Whether it is seen through its screen rather than as windows on the
-    /// desktop: a machine installing from a CD is, for its installer, and a
-    /// Windows machine for its whole desktop.
+    /// Whether it has a screen of its own (a `<graphics>` device), which
+    /// a machine installing from a CD has for its installer, and a Windows
+    /// machine for its whole desktop.
     pub screen: bool,
     /// Memory it is given, in MiB.
     pub memory_mib: u64,
@@ -82,70 +89,100 @@ pub struct Machine {
     pub cpus: u32,
     /// Whether it runs.
     pub state: State,
-    /// Its vsock address while it runs. pm drew it when it made the
-    /// machine, QEMU gives it to the machine's device, and the guest cannot
-    /// change it, so it is how the desktop knows which machine a connection
-    /// came from.
+    /// Its vsock address while it runs. libvirt picks it when the machine
+    /// starts, and the guest cannot change it, so it is how the desktop
+    /// knows which machine a connection came from.
     pub cid: Option<u32>,
 }
 
 impl Machine {
-    /// Reads a machine from pm's record of it (`machine.json`, which pm's
-    /// quickemu plugin writes beside its disk), in the state its QEMU is in.
+    /// Reads a machine from its domain XML (`virsh dumpxml`), in the state
+    /// libvirt reports separately.
     ///
-    /// The vsock address is kept only while the machine
-    /// [`State::is_active`]: it is how a connection is told to be the
-    /// machine's, and one that is off sends none.
-    pub fn from_json(text: &str, state: State) -> Result<Machine> {
-        let record: Value = serde_json::from_str(text).map_err(|e| Error::Definition {
+    /// The live XML of a running machine carries its vsock address; the
+    /// inactive XML does not, and an address is only kept while the machine
+    /// is [`State::is_active`].
+    pub fn from_xml(xml: &str, state: State) -> Result<Machine> {
+        let document = roxmltree::Document::parse(xml).map_err(|e| Error::Definition {
             name: "a machine".into(),
             reason: e.to_string(),
         })?;
-        let string = |key: &str| record[key].as_str().map(str::to_owned);
-        let name = string("name").unwrap_or_default();
+        let domain = document.root_element();
+        let child = |name: &str| domain.children().find(|n| n.has_tag_name(name));
+        let text = |name: &str| child(name).and_then(|n| n.text()).map(str::trim);
+
+        let name = text("name").unwrap_or_default().to_owned();
         let broken = |reason: &str| Error::Definition {
             name: name.clone(),
             reason: reason.into(),
         };
         if name.is_empty() {
-            return Err(broken("it has no name"));
+            return Err(broken("it has no <name>"));
         }
-        let uuid = string("uuid").ok_or_else(|| broken("it has no uuid"))?;
+        let uuid = text("uuid").ok_or_else(|| broken("it has no <uuid>"))?;
+
+        let ours = child("metadata").and_then(|metadata| {
+            metadata
+                .children()
+                .find(|n| n.has_tag_name((METADATA_NAMESPACE, "machine")))
+        });
+        let ours_child = |name: &str| {
+            ours.and_then(|machine| {
+                machine
+                    .children()
+                    .find(|n| n.has_tag_name((METADATA_NAMESPACE, name)))
+            })
+        };
         // A label this version does not know (a newer pm's) is drawn gray
         // rather than refusing the whole machine.
-        let label = record["label"]
-            .as_str()
-            .and_then(|label| label.parse().ok())
+        let label = ours_child("label")
+            .and_then(|n| n.text())
+            .and_then(|t| t.trim().parse().ok())
             .unwrap_or_default();
-        let template = record["template"].as_object().and_then(|template| {
+        let template = ours_child("template").and_then(|n| {
             Some(TemplateRef {
-                name: template.get("name")?.as_str()?.to_owned(),
-                digest: template.get("digest")?.as_str()?.to_owned(),
+                name: n.attribute("name")?.to_owned(),
+                digest: n.attribute("digest")?.to_owned(),
             })
         });
-        let system = string("system").filter(|system| !system.is_empty());
-        let memory_mib = record["memory_mib"]
-            .as_u64()
-            .ok_or_else(|| broken("its memory is not a number"))?;
-        let cpus = record["cpus"]
-            .as_u64()
-            .and_then(|cpus| u32::try_from(cpus).ok())
-            .unwrap_or(1);
+
+        let system = ours_child("system")
+            .and_then(|n| n.text())
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty());
+        let screen = child("devices")
+            .is_some_and(|devices| devices.children().any(|n| n.has_tag_name("graphics")));
+
+        let memory = child("memory").ok_or_else(|| broken("it has no <memory>"))?;
+        let amount: u64 = memory
+            .text()
+            .and_then(|t| t.trim().parse().ok())
+            .ok_or_else(|| broken("its <memory> is not a number"))?;
+        let memory_mib = to_mib(amount, memory.attribute("unit").unwrap_or("KiB"))
+            .ok_or_else(|| broken("its <memory> has a unit libvirt does not use"))?;
+        let cpus = text("vcpu").and_then(|t| t.parse().ok()).unwrap_or(1);
+
         let cid = state
             .is_active()
             .then(|| {
-                record["cid"]
-                    .as_u64()
-                    .and_then(|cid| u32::try_from(cid).ok())
+                child("devices")?
+                    .children()
+                    .find(|n| n.has_tag_name("vsock"))?
+                    .children()
+                    .find(|n| n.has_tag_name("cid"))?
+                    .attribute("address")?
+                    .parse()
+                    .ok()
             })
             .flatten();
+
         Ok(Machine {
+            uuid: uuid.to_owned(),
             name,
-            uuid,
             label,
             template,
             system,
-            screen: record["screen"].as_bool().unwrap_or(false),
+            screen,
             memory_mib,
             cpus,
             state,
@@ -165,28 +202,58 @@ impl Machine {
     }
 }
 
+/// libvirt's memory units (`formatdomain.html#memory-allocation`), in MiB.
+fn to_mib(amount: u64, unit: &str) -> Option<u64> {
+    let bytes: u128 = match unit {
+        "b" | "bytes" => 1,
+        "KB" => 1_000,
+        "k" | "KiB" => 1 << 10,
+        "MB" => 1_000_000,
+        "M" | "MiB" => 1 << 20,
+        "GB" => 1_000_000_000,
+        "G" | "GiB" => 1 << 30,
+        "TB" => 1_000_000_000_000,
+        "T" | "TiB" => 1 << 40,
+        _ => return None,
+    };
+    u64::try_from(u128::from(amount) * bytes / (1 << 20)).ok()
+}
+
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
 
-    /// What pm's quickemu plugin writes for a machine made from a template.
-    pub(crate) const RECORD_JSON: &str = r#"{
-  "name": "work",
-  "uuid": "6b1f4b6e-0c1e-4b2a-9d0e-6f6f8a0c2d11",
-  "label": "blue",
-  "template": {"name": "losos-guest", "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"},
-  "system": null,
-  "media": [],
-  "screen": false,
-  "memory_mib": 2048,
-  "cpus": 2,
-  "cid": 66054
-}
-"#;
+    /// What `virsh dumpxml` gives for a running machine pm made, trimmed to
+    /// what this crate reads plus enough around it to be realistic.
+    const RUNNING: &str = r#"<domain type='kvm' id='4'>
+  <name>work</name>
+  <uuid>6b1f4b6e-0c1e-4b2a-9d0e-6f6f8a0c2d11</uuid>
+  <title>blue, from losos-guest</title>
+  <metadata>
+    <pm:machine xmlns:pm="https://losos-project.github.io/xmlns/pm-machine/1">
+      <pm:label>blue</pm:label>
+      <pm:template name="losos-guest" digest="9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"/>
+    </pm:machine>
+  </metadata>
+  <memory unit='KiB'>2097152</memory>
+  <currentMemory unit='KiB'>2097152</currentMemory>
+  <vcpu placement='static'>2</vcpu>
+  <devices>
+    <emulator>/run/libvirt/nix-emulators/qemu-system-x86_64</emulator>
+    <disk type='volume' device='disk'>
+      <source pool='default' volume='pm-machine-work.qcow2'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <vsock model='virtio'>
+      <cid auto='yes' address='3'/>
+      <alias name='vsock0'/>
+    </vsock>
+  </devices>
+</domain>"#;
 
     #[test]
     fn reads_a_running_machine() {
-        let machine = Machine::from_json(RECORD_JSON, State::Running).unwrap();
+        let machine = Machine::from_xml(RUNNING, State::Running).unwrap();
         assert_eq!(machine.name, "work");
         assert_eq!(machine.uuid, "6b1f4b6e-0c1e-4b2a-9d0e-6f6f8a0c2d11");
         assert_eq!(machine.label, Label::Blue);
@@ -196,63 +263,96 @@ pub(crate) mod tests {
         );
         assert_eq!(machine.memory_mib, 2048);
         assert_eq!(machine.cpus, 2);
-        assert_eq!(machine.cid, Some(66054));
+        assert_eq!(machine.cid, Some(3));
         assert!(machine.from_pm());
-        assert!(!machine.screen && !machine.is_windows());
     }
 
     #[test]
     fn reads_a_windows_machine_with_a_screen() {
-        let json = RECORD_JSON
+        let xml = RUNNING
             .replace(
-                r#"{"name": "losos-guest", "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}"#,
-                "null",
+                r#"<pm:template name="losos-guest" digest="9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"/>"#,
+                "<pm:system>windows</pm:system><pm:media name='win11' digest='aa'/>",
             )
-            .replace(r#""system": null"#, r#""system": "windows""#)
-            .replace(r#""screen": false"#, r#""screen": true"#)
-            .replace(r#""cid": 66054"#, r#""cid": null"#);
-        let machine = Machine::from_json(&json, State::Running).unwrap();
+            .replace(
+                "<vsock model='virtio'>",
+                "<graphics type='spice'><listen type='none'/></graphics><vsock model='virtio'>",
+            );
+        let machine = Machine::from_xml(&xml, State::Running).unwrap();
         assert_eq!(machine.template, None);
         assert_eq!(machine.system.as_deref(), Some("windows"));
         assert!(machine.is_windows());
         assert!(machine.screen);
         assert!(machine.from_pm());
-        assert_eq!(machine.cid, None);
+        let template = Machine::from_xml(RUNNING, State::Running).unwrap();
+        assert!(!template.screen && !template.is_windows());
     }
 
     #[test]
     fn a_stopped_machine_has_no_address() {
-        // The record keeps the address for the machine's life; it is not
-        // the machine's to send from while it is off.
-        let machine = Machine::from_json(RECORD_JSON, State::Off).unwrap();
+        // libvirt can leave the last address in the XML; it is not the
+        // machine's while it is off, and another machine may have it now.
+        let machine = Machine::from_xml(RUNNING, State::Off).unwrap();
         assert_eq!(machine.cid, None);
     }
 
     #[test]
+    fn a_domain_pm_did_not_make_is_gray() {
+        let xml = "<domain type='kvm'><name>win11</name><uuid>u</uuid>\
+                   <memory>4194304</memory><devices/></domain>";
+        let machine = Machine::from_xml(xml, State::Off).unwrap();
+        assert_eq!(machine.label, Label::Gray);
+        assert_eq!(machine.template, None);
+        assert_eq!(machine.memory_mib, 4096);
+        assert_eq!(machine.cpus, 1);
+        assert!(!machine.from_pm());
+    }
+
+    #[test]
+    fn metadata_in_another_namespace_is_not_ours() {
+        let xml = RUNNING.replace(
+            "https://losos-project.github.io/xmlns/pm-machine/1",
+            "https://example.org/other",
+        );
+        let machine = Machine::from_xml(&xml, State::Running).unwrap();
+        assert_eq!(machine.label, Label::Gray);
+        assert_eq!(machine.template, None);
+    }
+
+    #[test]
     fn an_unknown_label_is_gray() {
-        let json = RECORD_JSON.replace(r#""label": "blue""#, r#""label": "teal""#);
-        let machine = Machine::from_json(&json, State::Running).unwrap();
+        let xml = RUNNING.replace("<pm:label>blue", "<pm:label>teal");
+        let machine = Machine::from_xml(&xml, State::Running).unwrap();
         assert_eq!(machine.label, Label::Gray);
     }
 
     #[test]
-    fn broken_records_are_errors() {
-        assert!(Machine::from_json("{", State::Off).is_err());
-        assert!(Machine::from_json(r#"{"uuid": "u", "memory_mib": 1}"#, State::Off).is_err());
-        let no_uuid = r#"{"name": "a", "memory_mib": 1}"#;
+    fn memory_units() {
+        let xml = RUNNING.replace("<memory unit='KiB'>2097152", "<memory unit='GiB'>3");
+        assert_eq!(
+            Machine::from_xml(&xml, State::Off).unwrap().memory_mib,
+            3072
+        );
+        let xml = RUNNING.replace("<memory unit='KiB'>", "<memory unit='parsecs'>");
+        assert!(Machine::from_xml(&xml, State::Off).is_err());
+    }
+
+    #[test]
+    fn broken_definitions_are_errors() {
+        assert!(Machine::from_xml("<domain>", State::Off).is_err());
+        assert!(Machine::from_xml("<domain><uuid>u</uuid></domain>", State::Off).is_err());
+        let no_uuid = "<domain><name>a</name><memory>1</memory></domain>";
         assert!(matches!(
-            Machine::from_json(no_uuid, State::Off),
+            Machine::from_xml(no_uuid, State::Off),
             Err(Error::Definition { name, .. }) if name == "a"
         ));
-        let no_memory = r#"{"name": "a", "uuid": "u"}"#;
-        assert!(Machine::from_json(no_memory, State::Off).is_err());
     }
 
     #[test]
     fn states() {
-        assert!(State::Running.is_active());
-        assert!(State::Paused.is_active());
-        assert!(!State::Off.is_active());
-        assert!(!State::Crashed.is_active());
+        assert_eq!(State::from_libvirt(1), State::Running);
+        assert_eq!(State::from_libvirt(5), State::Off);
+        assert!(State::from_libvirt(3).is_active());
+        assert!(!State::from_libvirt(6).is_active());
     }
 }
