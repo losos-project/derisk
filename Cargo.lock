@@ -1860,6 +1860,7 @@ dependencies = [
 name = "derisk-files"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
  "derisk-sys",
  "libc",
