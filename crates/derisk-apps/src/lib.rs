@@ -261,6 +261,7 @@ fn settings_action(action: &str) -> Option<Box<dyn App>> {
         "wallpaper" => Page::Wallpaper,
         "top-bar" => Page::TopBar,
         "desktop" => Page::Desktop,
+        "assistant" => Page::Assistant,
         "input" => Page::Input,
         "shortcuts" => Page::Shortcuts,
         "network" => Page::Network,
