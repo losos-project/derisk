@@ -13,12 +13,7 @@ pub const TEMPLATE_DIR: &str = "losos/machines";
 /// Where under a data directory the OS keeps pm's plugins, unsigned.
 pub const PLUGIN_DIR: &str = "pm/plugins";
 
-/// The file name of pm's quickemu plugin, the one that manages machines.
-pub const QUICKEMU_PLUGIN: &str = "quickemu.wasm";
-
-/// The file name of pm's libvirt plugin, which managed machines before
-/// quickemu did. The app set it up the same way, so it takes its copy back
-/// out when it sets up the quickemu one (`worker.rs`).
+/// The file name of pm's libvirt plugin, the one that manages machines.
 pub const LIBVIRT_PLUGIN: &str = "libvirt.wasm";
 
 /// The extensions pm reads a template from: qcow2, or a raw disk.
@@ -72,7 +67,7 @@ pub fn templates(data_dirs: &[PathBuf]) -> Vec<Template> {
 /// when the OS's copy has moved on from theirs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Plugin {
-    /// The OS ships no quickemu plugin, so pm is set up some other way and
+    /// The OS ships no libvirt plugin, so pm is set up some other way and
     /// the app does not offer to set it up.
     NotShipped,
     /// The person has not installed it.
@@ -106,13 +101,13 @@ impl Plugin {
     pub fn find(data_dirs: &[PathBuf], plugins: &Path) -> Plugin {
         let Some(shipped) = data_dirs
             .iter()
-            .map(|dir| dir.join(PLUGIN_DIR).join(QUICKEMU_PLUGIN))
+            .map(|dir| dir.join(PLUGIN_DIR).join(LIBVIRT_PLUGIN))
             .find(|path| fs::is_file(path))
         else {
             return Plugin::NotShipped;
         };
-        let installed = plugins.join(QUICKEMU_PLUGIN);
-        let signature = plugins.join(format!("{QUICKEMU_PLUGIN}.sig"));
+        let installed = plugins.join(LIBVIRT_PLUGIN);
+        let signature = plugins.join(format!("{LIBVIRT_PLUGIN}.sig"));
         if !fs::is_file(&installed) {
             return Plugin::NotInstalled { shipped, installed };
         }
@@ -219,28 +214,28 @@ mod tests {
         );
 
         fs::create_dir_all(share.join(PLUGIN_DIR)).unwrap();
-        fs::write(share.join(PLUGIN_DIR).join(QUICKEMU_PLUGIN), "v1").unwrap();
+        fs::write(share.join(PLUGIN_DIR).join(LIBVIRT_PLUGIN), "v1").unwrap();
         let state = Plugin::find(std::slice::from_ref(&share), &mine);
         assert!(matches!(state, Plugin::NotInstalled { .. }));
         assert_eq!(
             state.paths().unwrap().1,
-            mine.join(QUICKEMU_PLUGIN).as_path()
+            mine.join(LIBVIRT_PLUGIN).as_path()
         );
 
         fs::create_dir_all(&mine).unwrap();
-        fs::write(mine.join(QUICKEMU_PLUGIN), "v1").unwrap();
+        fs::write(mine.join(LIBVIRT_PLUGIN), "v1").unwrap();
         assert!(matches!(
             Plugin::find(std::slice::from_ref(&share), &mine),
             Plugin::Unsigned { .. }
         ));
 
-        fs::write(mine.join("quickemu.wasm.sig"), "sig").unwrap();
+        fs::write(mine.join("libvirt.wasm.sig"), "sig").unwrap();
         assert_eq!(
             Plugin::find(std::slice::from_ref(&share), &mine),
             Plugin::Ready
         );
 
-        fs::write(share.join(PLUGIN_DIR).join(QUICKEMU_PLUGIN), "v2").unwrap();
+        fs::write(share.join(PLUGIN_DIR).join(LIBVIRT_PLUGIN), "v2").unwrap();
         assert!(matches!(
             Plugin::find(&[share], &mine),
             Plugin::Outdated { .. }

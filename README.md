@@ -129,7 +129,7 @@ source and widget, which no connection can take over: the palette offers
 "Start web", "Shut down work" and each running machine's apps ("Foot in
 work", `plugins/palette/machines`), and the overview gets a Machines card.
 A running machine with a screen of its own (one installing from a CD, or
-Windows) has that screen shown in a remote-viewer window on the machine's own
+Windows) has that screen shown in a virt-viewer window on the machine's own
 socket, so it is framed in the machine's colour like its apps; closing it
 hides it until the machine next starts or the palette's "Show work's
 screen" brings it back. A Windows machine is not asked for its apps, which
@@ -592,7 +592,7 @@ nothing but the workspace at the root:
 | `derisk-install` | The installer's backend protocol, locales and time zones, and the network. |
 | `derisk-login` | The greetd login protocol, the lock screen's state and the polkit dialog's. |
 | `derisk-portal` | `xdg-desktop-portal-derisk`. |
-| `derisk-machines` | The quickemu machines apps run in (labels, states, starting and stopping them, running programs in them) and the Machines app. |
+| `derisk-machines` | The libvirt machines apps run in (labels, states, starting and stopping them, running programs in them) and the Machines app. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
 | `derisk-terminal` | Terminal, the `derisk-terminal` binary, below. |
 | `derisk-index` | The file index the palette searches files' text in: the `derisk-index` user service and the session's client. |
@@ -620,8 +620,8 @@ in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
 | Text Editor | `derisk-editor` | UTF-8 files up to 8 MiB, atomic saves that keep permissions, find and replace, line/column, unsaved-change prompts. |
 | System Monitor | `derisk-monitor` | CPU graph, memory, swap, load, uptime, and a sortable, filterable process table with End process, from `/proc`. |
 | Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
-| Machines | `derisk-machines` | The quickemu machines apps run in, each in its label's colour: make one from a template the OS ships (through `pm machine create`), start, shut down, force off and remove them, open the apps a machine has, choose the machine apps you launch open in (`machines.open_apps_in` in `settings.conf`; derisk's own apps stay on the host), and set pm's quickemu plugin up with your own key. |
-| Store | `derisk-store` | Flathub's apps, sorted into categories and their sections from everything their AppStream data says (categories, additional categories, keywords, name and summary), searched, and installed, updated, opened and removed through flatpak: in the `flatpak` machine when you have one, on the computer itself otherwise. The front page leads with the updates waiting, your apps' release notes and then the newest release notes on Flathub. |
+| Machines | `derisk-machines` | The libvirt machines apps run in, each in its label's colour: make one from a template the OS ships (through `pm machine create`), start, shut down, force off and remove them, open the apps a machine has, choose the machine apps you launch open in (`machines.open_apps_in` in `settings.conf`; derisk's own apps stay on the host), and set pm's libvirt plugin up with your own key. |
+| Store | `derisk-store` | Flathub's apps, sorted into categories and their sections from everything their AppStream data says (categories, additional categories, keywords, name and summary), searched, and installed, updated, opened and removed through flatpak: in the `flatpak` machine when libvirt has one, on the computer itself otherwise. The front page leads with the updates waiting, your apps' release notes and then the newest release notes on Flathub. |
 
 `derisk-apps` lists them, registers them with `mcsapi-runtime`, and keeps the
 running app objects next to their instances (`derisk_apps::Session`), so the
