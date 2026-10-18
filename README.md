@@ -611,7 +611,10 @@ in a cycle (the shell's model, its egui drawing and the phone UI). A bare
 crates; `--workspace` adds the apps, the portal and GPUI.
 
 The core apps live under `crates/` too. Each app is an `mcsapi_ui::App` with its logic
-in a UI-free model and its own tests, and has an ID under `org.derisk.*`.
+in a UI-free model and its own tests, and has an ID under `org.derisk.*`. Every app draws
+in `derisk-frame`, the frame Settings was built in: pages in a sidebar (tabs
+on a phone), a header, cards, and an action bar, all coloured from the
+theme's tokens, so a theme restyles them together.
 
 | App | Crate | What it does |
 | --- | --- | --- |
