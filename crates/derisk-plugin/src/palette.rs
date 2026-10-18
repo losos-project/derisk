@@ -14,7 +14,7 @@
 //!   lists ([`Plugin::check`]).
 //!
 //! Apps, windows, menus, commands, workspaces, the session, the tray and
-//! failed units, the browser, files, the assistant, Sonne's agent and web
+//! failed units, the browser, files, the assistant, the Agent and web
 //! search are all bundled plugins, under `plugins/palette/`.
 
 use miette::Result;

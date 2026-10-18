@@ -1,0 +1,25 @@
+[package]
+name = "{{crate}}"
+version = "{{version}}"
+edition = "2024"
+license = "{{license}}"
+description = "{{summary}}"
+publish = false
+
+# derisk loads the plugin as a WebAssembly component, built for
+# wasm32-unknown-unknown and wrapped with `wasm-tools component new`.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The bindings for derisk's widget.wit and the card builders, from derisk
+# itself, so the plugin is built against the interface derisk ships.
+derisk-widget-sdk = { git = "https://github.com/losos-project/derisk" }
+
+# derisk compiles every plugin as the session starts: a small one starts
+# sooner, and a plugin that panics only has to trap.
+[profile.release]
+opt-level = "z"
+panic = "abort"
+strip = true
+lto = true

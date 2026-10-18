@@ -65,7 +65,7 @@ const PROCESSES: [Process; 18] = [
     process(1131, "WebKitWebProce", 18, 392_192, 0.11, 4.5),
     process(1132, "WebKitNetworkP", 6, 61_440, 0.01, 10.0),
     process(1290, "pm", 2, 24_576, 0.005, 15.0),
-    process(1414, "sonne", 31, 318_464, 0.06, 9.5),
+    process(1414, "derisk-agent", 31, 318_464, 0.06, 9.5),
 ];
 
 /// Ticks a process with average share `share` of one CPU, swinging by

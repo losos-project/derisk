@@ -388,9 +388,10 @@ const LAUNCHER_EXTENSIONS: &[&str] = &[
     "apk",
 ];
 
-/// The link that opens Sonne's agent panel with `text` as the prompt to send.
+/// The link that opens the Agent (`derisk-agent`) on a new chat with `text`
+/// typed in for the person to send.
 pub fn agent_url(text: &str) -> String {
-    let mut url = String::from("zed://agent?prompt=");
+    let mut url = String::from("derisk-agent:ask?prompt=");
     for byte in text.trim().bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
@@ -1491,8 +1492,9 @@ impl Shell {
                 return Ok(vec![Effect::PaletteCommand { source, command }]);
             }
             Action::AskAgent { text } => {
-                // Sonne registers the zed: scheme; xdg-open cannot read a
-                // URL that starts with it as an option.
+                // The Agent's desktop entry claims the derisk-agent: scheme,
+                // which hands the request to its open window or opens one;
+                // xdg-open cannot read a URL that starts with it as an option.
                 return Ok(vec![Effect::Open {
                     path: agent_url(&text),
                 }]);

@@ -1,6 +1,6 @@
 [package]
 name = "palette-agent"
-description = "derisk palette plugin: Handing a request the assistant cannot follow to Sonne's agent"
+description = "derisk palette plugin: Handing a request the assistant cannot follow to the Agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -301,7 +301,7 @@ fn unmatched_text_goes_to_the_assistant() {
     assert!(unknown.actions.is_empty());
     assert!(unknown.detail.contains("frobnicate"));
 
-    // ...and Sonne's agent is offered it instead, while requests the
+    // ...and the Agent is offered it instead, while requests the
     // assistant does follow stay its own.
     let agent = |q: &str| {
         palette::rows(&shell, q)

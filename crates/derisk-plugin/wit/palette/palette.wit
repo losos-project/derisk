@@ -55,7 +55,7 @@ interface types {
         ask,
         /// Search the web, or open an address.
         web,
-        /// Hand the request to the agent set up in Sonne.
+        /// Hand the request to the Agent (`derisk-agent`).
         agent,
         /// A tab of an app that registered its tabs (a browser).
         tab,

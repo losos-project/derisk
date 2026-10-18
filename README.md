@@ -155,12 +155,11 @@ anything a person can do an agent can do too, under the same rules.
   Try it from a terminal with `derisk ask open firefox and snap it left`.
 - **Agent protocol**: JSON lines over stdio or a Unix socket.
 - **MCP**: `derisk mcp` serves the same tools to MCP clients over stdio,
-  each call going to the running session. Sonne lists it as a context
-  server whenever `derisk` is installed, so its agent, with whichever model
-  key or agent CLI is set up in Sonne's settings, can drive the desktop.
+  each call going to the running session. The Agent (`derisk-agent`) hands
+  it to every chat, so the agent CLI it runs can drive the desktop.
   Requests the assistant does not understand are offered to that agent in
-  the palette ("Ask Sonne's agent"); they open in Sonne's agent panel for
-  the person to send.
+  the palette ("Ask the agent"); they open in a new chat for the person to
+  send.
 
 ```console
 $ derisk agent
@@ -588,6 +587,7 @@ nothing but the workspace at the root:
 | `derisk-machines` | The quickemu machines apps run in (labels, states, starting and stopping them, running programs in them) and the Machines app. |
 | `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
 | `derisk-terminal` | Terminal, the `derisk-terminal` binary, below. |
+| `derisk-agent`, `derisk-agent-preview` | Agent, the `derisk-agent` binary, and the live previews of the apps it builds, below. |
 | `derisk-index` | The file index the palette searches files' text in: the `derisk-index` user service and the session's client. |
 
 Each crate keeps everything it needs in its own directory (its README,
@@ -686,6 +686,40 @@ launcher that wants its own name and icon on the window) and
 $ cargo run -p derisk-terminal
 $ cargo run -p derisk-terminal -- htop
 $ cargo run -p derisk-terminal -- --app-id=org.example.Top --title=top htop
+```
+
+### Agent
+
+`derisk-agent` is a window for building software and changing the desktop
+with an agent, its own Wayland client (`org.derisk.agent`). It came from
+Sonne, the project's fork of Zed, when Sonne left LosOS: its agent window,
+project setup, skills and live previews moved here, and the editor did not.
+
+- **Chats** run Claude Code (`claude -p`, or `DERISK_AGENT_CLAUDE`) in a
+  project's folders, with the project's instructions, its MCP servers, the
+  Agent's own tools (`derisk-agent mcp`: previews, pm, Nix, derisk, the
+  forge) and `derisk mcp`. Projects, chats, routines and artifacts are JSON
+  under `$XDG_DATA_HOME/derisk-agent`.
+- **Skills**: create-skill, customize-desktop and reduce-online-fingerprint
+  are compiled in and handed to each turn as a Claude Code plugin
+  (`--plugin-dir`), listed as `derisk:<name>`.
+- **Project setup** asks what to build (a WASM app, a palette or overview
+  plugin, a pm recipe, ...), writes the starter files, and starts the chat
+  with a prompt made of the answers.
+- **Previews**: an app the agent builds draws with egui through
+  `derisk-agent-preview` and shows live in the right-hand pane, a
+  `wasm32-wasip2` one sandboxed with stdio and nothing else
+  (`derisk-agent preview-wasm`).
+- **Routines** are prompts on a schedule, as systemd user timers that run
+  `derisk-agent routine run <id>`.
+- **Ask the agent**: the palette offers requests the built-in assistant
+  does not follow to the Agent; the row opens a `derisk-agent:ask?prompt=`
+  link, which the desktop entry claims, and the request waits in a new chat
+  for the person to send.
+
+```console
+$ cargo run -p derisk-agent
+$ cargo run -p derisk-agent -- --ask "make the bar transparent"
 ```
 
 ## Building
