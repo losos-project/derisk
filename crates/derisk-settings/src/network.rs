@@ -1,12 +1,12 @@
 //! The Network page: whether the machine is online, each wired port, the
 //! Wi-Fi networks in range and the ones joined before.
 //!
-//! First-boot setup joins one network through wpa_supplicant and saves it;
+//! First-boot setup joins one network through NetworkManager and saves it;
 //! this page is where every one after it is joined, and where a saved one
 //! is forgotten. It draws from the same thread the setup's Network page does
 //! ([`derisk_install::wifi`]), started when the page is first shown, and
 //! applies at once, like the Sign-in page, since none of it is derisk's own
-//! setting: wpa_supplicant writes what it knows to its own configuration.
+//! setting: NetworkManager keeps the connections itself.
 
 use derisk_install::{
     network::{Network, WiredState},
@@ -57,13 +57,13 @@ pub fn detail(network: &Network, status: &Status) -> String {
     parts.join(" · ")
 }
 
-/// Signal strength in words. The setup pages draw bars with block
-/// characters, which the Settings app's font does not have.
-fn signal(dbm: i32) -> &'static str {
-    match dbm {
-        d if d >= -55 => "Strong signal",
-        d if d >= -67 => "Good signal",
-        d if d >= -78 => "Fair signal",
+/// Signal strength, 0 to 100, in words, at the setup pages' bars. Those
+/// are block characters, which the Settings app's font does not have.
+fn signal(signal: u8) -> &'static str {
+    match signal {
+        81.. => "Strong signal",
+        56.. => "Good signal",
+        31.. => "Fair signal",
         _ => "Weak signal",
     }
 }
@@ -169,7 +169,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
                 if ui.button("Forget").clicked()
                     && let Some(wifi) = &state.wifi
                 {
-                    wifi.forget(saved.id);
+                    wifi.forget(saved.id.clone());
                 }
             });
         }
@@ -206,7 +206,7 @@ fn picked_ui(ui: &mut egui::Ui, state: &mut NetworkUi, status: &Status, network:
         if let Some(saved) = saved
             && ui.button("Forget").clicked()
         {
-            wifi.forget(saved.id);
+            wifi.forget(saved.id.clone());
         }
         if joining {
             ui.spinner();

@@ -1,14 +1,16 @@
 //! The network, watched from a thread of its own: whether the machine is
 //! online, what each wired port is doing, the Wi-Fi networks in range and
-//! the ones wpa_supplicant knows. The installer's and first-boot setup's
-//! Network page and the Settings app's Network page both draw from it.
+//! the ones saved. The installer's and first-boot setup's Network page and
+//! the Settings app's Network page both draw from it.
 //!
-//! The talking to networkd's files and wpa_supplicant happens on that thread
-//! (see [`crate::network`]), so a slow or restarting daemon never holds up a
+//! The talking to NetworkManager happens on that thread (see
+//! [`crate::network`]), so a slow or restarting daemon never holds up a
 //! frame; a page reads the latest [`Status`] it published.
 
 use std::{
-    path::Path,
+    collections::HashMap,
+    io::Read,
+    process::Child,
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
@@ -17,45 +19,42 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::network::{self, Control, Network, Saved, Wired};
+use crate::network::{self, Network, Saved, Wired};
 
 /// How long a scan is given before its results are final.
 const SCAN_TIME: Duration = Duration::from_secs(4);
-/// Association, the handshake and DHCP together. A wrong passphrase looks
-/// like a handshake that never completes, so this is also how long it takes
-/// to say so.
-const CONNECT_TIME: Duration = Duration::from_secs(30);
-/// How often the worker looks again.
-const POLL: Duration = Duration::from_millis(500);
+/// How often the worker looks again. Every look runs nmcli a few times, so
+/// it is less often than a frame and often enough to follow a join.
+const POLL: Duration = Duration::from_secs(1);
 
 /// What the worker last saw.
 #[derive(Clone, Debug, Default)]
 pub struct Status {
-    /// Whether some link is routable.
+    /// Whether the machine reaches beyond its own networks.
     pub online: bool,
     /// The wired ports.
     pub wired: Vec<Wired>,
     /// The Wi-Fi interface, if there is one.
     pub interface: Option<String>,
-    /// Whether wpa_supplicant answers on it.
+    /// Whether it can scan and join.
     pub wifi_ready: bool,
     /// Networks in range, strongest first.
     pub networks: Vec<Network>,
-    /// Networks wpa_supplicant knows, in its order.
+    /// The saved Wi-Fi connections.
     pub saved: Vec<Saved>,
     /// Whether a scan is still running.
     pub scanning: bool,
     /// The network being joined.
     pub joining: Option<String>,
-    /// The network wpa_supplicant is associated with.
+    /// The network the Wi-Fi interface is joined to.
     pub connected: Option<String>,
     /// The last thing that went wrong, as a sentence.
     pub message: Option<String>,
 }
 
 impl Status {
-    /// The known network with `ssid`, if wpa_supplicant has one, so a page
-    /// can join it again without asking for its passphrase.
+    /// The saved connection for `ssid`, if there is one, so a page can join
+    /// it again without asking for its passphrase.
     pub fn saved(&self, ssid: &[u8]) -> Option<&Saved> {
         self.saved.iter().find(|s| s.ssid == ssid)
     }
@@ -64,7 +63,7 @@ impl Status {
 enum Order {
     Scan,
     Join(Network, String),
-    Forget(u32),
+    Forget(String),
 }
 
 /// The network, watched from a thread of its own.
@@ -80,10 +79,9 @@ impl std::fmt::Debug for Wifi {
 }
 
 impl Wifi {
-    /// Starts watching. With `save`, a network joined or forgotten is
-    /// written to wpa_supplicant's configuration so the installed system
-    /// sees the change after a reboot; a live installer has nothing to save
-    /// it to.
+    /// Starts watching. With `save`, a network joined is kept by
+    /// NetworkManager across reboots; a live installer has nothing to keep
+    /// it on.
     pub fn start(save: bool) -> Self {
         let status = Arc::new(Mutex::new(Status::default()));
         let (orders, rx) = mpsc::channel();
@@ -111,25 +109,42 @@ impl Wifi {
         let _ = self.orders.send(Order::Join(network, passphrase));
     }
 
-    /// Forgets the saved network `id`, and its passphrase with it.
-    pub fn forget(&self, id: u32) {
+    /// Forgets the saved connection `id`, and its passphrase with it.
+    pub fn forget(&self, id: String) {
         let _ = self.orders.send(Order::Forget(id));
     }
 }
 
 struct Joining {
     name: String,
-    id: u32,
-    /// Whether the network was saved before this join, so a failed join
+    ssid: Vec<u8>,
+    uuid: String,
+    /// Whether the connection was saved before this join, so a failed join
     /// leaves it saved instead of removing it.
     existing: bool,
-    since: Instant,
+    /// `nmcli connection up`, which ends when the join worked or failed.
+    child: Child,
+}
+
+/// The sentence for a failed nmcli call. NetworkManager's polkit rule lets
+/// the networkmanager group change networks; setup runs as root.
+fn say(error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        "This account may not change Wi-Fi networks. It needs to be in the \
+         networkmanager group."
+            .into()
+    } else {
+        error.to_string()
+    }
 }
 
 fn worker(shared: &Mutex<Status>, orders: &Receiver<Order>, save: bool) {
-    let mut control: Option<Control> = None;
     let mut scan_since: Option<Instant> = None;
     let mut joining: Option<Joining> = None;
+    // SSIDs of saved connections by UUID: reading one is a call of its own,
+    // and a connection's SSID does not change.
+    let mut ssids: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut scanned_first = false;
     loop {
         let order = match orders.recv_timeout(POLL) {
             Ok(order) => Some(order),
@@ -137,126 +152,103 @@ fn worker(shared: &Mutex<Status>, orders: &Receiver<Order>, save: bool) {
             Err(RecvTimeoutError::Disconnected) => return,
         };
         let mut status = shared.lock().map(|s| s.clone()).unwrap_or_default();
-        status.online = network::online(Path::new(network::NETIF_STATE));
-        status.wired = network::wired(
-            Path::new(network::SYS_CLASS_NET),
-            Path::new(network::NETIF_LINKS),
-        );
+        status.online = network::nmcli(&["-f", "STATE", "general"])
+            .is_ok_and(|general| network::parse_online(&general));
+        let devices = network::nmcli(&["-f", "DEVICE,TYPE,STATE", "device"])
+            .map(|text| network::parse_devices(&text))
+            .unwrap_or_default();
+        status.wired = network::wired(&devices);
+        let wifi = network::wifi_device(&devices).cloned();
+        status.interface = wifi.as_ref().map(|d| d.name.clone());
+        status.wifi_ready = wifi.as_ref().is_some_and(|d| network::wifi_ready(&d.state));
 
-        if control.is_none() {
-            status.interface = network::interfaces(Path::new(network::SYS_CLASS_NET))
-                .into_iter()
-                .next();
-            // wpa_supplicant makes its socket a moment after the interface
-            // appears, so this is tried again every poll until it is there.
-            control = match status.interface.as_deref().map(Control::open) {
-                Some(Ok(c)) => Some(c),
-                // The socket is wpa_supplicant's group's alone. Setup runs
-                // as root; a session reaches it only through that group.
-                Some(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                    status.message = Some(
-                        "This account may not change Wi-Fi networks. It needs to be \
-                         in the wpa_supplicant group."
-                            .into(),
-                    );
-                    None
-                }
-                _ => None,
-            };
-            if let Some(c) = &control
-                && c.request("SCAN").is_ok()
-            {
+        // Joins and forgets change the saved connections; they are read
+        // again after one.
+        let mut changed = order.is_some();
+        let known = saved(&mut ssids);
+        if let Some(device) = wifi.as_ref().filter(|_| status.wifi_ready) {
+            let interface = device.name.as_str();
+            if !scanned_first {
+                scanned_first = true;
+                rescan(interface);
                 scan_since = Some(Instant::now());
             }
-        }
-        // NixOS restarts wpa_supplicant whenever a wireless interface comes
-        // or goes, and the restarted daemon listens on a new socket.
-        if control.as_ref().is_some_and(|c| c.request("PING").is_err()) {
-            control = None;
-            joining = None;
-        }
-        status.wifi_ready = control.is_some();
-
-        if let Some(c) = &control {
-            let saved = c.saved().unwrap_or_default();
             match order {
-                // A reply of FAIL-BUSY means a scan is already running,
-                // which serves as well.
+                // A refusal to scan again so soon after the last scan
+                // leaves that scan's results, which serve as well.
                 Some(Order::Scan) => {
-                    let _ = c.request("SCAN");
+                    rescan(interface);
                     scan_since = Some(Instant::now());
                 }
                 Some(Order::Join(network, passphrase)) => {
-                    if let Some(old) = joining.take()
-                        && !old.existing
-                    {
-                        let _ = c.forget(old.id);
+                    if let Some(old) = joining.take() {
+                        abandon(old);
                     }
-                    let known = saved
-                        .iter()
-                        .find(|s| s.ssid == network.ssid)
-                        .filter(|_| passphrase.is_empty());
-                    let started = match known {
-                        Some(known) => c.select(known.id).map(|()| (known.id, true)),
-                        None => c.connect(&network, &passphrase).map(|id| (id, false)),
-                    };
-                    match started {
-                        Ok((id, existing)) => {
+                    match start_join(&network, &passphrase, interface, &known, save) {
+                        Ok(j) => {
                             status.message = None;
-                            joining = Some(Joining {
-                                name: network.name(),
-                                id,
-                                existing,
-                                since: Instant::now(),
-                            });
+                            joining = Some(j);
                         }
-                        Err(e) => status.message = Some(e.to_string()),
+                        Err(e) => status.message = Some(say(&e)),
                     }
                 }
                 Some(Order::Forget(id)) => {
-                    let forgotten = c
-                        .forget(id)
-                        .and_then(|()| if save { c.save() } else { Ok(()) });
-                    if let Err(e) = forgotten {
-                        status.message = Some(e.to_string());
+                    if let Err(e) = network::nmcli(&["connection", "delete", "uuid", &id]) {
+                        status.message = Some(say(&e));
                     }
                 }
                 None => {}
             }
-            if scan_since.is_some()
-                && let Ok(reply) = c.request("SCAN_RESULTS")
-            {
-                status.networks = network::parse_scan_results(&reply);
+            if let Ok(list) = network::nmcli(&[
+                "-f",
+                "IN-USE,SSID-HEX,SIGNAL,SECURITY",
+                "device",
+                "wifi",
+                "list",
+                "ifname",
+                interface,
+                "--rescan",
+                "no",
+            ]) {
+                let (networks, in_use) = network::parse_wifi_list(&list);
+                status.networks = networks;
+                status.connected = in_use.map(|ssid| String::from_utf8_lossy(&ssid).into_owned());
             }
             if scan_since.is_some_and(|t| t.elapsed() > SCAN_TIME) {
                 scan_since = None;
             }
-            let wpa = c.status().unwrap_or_default();
-            let get = |key: &str| wpa.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
-            status.connected = (get("wpa_state").as_deref() == Some("COMPLETED"))
-                .then(|| {
-                    get("ssid")
-                        .map(|s| String::from_utf8_lossy(&network::decode_ssid(&s)).into_owned())
-                })
-                .flatten();
-            if let Some(j) = &joining {
-                if status.connected.as_deref() == Some(j.name.as_str()) {
-                    finish(c, j, save, &mut status);
-                    joining = None;
-                } else if j.since.elapsed() > CONNECT_TIME {
-                    if !j.existing {
-                        let _ = c.forget(j.id);
-                    }
-                    let _ = c.enable_all();
-                    status.message = Some(format!(
+        } else {
+            status.networks.clear();
+            status.connected = None;
+        }
+
+        if let Some(j) = joining.as_mut()
+            && let Ok(Some(exit)) = j.child.try_wait()
+        {
+            let j = joining.take().expect("just matched");
+            changed = true;
+            if exit.success() {
+                finish(&j, &known);
+            } else {
+                let mut reason = String::new();
+                if let Some(mut err) = j.child.stderr {
+                    let _ = err.read_to_string(&mut reason);
+                }
+                if !j.existing {
+                    let _ = network::nmcli(&["connection", "delete", "uuid", &j.uuid]);
+                }
+                let reason = network::nmcli_error(&reason);
+                status.message = Some(if reason.kind() == std::io::ErrorKind::PermissionDenied {
+                    say(&reason)
+                } else {
+                    format!(
                         "Could not join {}. Check the passphrase and try again.",
                         j.name
-                    ));
-                    joining = None;
-                }
+                    )
+                });
             }
-            status.saved = c.saved().unwrap_or_default();
         }
+        status.saved = if changed { saved(&mut ssids) } else { known };
         status.scanning = scan_since.is_some();
         status.joining = joining.as_ref().map(|j| j.name.clone());
         if let Ok(mut s) = shared.lock() {
@@ -265,23 +257,102 @@ fn worker(shared: &Mutex<Status>, orders: &Receiver<Order>, save: bool) {
     }
 }
 
-/// A join went through: the other saved networks become candidates again,
-/// an older entry for the same network gives way to the one whose
-/// passphrase just worked, and with `save` the result is written down.
-fn finish(c: &Control, joined: &Joining, save: bool, status: &mut Status) {
-    let _ = c.enable_all();
-    let saved = c.saved().unwrap_or_default();
-    let ssid = saved
+/// Asks the Wi-Fi interface to scan; a refusal (a scan just ran) is fine.
+fn rescan(interface: &str) {
+    let _ = network::nmcli(&["device", "wifi", "rescan", "ifname", interface]);
+}
+
+/// The saved Wi-Fi connections, with each one's SSID from `ssids` or read
+/// once into it.
+fn saved(ssids: &mut HashMap<String, Vec<u8>>) -> Vec<Saved> {
+    let connections = network::nmcli(&["-f", "UUID,TYPE,ACTIVE", "connection", "show"])
+        .map(|text| network::parse_connections(&text))
+        .unwrap_or_default();
+    ssids.retain(|uuid, _| connections.iter().any(|(u, _)| u == uuid));
+    connections
+        .into_iter()
+        .filter_map(|(id, current)| {
+            if !ssids.contains_key(&id) {
+                let ssid = network::nmcli(&[
+                    "-g",
+                    "802-11-wireless.ssid",
+                    "connection",
+                    "show",
+                    "uuid",
+                    &id,
+                ])
+                .ok()?;
+                ssids.insert(id.clone(), ssid.trim_end_matches('\n').as_bytes().to_vec());
+            }
+            Some(Saved {
+                ssid: ssids[&id].clone(),
+                id,
+                current,
+            })
+        })
+        .collect()
+}
+
+/// Starts joining `network`: a saved connection is brought up as it is when
+/// no passphrase is given, and otherwise a new one is added for it and
+/// brought up with `passphrase`.
+fn start_join(
+    network: &Network,
+    passphrase: &str,
+    interface: &str,
+    saved: &[Saved],
+    save: bool,
+) -> std::io::Result<Joining> {
+    let known = saved
         .iter()
-        .find(|s| s.id == joined.id)
-        .map(|s| s.ssid.clone());
+        .find(|s| s.ssid == network.ssid)
+        .filter(|_| passphrase.is_empty());
+    let (uuid, existing, secret) = match known {
+        Some(known) => (known.id.clone(), true, None),
+        None => {
+            let (settings, secret) = network.security.settings(passphrase)?;
+            let args = network::add_args(network, interface, &settings, save);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let added = network::nmcli(&args)?;
+            let uuid = network::parse_added(&added)
+                .ok_or_else(|| std::io::Error::other(format!("nmcli said {}", added.trim())))?;
+            (uuid, false, secret)
+        }
+    };
+    match network::bring_up(&uuid, secret.as_deref()) {
+        Ok(child) => Ok(Joining {
+            name: network.name(),
+            ssid: network.ssid.clone(),
+            uuid,
+            existing,
+            child,
+        }),
+        Err(e) => {
+            if !existing {
+                let _ = network::nmcli(&["connection", "delete", "uuid", &uuid]);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// A join replaced by another before it finished: stopped, and its new
+/// connection removed.
+fn abandon(mut old: Joining) {
+    let _ = old.child.kill();
+    let _ = old.child.wait();
+    if !old.existing {
+        let _ = network::nmcli(&["connection", "delete", "uuid", &old.uuid]);
+    }
+}
+
+/// A join went through: an older connection for the same network gives way
+/// to the one whose passphrase just worked.
+fn finish(joined: &Joining, saved: &[Saved]) {
     for stale in saved
         .iter()
-        .filter(|s| s.id != joined.id && Some(&s.ssid) == ssid.as_ref())
+        .filter(|s| s.id != joined.uuid && s.ssid == joined.ssid)
     {
-        let _ = c.forget(stale.id);
-    }
-    if save && let Err(e) = c.save() {
-        status.message = Some(format!("Joined, but not saved: {e}"));
+        let _ = network::nmcli(&["connection", "delete", "uuid", &stale.id]);
     }
 }

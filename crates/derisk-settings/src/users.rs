@@ -749,7 +749,7 @@ mod tests {
     // Shaped as userdbctl prints homed's records: the service and the home
     // area's state are in the status section, under the machine ID.
     const USERDB: &str = "\u{1e}{\"userName\":\"ada\",\"realName\":\"Ada Lovelace\",\
-        \"memberOf\":[\"wheel\",\"wpa_supplicant\"],\"status\":{\"4d25\":\
+        \"memberOf\":[\"wheel\",\"networkmanager\"],\"status\":{\"4d25\":\
         {\"state\":\"inactive\",\"service\":\"io.systemd.Home\"}}}\n\
         \u{1e}{\"userName\":\"bob\",\"realName\":\"Bob\",\"status\":{\"4d25\":\
         {\"state\":\"active\",\"service\":\"io.systemd.Home\"}}}\n\
@@ -784,8 +784,8 @@ mod tests {
     fn the_role_changes_only_wheel() {
         let people = parse_people(USERDB, &[]);
         let ada = &people[0];
-        assert_eq!(ada.groups_with_admin(false), ["wpa_supplicant"]);
-        assert_eq!(ada.groups_with_admin(true), ["wheel", "wpa_supplicant"]);
+        assert_eq!(ada.groups_with_admin(false), ["networkmanager"]);
+        assert_eq!(ada.groups_with_admin(true), ["wheel", "networkmanager"]);
         let job = set_admin(&people[1], "ada", true);
         assert_eq!(
             job.argv,
@@ -825,7 +825,7 @@ mod tests {
         assert_eq!(new.problem([]), Some("The passwords do not match."));
         new.confirm = "correct horse".into();
         assert_eq!(new.problem([]), None);
-        let job = create(&new, &["wpa_supplicant".into()]);
+        let job = create(&new, &["networkmanager".into()]);
         assert_eq!(
             job.argv,
             [
@@ -833,7 +833,7 @@ mod tests {
                 "create",
                 "bob",
                 "--real-name=Bob Builder",
-                "--member-of=wpa_supplicant"
+                "--member-of=networkmanager"
             ]
         );
         assert_eq!(job.env, [("NEWPASSWORD".into(), "correct horse".into())]);

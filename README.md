@@ -525,9 +525,9 @@ disks, installs one with its steps and output, and reboots. LosOS's backend
 is `losos-installer serve`. The installer names the disk and asks once more,
 with the only red button, before anything is erased.
 
-Both share the Network page: wired ports as networkd sees them and Wi-Fi
-over wpa_supplicant's control socket (`crates/derisk-install/src/network.rs`, as NixOS runs it with
-`userControlled`). The setup saves a network it joins (`SAVE_CONFIG`).
+Both share the Network page: wired ports and Wi-Fi through NetworkManager,
+spoken to with `nmcli` (`crates/derisk-install/src/network.rs`). The setup
+saves a network it joins; the live installer keeps it only until it reboots.
 
 ### Headless commands
 
