@@ -2141,11 +2141,13 @@ name = "derisk-store"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "derisk-frame",
  "derisk-icons",
  "derisk-machines",
  "derisk-sys",
  "flate2",
  "image",
+ "mcsapi-components",
  "mcsapi-ui",
  "quick-xml",
  "serde",

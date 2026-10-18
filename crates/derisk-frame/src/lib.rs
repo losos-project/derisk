@@ -446,7 +446,8 @@ pub fn header(ui: &mut Ui, tokens: &Tokens, title: &str, description: &str) {
 }
 
 /// [`header`] with what acts on the whole page at its right, as the
-/// buttons that start and stop a machine.
+/// buttons that start and stop a machine. `actions` lays them out from the
+/// right, so the first one added is the rightmost, on a phone too.
 pub fn header_with<R>(
     ui: &mut Ui,
     tokens: &Tokens,
@@ -456,35 +457,27 @@ pub fn header_with<R>(
 ) -> R {
     let left = ui.cursor().left();
     let width = ui.available_width();
+    if width < PHONE {
+        // A phone has no room beside the title: the buttons go under it,
+        // in the order they have beside it.
+        header_text(ui, tokens, title, description, width);
+        // One button tall, so centring them does not reach down the page;
+        // a row that wraps grows below it.
+        let row = egui::vec2(width, 36.0);
+        let inner = ui
+            .allocate_ui_with_layout(
+                row,
+                egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+                actions,
+            )
+            .inner;
+        ui.add_space(12.0);
+        return inner;
+    }
     // The title wraps before it reaches the buttons; they keep what they
-    // need of a phone's width and the title the rest.
+    // need and the title the rest.
     let text = (width * 0.62).max(width - 320.0);
-    let block = ui
-        .vertical(|ui| {
-            ui.set_max_width(text);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(title)
-                        .font(egui::FontId::proportional(26.0))
-                        .strong()
-                        .color(tokens.foreground),
-                )
-                .wrap(),
-            );
-            if !description.is_empty() {
-                ui.add_space(-4.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(description)
-                            .font(egui::FontId::proportional(14.0))
-                            .color(tokens.muted_foreground),
-                    )
-                    .wrap(),
-                );
-            }
-        })
-        .response
-        .rect;
+    let block = header_text(ui, tokens, title, description, text);
     // Beside the title and its line, centred on them, without taking room
     // under them as a horizontal row would.
     let beside = Rect::from_min_max(
@@ -501,6 +494,35 @@ pub fn header_with<R>(
     inner
 }
 
+/// The title and description of a [`header`], `width` at most.
+fn header_text(ui: &mut Ui, tokens: &Tokens, title: &str, description: &str, width: f32) -> Rect {
+    ui.vertical(|ui| {
+        ui.set_max_width(width);
+        ui.add(
+            egui::Label::new(
+                RichText::new(title)
+                    .font(egui::FontId::proportional(26.0))
+                    .strong()
+                    .color(tokens.foreground),
+            )
+            .wrap(),
+        );
+        if !description.is_empty() {
+            ui.add_space(-4.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(description)
+                        .font(egui::FontId::proportional(14.0))
+                        .color(tokens.muted_foreground),
+                )
+                .wrap(),
+            );
+        }
+    })
+    .response
+    .rect
+}
+
 /// A heading inside a page, over the cards of one part of it.
 pub fn subheading(ui: &mut Ui, tokens: &Tokens, text: &str) {
     ui.add_space(8.0);
@@ -511,6 +533,27 @@ pub fn subheading(ui: &mut Ui, tokens: &Tokens, text: &str) {
             .color(tokens.foreground),
     );
 }
+
+/// What scrolls inside a [`Page::fixed`] column, under its header: its
+/// content keeps clear of the scroll bar, so the bar never runs over a
+/// card's edge.
+pub fn scroll<R>(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    egui::ScrollArea::vertical()
+        .id_salt(id)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_max_width(ui.available_width() - GUTTER);
+            add(ui)
+        })
+        .inner
+}
+
+/// Room between a scrolled column's content and its scroll bar.
+pub const GUTTER: f32 = 14.0;
 
 /// A card holding a group of rows.
 pub fn card<R>(ui: &mut Ui, tokens: &Tokens, content: impl FnOnce(&mut Ui) -> R) -> R {

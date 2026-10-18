@@ -4,9 +4,10 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use mcsapi_components::{Button, ButtonVariant, Tokens};
 use mcsapi_ui::{
     App as UiApp, Theme,
-    egui::{self, RichText, Sense, StrokeKind, TextureHandle, Vec2},
+    egui::{self, RichText, Sense, TextureHandle, Vec2},
 };
 
 use crate::{
@@ -309,79 +310,136 @@ impl StoreApp {
         self.place.as_ref().and_then(|p| p.as_deref())
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        let updates = self.updates.len();
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(!self.back.is_empty(), egui::Button::new("‹ Back"))
-                .clicked()
+    /// The pages: the front page and your apps, then every category.
+    fn sidebar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let searching = !self.query.trim().is_empty();
+        let installed = match self.updates.len() {
+            0 => "Installed".to_owned(),
+            n => format!("Installed ({n} to update)"),
+        };
+        // Before the catalogue is read every category is listed; after,
+        // only the ones with apps in it.
+        let categories: Vec<Category> = Category::ALL
+            .into_iter()
+            .filter(|&c| self.catalog.as_ref().is_none_or(|cat| cat.count(c) > 0))
+            .collect();
+        let mut picked = None;
+        derisk_frame::navigation(ui, tokens, "store-pages", |nav| {
+            nav.section("Flathub");
+            let explore = self.page == Page::Explore && !searching;
+            if nav.entry("Explore", explore).clicked() {
+                picked = Some(Page::Explore);
+            }
+            let on = self.page == Page::Installed && !searching;
+            if nav.entry(&installed, on).clicked() {
+                picked = Some(Page::Installed);
+            }
+            nav.section("Categories");
+            for category in categories {
+                let on = !searching && matches!(&self.page, Page::Category(c, _) if *c == category);
+                if nav.entry(category.name(), on).clicked() {
+                    picked = Some(Page::Category(category, None));
+                }
+            }
+        });
+        if let Some(page) = picked {
+            self.go(page);
+        }
+    }
+
+    /// The page's title and what it holds, with the search field and Back
+    /// at its right, as every page has them.
+    fn header(&mut self, ui: &mut egui::Ui, tokens: &Tokens, title: &str, description: &str) {
+        let narrow = ui.available_width() < derisk_frame::PHONE;
+        derisk_frame::header_with(ui, tokens, title, description, |ui| {
+            // Under the title on a phone, with Back beside it.
+            let width = if narrow {
+                (ui.available_width() - 74.0).max(120.0)
+            } else {
+                220.0
+            };
+            ui.add(
+                derisk_frame::field(&mut self.query)
+                    .hint_text("Search Flathub")
+                    .desired_width(width),
+            );
+            let back = Button::new("Back")
+                .variant(ButtonVariant::Outline)
+                .enabled(!self.back.is_empty());
+            if ui.add(back).clicked()
                 && let Some(page) = self.back.pop()
             {
                 self.page = page;
                 self.query.clear();
-            }
-            let explore = self.page == Page::Explore && self.query.is_empty();
-            if ui.selectable_label(explore, "Explore").clicked() {
-                self.go(Page::Explore);
-            }
-            let installed = if updates > 0 {
-                format!("Installed ({updates} to update)")
-            } else {
-                "Installed".to_owned()
-            };
-            let on = self.page == Page::Installed && self.query.is_empty();
-            if ui.selectable_label(on, installed).clicked() {
-                self.go(Page::Installed);
-            }
-            let width = ui.available_width().clamp(160.0, 320.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.query)
-                    .hint_text("Search Flathub")
-                    .desired_width(width),
-            );
-            if ui
-                .add_enabled(self.doing.is_none(), egui::Button::new("Refresh"))
-                .on_hover_text("Fetch Flathub's catalogue again and look for updates")
-                .clicked()
-            {
-                self.order(Order::Refresh);
+                self.confirm = None;
             }
         });
     }
 
-    fn status_line(&mut self, ui: &mut egui::Ui) {
-        if let Some(doing) = &self.doing {
-            ui.horizontal_wrapped(|ui| {
-                ui.spinner();
-                ui.label(doing);
-                if let Some(progress) = self.progress {
-                    ui.add(
-                        egui::ProgressBar::new(progress)
-                            .desired_width(160.0)
-                            .show_percentage(),
-                    );
-                }
-            });
-            if !self.line.is_empty() {
-                ui.add(egui::Label::new(RichText::new(&self.line).weak()).truncate());
-            }
-        }
+    /// What the store is doing, or what it did, along the action bar, with
+    /// Refresh at its right as Settings has Save.
+    fn status_bar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let mut dismiss = false;
-        match &self.status {
-            Some(Ok(message)) => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(message);
-                    dismiss = ui.small_button("Dismiss").clicked();
+        derisk_frame::action_bar(ui, tokens, "store-actions", |ui| {
+            let refresh = Button::new("Refresh")
+                .variant(ButtonVariant::Outline)
+                .enabled(self.doing.is_none());
+            // Right to left: Refresh last on the line, the status before it
+            // taking what is left.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(refresh)
+                    .on_hover_text("Fetch Flathub's catalogue again and look for updates")
+                    .clicked()
+                {
+                    self.order(Order::Refresh);
+                }
+                if self.status.is_some() && self.doing.is_none() {
+                    dismiss = ui
+                        .add(Button::new("Dismiss").variant(ButtonVariant::Ghost))
+                        .clicked();
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(doing) = &self.doing {
+                        ui.spinner();
+                        ui.label(doing);
+                        if let Some(progress) = self.progress {
+                            ui.add(
+                                egui::ProgressBar::new(progress)
+                                    .desired_width(160.0)
+                                    .show_percentage(),
+                            );
+                        }
+                        if !self.line.is_empty() {
+                            ui.add(
+                                egui::Label::new(derisk_frame::note(tokens, &self.line)).truncate(),
+                            );
+                        }
+                        return;
+                    }
+                    match &self.status {
+                        Some(Ok(message)) => {
+                            ui.add(egui::Label::new(message.as_str()).truncate());
+                        }
+                        Some(Err(error)) => {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(error.as_str()).color(tokens.destructive),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        None => {
+                            let text = match self.machine() {
+                                Some(machine) => format!("Apps install into the {machine} machine"),
+                                None => "Apps from Flathub".to_owned(),
+                            };
+                            ui.label(derisk_frame::note(tokens, &text));
+                        }
+                    }
                 });
-            }
-            Some(Err(error)) => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                    dismiss = ui.small_button("Dismiss").clicked();
-                });
-            }
-            None => {}
-        }
+            });
+        });
         if dismiss {
             self.status = None;
         }
@@ -437,76 +495,59 @@ impl StoreApp {
         }
     }
 
-    /// An app's card: icon, name, summary. Returns whether it was clicked.
-    fn card(&mut self, ui: &mut egui::Ui, app: &App, width: f32) -> bool {
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(width, CARD_HEIGHT), Sense::click());
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &app.component.name)
-        });
-        let visuals = ui.visuals();
-        let fill = if response.hovered() {
-            visuals.widgets.hovered.weak_bg_fill
-        } else {
-            visuals.faint_bg_color
-        };
-        ui.painter().rect(
-            rect,
-            8.0,
-            fill,
-            visuals.widgets.noninteractive.bg_stroke,
-            StrokeKind::Inside,
-        );
-        let icon = egui::Rect::from_min_size(
-            rect.min + egui::vec2(12.0, (CARD_HEIGHT - 48.0) / 2.0),
-            Vec2::splat(48.0),
-        );
-        self.paint_icon(ui, app, icon);
-        let text = egui::Rect::from_min_max(
-            egui::pos2(icon.max.x + 12.0, rect.min.y + 10.0),
-            rect.max - egui::vec2(10.0, 8.0),
-        );
+    /// An app's tile: icon, name, summary. Returns whether it was clicked.
+    fn card(&mut self, ui: &mut egui::Ui, tokens: &Tokens, app: &App, width: f32) -> bool {
         let installed = self.installed.contains_key(app.id());
         let update = self.updates.iter().any(|u| u == app.id());
-        inside(ui, text, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::Label::new(RichText::new(&app.component.name).strong())
-                        .truncate()
-                        .selectable(false),
-                );
+        let size = egui::vec2(width, CARD_HEIGHT);
+        let mut icon = None;
+        let response = derisk_frame::tile(ui, tokens, size, &app.component.name, |ui| {
+            ui.horizontal_centered(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::hover());
+                icon = Some(rect);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.add(
+                        egui::Label::new(RichText::new(&app.component.name).strong())
+                            .truncate()
+                            .selectable(false),
+                    );
+                    ui.add(
+                        egui::Label::new(derisk_frame::note(tokens, &app.component.summary))
+                            .truncate()
+                            .selectable(false),
+                    );
+                    let mut marks = Vec::new();
+                    if update {
+                        marks.push("Update ready".to_owned());
+                    } else if installed {
+                        marks.push("Installed".to_owned());
+                    }
+                    if app.component.verified {
+                        marks.push("✔ Verified".to_owned());
+                    }
+                    if !marks.is_empty() {
+                        ui.add(
+                            egui::Label::new(derisk_frame::note(tokens, &marks.join(" · ")))
+                                .truncate()
+                                .selectable(false),
+                        );
+                    }
+                });
             });
-            ui.add(
-                egui::Label::new(RichText::new(&app.component.summary).weak())
-                    .truncate()
-                    .selectable(false),
-            );
-            let mut marks = Vec::new();
-            if update {
-                marks.push("Update ready".to_owned());
-            } else if installed {
-                marks.push("Installed".to_owned());
-            }
-            if app.component.verified {
-                marks.push("✔ Verified".to_owned());
-            }
-            if !marks.is_empty() {
-                ui.add(
-                    egui::Label::new(RichText::new(marks.join(" · ")).small().weak())
-                        .truncate()
-                        .selectable(false),
-                );
-            }
         });
+        if let Some(rect) = icon {
+            self.paint_icon(ui, app, rect);
+        }
         response.clicked()
     }
 
-    /// Cards for `apps` in as many columns as fit, only the rows in view
+    /// Tiles for `apps` in as many columns as fit, only the rows in view
     /// laid out, so a category of a thousand apps scrolls as smoothly as one
     /// of ten.
-    fn grid(&mut self, ui: &mut egui::Ui, apps: &[&App], salt: &str) {
-        let width = ui.available_width();
+    fn grid(&mut self, ui: &mut egui::Ui, tokens: &Tokens, apps: &[&App], salt: &str) {
+        // Clear of the scroll bar, as derisk_frame::scroll keeps things.
+        let width = ui.available_width() - derisk_frame::GUTTER;
         let columns = (((width + GAP) / (CARD_WIDTH + GAP)).floor() as usize).max(1);
         let card = ((width - GAP * (columns as f32 - 1.0)) / columns as f32).max(120.0);
         let rows = apps.len().div_ceil(columns);
@@ -519,7 +560,7 @@ impl StoreApp {
                 for row in range {
                     ui.horizontal(|ui| {
                         for app in apps.iter().skip(row * columns).take(columns) {
-                            if self.card(ui, app, card) {
+                            if self.card(ui, tokens, app, card) {
                                 open = Some(app.id().to_owned());
                             }
                         }
@@ -531,95 +572,102 @@ impl StoreApp {
         }
     }
 
-    fn loading(&mut self, ui: &mut egui::Ui) -> Option<Arc<Catalog>> {
+    /// The catalogue, or a card saying why there is none yet.
+    fn loading(&mut self, ui: &mut egui::Ui, tokens: &Tokens) -> Option<Arc<Catalog>> {
         if let Some(catalog) = &self.catalog {
             return Some(catalog.clone());
         }
-        ui.add_space(24.0);
-        match &self.catalog_error {
+        derisk_frame::card(ui, tokens, |ui| match &self.catalog_error {
             Some(error) => {
-                ui.heading("Flathub's catalogue could not be read");
-                ui.label(error.as_str());
-                if ui
-                    .add_enabled(self.doing.is_none(), egui::Button::new("Try again"))
-                    .clicked()
-                {
-                    self.order(Order::Refresh);
-                }
+                derisk_frame::empty(ui, tokens, "Flathub's catalogue could not be read", error);
+                ui.vertical_centered(|ui| {
+                    let again = Button::new("Try again").enabled(self.doing.is_none());
+                    if ui.add(again).clicked() {
+                        self.order(Order::Refresh);
+                    }
+                });
             }
             None => {
-                ui.horizontal(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(24.0);
                     ui.spinner();
                     ui.label(match self.machine() {
                         Some(machine) => format!("Reading Flathub's catalogue in {machine}"),
                         None => "Reading Flathub's catalogue".to_owned(),
                     });
+                    ui.add_space(24.0);
                 });
             }
-        }
+        });
         None
     }
 
-    fn explore(&mut self, ui: &mut egui::Ui) {
-        let Some(catalog) = self.loading(ui) else {
+    fn explore(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let description = match self.machine() {
+            Some(machine) => {
+                format!(
+                    "Apps install into the {machine} machine and open on your desktop from there."
+                )
+            }
+            None => "Apps from Flathub, and what is new in them.".to_owned(),
+        };
+        self.header(ui, tokens, "Explore", &description);
+        let Some(catalog) = self.loading(ui, tokens) else {
             return;
         };
         let mut open: Option<Page> = None;
-        egui::ScrollArea::vertical()
-            .id_salt("explore")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if let Some(machine) = self.machine() {
-                    ui.weak(format!(
-                        "Apps install into the {machine} machine and open on your desktop from there."
-                    ));
-                }
-                if !self.updates.is_empty() {
-                    ui.add_space(8.0);
-                    self.updates_section(ui, &catalog, &mut open);
-                }
-                // Your apps' release notes come first: they are the news
-                // that is about you.
-                let yours: Vec<String> = self
-                    .feed
-                    .ids
-                    .iter()
-                    .filter(|id| self.installed.contains_key(*id))
-                    .take(YOURS)
-                    .cloned()
-                    .collect();
-                if !yours.is_empty() {
-                    ui.add_space(8.0);
-                    ui.heading("What's new in your apps");
-                    for id in &yours {
-                        if let Some(app) = catalog.get(id) {
-                            self.news(ui, app, "yours", &mut open);
-                        }
-                    }
-                }
-                ui.add_space(8.0);
-                ui.heading("Categories");
-                self.categories(ui, &catalog, &mut open);
-                ui.add_space(16.0);
-                ui.heading("Just released on Flathub");
-                ui.weak("The newest releases of Flathub's apps, with what their developers say changed.");
-                let ids: Vec<String> = self.feed.ids.iter().take(FEED).cloned().collect();
-                if ids.is_empty() {
-                    ui.label("No app in the catalogue has release notes yet.");
-                }
-                for id in &ids {
+        derisk_frame::scroll(ui, "explore", |ui| {
+            if !self.updates.is_empty() {
+                self.updates_section(ui, tokens, &catalog, &mut open);
+            }
+            // Your apps' release notes come first: they are the news
+            // that is about you.
+            let yours: Vec<String> = self
+                .feed
+                .ids
+                .iter()
+                .filter(|id| self.installed.contains_key(*id))
+                .take(YOURS)
+                .cloned()
+                .collect();
+            if !yours.is_empty() {
+                derisk_frame::subheading(ui, tokens, "What's new in your apps");
+                for id in &yours {
                     if let Some(app) = catalog.get(id) {
-                        self.news(ui, app, "all", &mut open);
+                        self.news(ui, tokens, app, "yours", &mut open);
                     }
                 }
-            });
+            }
+            derisk_frame::subheading(ui, tokens, "Categories");
+            self.categories(ui, tokens, &catalog, &mut open);
+            derisk_frame::subheading(ui, tokens, "Just released on Flathub");
+            ui.label(derisk_frame::note(
+                tokens,
+                "The newest releases of Flathub's apps, with what their developers say changed.",
+            ));
+            let ids: Vec<String> = self.feed.ids.iter().take(FEED).cloned().collect();
+            if ids.is_empty() {
+                ui.label("No app in the catalogue has release notes yet.");
+            }
+            for id in &ids {
+                if let Some(app) = catalog.get(id) {
+                    self.news(ui, tokens, app, "all", &mut open);
+                }
+            }
+        });
         if let Some(page) = open {
             self.go(page);
         }
     }
 
     /// The category tiles, as many to a row as fit.
-    fn categories(&mut self, ui: &mut egui::Ui, catalog: &Catalog, open: &mut Option<Page>) {
+    fn categories(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        catalog: &Catalog,
+        open: &mut Option<Page>,
+    ) {
         let width = ui.available_width();
         let columns = (((width + GAP) / (200.0 + GAP)).floor() as usize).clamp(1, 5);
         let tile = (width - GAP * (columns as f32 - 1.0)) / columns as f32;
@@ -631,56 +679,38 @@ impl StoreApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = GAP;
                 for &category in row {
-                    let (rect, response) =
-                        ui.allocate_exact_size(egui::vec2(tile, 52.0), Sense::click());
-                    response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, category.name())
-                    });
-                    let visuals = ui.visuals();
-                    let fill = if response.hovered() {
-                        visuals.widgets.hovered.weak_bg_fill
-                    } else {
-                        visuals.faint_bg_color
-                    };
-                    ui.painter().rect(
-                        rect,
-                        8.0,
-                        fill,
-                        visuals.widgets.noninteractive.bg_stroke,
-                        StrokeKind::Inside,
-                    );
-                    let icon = egui::Rect::from_min_size(
-                        rect.min + egui::vec2(12.0, 12.0),
-                        Vec2::splat(28.0),
-                    );
-                    match derisk_icons::texture(ui.ctx(), category.icon()) {
-                        Some(texture) => egui::Image::new(&texture)
-                            .fit_to_exact_size(icon.size())
-                            .paint_at(ui, icon),
-                        None => {
-                            ui.painter()
-                                .rect_filled(icon, 6.0, visuals.selection.bg_fill);
-                        }
-                    }
-                    let text = egui::Rect::from_min_max(
-                        egui::pos2(icon.max.x + 10.0, rect.min.y + 8.0),
-                        rect.max - egui::vec2(8.0, 6.0),
-                    );
-                    inside(ui, text, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.add(
-                            egui::Label::new(RichText::new(category.name()).strong())
-                                .truncate()
-                                .selectable(false),
-                        );
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{} apps", catalog.count(category)))
-                                    .small()
-                                    .weak(),
-                            )
-                            .selectable(false),
-                        );
+                    let size = egui::vec2(tile, 56.0);
+                    let response = derisk_frame::tile(ui, tokens, size, category.name(), |ui| {
+                        ui.horizontal_centered(|ui| {
+                            let (icon, _) =
+                                ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
+                            match derisk_icons::texture(ui.ctx(), category.icon()) {
+                                Some(texture) => egui::Image::new(&texture)
+                                    .fit_to_exact_size(icon.size())
+                                    .paint_at(ui, icon),
+                                None => {
+                                    derisk_icons::paint(
+                                        ui.painter(),
+                                        icon,
+                                        "folder",
+                                        tokens.muted_foreground,
+                                    );
+                                }
+                            }
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.add(
+                                    egui::Label::new(RichText::new(category.name()).strong())
+                                        .truncate()
+                                        .selectable(false),
+                                );
+                                let count = format!("{} apps", catalog.count(category));
+                                ui.add(
+                                    egui::Label::new(derisk_frame::note(tokens, &count))
+                                        .selectable(false),
+                                );
+                            });
+                        });
                     });
                     if response.clicked() {
                         *open = Some(Page::Category(category, None));
@@ -691,9 +721,16 @@ impl StoreApp {
         }
     }
 
-    /// One release in the feed: the app, its version and when, and its
-    /// notes. A click opens the app's page.
-    fn news(&mut self, ui: &mut egui::Ui, app: &App, list: &str, open: &mut Option<Page>) {
+    /// One release in the feed, as a card: the app, its version and when,
+    /// and its notes. A click opens the app's page.
+    fn news(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        app: &App,
+        list: &str,
+        open: &mut Option<Page>,
+    ) {
         let Some(release) = app
             .component
             .releases
@@ -703,90 +740,113 @@ impl StoreApp {
             return;
         };
         let release = release.clone();
-        let frame = egui::Frame::new()
-            .fill(ui.visuals().faint_bg_color)
-            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-            .corner_radius(8.0)
-            .inner_margin(12.0)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::hover());
-                    self.paint_icon(ui, app, rect);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.add(
-                            egui::Label::new(RichText::new(&app.component.name).strong())
-                                .truncate()
-                                .selectable(false),
-                        );
-                        let when = release.timestamp.map(|t| ago(now(), t)).unwrap_or_default();
-                        let version = if release.version.is_empty() {
-                            "New release".to_owned()
-                        } else {
-                            format!("Version {}", release.version)
-                        };
-                        let line = if when.is_empty() {
-                            version
-                        } else {
-                            format!("{version} · {when}")
-                        };
-                        ui.add(egui::Label::new(RichText::new(line).weak()).selectable(false));
-                    });
+        let top = ui.cursor().top();
+        derisk_frame::card(ui, tokens, |ui| {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::hover());
+                self.paint_icon(ui, app, rect);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.add(
+                        egui::Label::new(RichText::new(&app.component.name).strong())
+                            .truncate()
+                            .selectable(false),
+                    );
+                    let when = release.timestamp.map(|t| ago(now(), t)).unwrap_or_default();
+                    let version = if release.version.is_empty() {
+                        "New release".to_owned()
+                    } else {
+                        format!("Version {}", release.version)
+                    };
+                    let line = if when.is_empty() {
+                        version
+                    } else {
+                        format!("{version} · {when}")
+                    };
+                    ui.add(egui::Label::new(derisk_frame::note(tokens, &line)).selectable(false));
                 });
-                notes(ui, &release.notes, 4);
             });
-        let response = ui.interact(
-            frame.response.rect,
-            ui.id().with(("news", list, app.id())),
-            Sense::click(),
+            notes(ui, &release.notes, 4);
+        });
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(ui.min_rect().left(), top),
+            egui::pos2(ui.min_rect().right(), ui.cursor().top()),
         );
+        let response = ui.interact(rect, ui.id().with(("news", list, app.id())), Sense::click());
         if response.clicked() {
             *open = Some(Page::App(app.id().to_owned()));
         }
         response.on_hover_cursor(egui::CursorIcon::PointingHand);
-        ui.add_space(4.0);
     }
 
-    fn updates_section(&mut self, ui: &mut egui::Ui, catalog: &Catalog, open: &mut Option<Page>) {
-        ui.horizontal_wrapped(|ui| {
-            ui.heading(format!("Updates ({})", self.updates.len()));
-            if ui
-                .add_enabled(self.doing.is_none(), egui::Button::new("Update all"))
-                .clicked()
-            {
-                self.order(Order::Update(None));
+    /// The updates waiting, in a card with Update all over it.
+    fn updates_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        catalog: &Catalog,
+        open: &mut Option<Page>,
+    ) {
+        derisk_frame::subheading(ui, tokens, "Updates");
+        let ids = self.updates.clone();
+        derisk_frame::card(ui, tokens, |ui| {
+            ui.horizontal(|ui| {
+                let waiting = match ids.len() {
+                    1 => "1 app has an update waiting".to_owned(),
+                    n => format!("{n} apps have an update waiting"),
+                };
+                ui.label(derisk_frame::note(tokens, &waiting));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(Button::new("Update all").enabled(self.doing.is_none()))
+                        .clicked()
+                    {
+                        self.order(Order::Update(None));
+                    }
+                });
+            });
+            for id in &ids {
+                let name = catalog
+                    .get(id)
+                    .map_or(id.as_str(), |app| app.component.name.as_str())
+                    .to_owned();
+                ui.horizontal(|ui| {
+                    if let Some(app) = catalog.get(id) {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
+                        self.paint_icon(ui, app, rect);
+                    }
+                    if ui.link(RichText::new(&name).strong()).clicked() {
+                        *open = Some(Page::App(id.clone()));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let update = Button::new("Update")
+                            .variant(ButtonVariant::Outline)
+                            .enabled(self.doing.is_none());
+                        if ui.add(update).clicked() {
+                            self.order(Order::Update(Some((id.clone(), name.clone()))));
+                        }
+                    });
+                });
             }
         });
-        let ids = self.updates.clone();
-        for id in &ids {
-            let name = catalog
-                .get(id)
-                .map_or(id.as_str(), |app| app.component.name.as_str())
-                .to_owned();
-            ui.horizontal(|ui| {
-                if let Some(app) = catalog.get(id) {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
-                    self.paint_icon(ui, app, rect);
-                }
-                if ui.link(&name).clicked() {
-                    *open = Some(Page::App(id.clone()));
-                }
-                if ui
-                    .add_enabled(self.doing.is_none(), egui::Button::new("Update"))
-                    .clicked()
-                {
-                    self.order(Order::Update(Some((id.clone(), name.clone()))));
-                }
-            });
-        }
     }
 
-    fn category(&mut self, ui: &mut egui::Ui, category: Category, section: Option<String>) {
-        let Some(catalog) = self.loading(ui) else {
+    fn category(
+        &mut self,
+        ui: &mut egui::Ui,
+        tokens: &Tokens,
+        category: Category,
+        section: Option<String>,
+    ) {
+        let count = self
+            .catalog
+            .as_ref()
+            .map(|c| format!("{} apps", c.count(category)))
+            .unwrap_or_default();
+        self.header(ui, tokens, category.name(), &count);
+        let Some(catalog) = self.loading(ui, tokens) else {
             return;
         };
-        ui.heading(category.name());
         let sections = catalog.sections(category, 3);
         if !sections.is_empty() {
             let mut picked = None;
@@ -812,113 +872,118 @@ impl StoreApp {
         ui.add_space(4.0);
         let apps: Vec<&App> = catalog.in_category(category, section.as_deref()).collect();
         let salt = format!("category-{category:?}-{section:?}");
-        self.grid(ui, &apps, &salt);
+        self.grid(ui, tokens, &apps, &salt);
     }
 
-    fn results(&mut self, ui: &mut egui::Ui) {
-        let Some(catalog) = self.loading(ui) else {
-            return;
-        };
+    fn results(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let query = self.query.trim().to_lowercase();
-        let stale = self.results.as_ref().is_none_or(|(q, _)| *q != query);
-        if stale {
-            let ids = catalog
-                .search(&query)
-                .into_iter()
-                .map(|a| a.id().to_owned())
-                .collect();
-            self.results = Some((query.clone(), ids));
+        if let Some(catalog) = &self.catalog {
+            let stale = self.results.as_ref().is_none_or(|(q, _)| *q != query);
+            if stale {
+                let ids = catalog
+                    .search(&query)
+                    .into_iter()
+                    .map(|a| a.id().to_owned())
+                    .collect();
+                self.results = Some((query.clone(), ids));
+            }
         }
         let ids = self
             .results
             .as_ref()
             .map(|(_, ids)| ids.clone())
             .unwrap_or_default();
+        let shown = format!("{} apps match “{}”", ids.len(), self.query.trim());
+        self.header(ui, tokens, "Search", &shown);
+        let Some(catalog) = self.loading(ui, tokens) else {
+            return;
+        };
         let apps: Vec<&App> = ids.iter().filter_map(|id| catalog.get(id)).collect();
         if apps.is_empty() {
-            ui.label(format!(
-                "Nothing on Flathub matches “{}”.",
-                self.query.trim()
-            ));
+            let text = format!("Nothing on Flathub matches “{}”.", self.query.trim());
+            derisk_frame::card(ui, tokens, |ui| {
+                derisk_frame::empty(ui, tokens, "No apps found", &text);
+            });
             return;
         }
-        ui.weak(format!("{} apps", apps.len()));
-        self.grid(ui, &apps, "results");
+        self.grid(ui, tokens, &apps, "results");
     }
 
-    fn app_page(&mut self, ui: &mut egui::Ui, id: &str) {
-        let Some(catalog) = self.loading(ui) else {
+    fn app_page(&mut self, ui: &mut egui::Ui, tokens: &Tokens, id: &str) {
+        let (title, by) = match self.catalog.as_ref().and_then(|c| c.get(id)) {
+            Some(app) => {
+                let mut by = app.component.developer.clone();
+                if app.component.verified {
+                    by.push_str(if by.is_empty() {
+                        "✔ Verified"
+                    } else {
+                        " · ✔ Verified"
+                    });
+                }
+                (app.component.name.clone(), by)
+            }
+            None => (id.to_owned(), String::new()),
+        };
+        self.header(ui, tokens, &title, &by);
+        let Some(catalog) = self.loading(ui, tokens) else {
             return;
         };
         let Some(app) = catalog.get(id) else {
-            ui.label(format!("{id} is not in Flathub's catalogue."));
+            derisk_frame::card(ui, tokens, |ui| {
+                let text = format!("{id} is not in Flathub's catalogue.");
+                derisk_frame::empty(ui, tokens, "No such app", &text);
+            });
             return;
         };
         let installed = self.installed.get(id).cloned();
         let update = self.updates.iter().any(|u| u == id);
         let mut open = None;
-        egui::ScrollArea::vertical()
-            .id_salt(("app", id))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
+        derisk_frame::scroll(ui, ("app", id), |ui| {
+            derisk_frame::card(ui, tokens, |ui| {
                 ui.horizontal(|ui| {
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(96.0), Sense::hover());
                     self.paint_icon(ui, app, rect);
+                    ui.add_space(8.0);
                     ui.vertical(|ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&app.component.name).size(24.0).strong(),
-                            )
-                            .wrap(),
-                        );
-                        let mut by = app.component.developer.clone();
-                        if app.component.verified {
-                            by.push_str(if by.is_empty() {
-                                "✔ Verified"
-                            } else {
-                                " · ✔ Verified"
-                            });
-                        }
-                        if !by.is_empty() {
-                            ui.weak(by);
-                        }
                         ui.add(egui::Label::new(&app.component.summary).wrap());
+                        self.actions(ui, app, installed.as_ref(), update);
+                        ui.horizontal_wrapped(|ui| {
+                            for &category in &app.categories {
+                                if ui.button(category.name()).clicked() {
+                                    open = Some(Page::Category(category, None));
+                                }
+                                for section in category::sections(&app.component, category) {
+                                    if ui.small_button(category::section_name(section)).clicked() {
+                                        open = Some(Page::Category(
+                                            category,
+                                            Some(section.to_owned()),
+                                        ));
+                                    }
+                                }
+                            }
+                        });
                     });
                 });
-                ui.add_space(8.0);
-                self.actions(ui, app, installed.as_ref(), update);
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    for &category in &app.categories {
-                        if ui.button(category.name()).clicked() {
-                            open = Some(Page::Category(category, None));
-                        }
-                        for section in category::sections(&app.component, category) {
-                            if ui.small_button(category::section_name(section)).clicked() {
-                                open = Some(Page::Category(category, Some(section.to_owned())));
-                            }
-                        }
-                    }
-                });
-                // What the app is and what people think of it come first;
-                // its release notes are for those who already know it.
-                if !app.component.description.is_empty() {
-                    ui.add_space(12.0);
-                    ui.heading("About");
+            });
+            // What the app is and what people think of it come first;
+            // its release notes are for those who already know it.
+            if !app.component.description.is_empty() {
+                derisk_frame::subheading(ui, tokens, "About");
+                derisk_frame::card(ui, tokens, |ui| {
                     notes(ui, &app.component.description, usize::MAX);
-                }
-                ui.add_space(12.0);
-                ui.heading("Ratings and reviews");
-                self.reviews(ui, id);
-                let releases: Vec<_> = app
-                    .component
-                    .releases
-                    .iter()
-                    .filter(|r| !r.development)
-                    .collect();
-                if let Some((latest, earlier)) = releases.split_first() {
-                    ui.add_space(12.0);
-                    ui.heading("What's new");
+                });
+            }
+            derisk_frame::subheading(ui, tokens, "Ratings and reviews");
+            derisk_frame::card(ui, tokens, |ui| self.reviews(ui, tokens, id));
+            let releases: Vec<_> = app
+                .component
+                .releases
+                .iter()
+                .filter(|r| !r.development)
+                .collect();
+            if let Some((latest, earlier)) = releases.split_first() {
+                derisk_frame::subheading(ui, tokens, "What's new");
+                derisk_frame::card(ui, tokens, |ui| {
                     release(ui, latest, usize::MAX);
                     if !earlier.is_empty() {
                         egui::CollapsingHeader::new("Earlier releases")
@@ -930,32 +995,30 @@ impl StoreApp {
                                 }
                             });
                     }
-                }
-                ui.add_space(12.0);
-                ui.heading("Details");
-                egui::Grid::new(("details", id))
-                    .num_columns(2)
-                    .striped(false)
-                    .show(ui, |ui| {
-                        let mut row = |label: &str, value: &str| {
-                            if !value.is_empty() {
-                                ui.weak(label);
-                                ui.add(egui::Label::new(value).wrap());
-                                ui.end_row();
-                            }
-                        };
-                        row("App ID", &app.component.id);
-                        row("Licence", &app.component.license);
-                        if let Some(installed) = &installed {
-                            row("Installed", &installed.version);
-                            let place = match self.machine() {
-                                Some(machine) => format!("In the {machine} machine"),
-                                None if installed.installation == "user" => "For you".to_owned(),
-                                None => "For everyone on this computer".to_owned(),
-                            };
-                            row("Where", &place);
+                });
+            }
+            derisk_frame::subheading(ui, tokens, "Details");
+            derisk_frame::card(ui, tokens, |ui| {
+                derisk_frame::rows(ui, ("details", id), |ui| {
+                    let mut row = |label: &str, value: &str| {
+                        if !value.is_empty() {
+                            ui.label(label);
+                            ui.add(egui::Label::new(value).wrap());
+                            ui.end_row();
                         }
-                    });
+                    };
+                    row("App ID", &app.component.id);
+                    row("Licence", &app.component.license);
+                    if let Some(installed) = &installed {
+                        row("Installed", &installed.version);
+                        let place = match self.machine() {
+                            Some(machine) => format!("In the {machine} machine"),
+                            None if installed.installation == "user" => "For you".to_owned(),
+                            None => "For everyone on this computer".to_owned(),
+                        };
+                        row("Where", &place);
+                    }
+                });
                 let links: Vec<(String, String)> = app
                     .component
                     .urls
@@ -973,41 +1036,45 @@ impl StoreApp {
                     });
                 }
             });
+        });
         if let Some(page) = open {
             self.go(page);
         }
     }
 
     /// App `id`'s ratings and reviews, asking for them the first time.
-    fn reviews(&mut self, ui: &mut egui::Ui, id: &str) {
+    fn reviews(&mut self, ui: &mut egui::Ui, tokens: &Tokens, id: &str) {
         if !self.said.contains_key(id) && self.worker.reviews(id) {
             self.said.insert(id.to_owned(), Said::Asked);
         }
         match self.said.get(id) {
             None if cfg!(target_arch = "wasm32") => {
-                ui.weak("Reviews are read from the Open Desktop Ratings Service, which a browser cannot reach from here.");
+                ui.label(derisk_frame::note(tokens, "Reviews are read from the Open Desktop Ratings Service, which a browser cannot reach from here."));
             }
             None | Some(Said::Asked) => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.weak("Reading what people say…");
+                    ui.label(derisk_frame::note(tokens, "Reading what people say…"));
                 });
             }
             Some(Said::Failed(error)) => {
-                ui.weak("Ratings and reviews could not be read just now.")
-                    .on_hover_text(error);
+                ui.label(derisk_frame::note(
+                    tokens,
+                    "Ratings and reviews could not be read just now.",
+                ))
+                .on_hover_text(error);
             }
             Some(Said::Ready(said)) => {
                 match &said.ratings {
-                    Some(ratings) => self::ratings(ui, ratings),
+                    Some(ratings) => self::ratings(ui, tokens, ratings),
                     None => {
-                        ui.weak("Nobody has rated it yet.");
+                        ui.label(derisk_frame::note(tokens, "Nobody has rated it yet."));
                     }
                 }
                 let now = now();
                 for review in &said.reviews {
                     ui.add_space(8.0);
-                    self::review(ui, review, now);
+                    self::review(ui, tokens, review, now);
                 }
             }
         }
@@ -1029,7 +1096,8 @@ impl StoreApp {
                     "Remove {}? Its data stays until you remove that too.",
                     app.component.name
                 ));
-                if ui.button("Remove").clicked()
+                let remove = Button::new("Remove").variant(ButtonVariant::Destructive);
+                if ui.add(remove).clicked()
                     && let Some(installed) = installed
                 {
                     self.confirm = None;
@@ -1039,7 +1107,10 @@ impl StoreApp {
                         installation: installed.installation.clone(),
                     });
                 }
-                if ui.button("Cancel").clicked() {
+                if ui
+                    .add(Button::new("Cancel").variant(ButtonVariant::Outline))
+                    .clicked()
+                {
                     self.confirm = None;
                 }
             });
@@ -1051,7 +1122,7 @@ impl StoreApp {
                     Some(machine) => format!("Install in {machine}"),
                     None => "Install".to_owned(),
                 };
-                if primary(ui, idle, &label).clicked() {
+                if ui.add(Button::new(label).enabled(idle)).clicked() {
                     self.order(Order::Install {
                         id: id.clone(),
                         name: app.component.name.clone(),
@@ -1059,7 +1130,7 @@ impl StoreApp {
                 }
             }
             Some(_) => {
-                if primary(ui, idle, "Open").clicked() {
+                if ui.add(Button::new("Open").enabled(idle)).clicked() {
                     let desktop = app
                         .component
                         .launchable
@@ -1068,59 +1139,66 @@ impl StoreApp {
                         .to_owned();
                     self.order(Order::Open(desktop));
                 }
-                if update && ui.add_enabled(idle, egui::Button::new("Update")).clicked() {
+                let outline = |label| Button::new(label).variant(ButtonVariant::Outline);
+                if update && ui.add(outline("Update").enabled(idle)).clicked() {
                     self.order(Order::Update(Some((
                         id.clone(),
                         app.component.name.clone(),
                     ))));
                 }
-                if ui.add_enabled(idle, egui::Button::new("Remove")).clicked() {
+                if ui.add(outline("Remove").enabled(idle)).clicked() {
                     self.confirm = Some(id.clone());
                 }
             }
         });
     }
 
-    fn installed_page(&mut self, ui: &mut egui::Ui) {
+    fn installed_page(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let catalog = self.catalog.clone().unwrap_or_default();
+        let title = match self.machine() {
+            Some(machine) => format!("Installed in {machine}"),
+            None => "Installed".to_owned(),
+        };
+        let count = match self.installed.len() {
+            0 => String::new(),
+            1 => "1 app from Flathub".to_owned(),
+            n => format!("{n} apps from Flathub"),
+        };
+        self.header(ui, tokens, &title, &count);
         let mut open = None;
-        egui::ScrollArea::vertical()
-            .id_salt("installed")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if !self.updates.is_empty() {
-                    self.updates_section(ui, &catalog, &mut open);
-                    ui.add_space(12.0);
-                }
-                ui.heading(match self.machine() {
-                    Some(machine) => format!("Installed in {machine}"),
-                    None => "Installed".to_owned(),
-                });
-                let mut installed: Vec<Installed> = self.installed.values().cloned().collect();
-                let name = |id: &str| {
-                    catalog
-                        .get(id)
-                        .map_or(id.to_owned(), |a| a.component.name.clone())
-                };
-                installed.sort_by_cached_key(|i| name(&i.id).to_lowercase());
+        derisk_frame::scroll(ui, "installed", |ui| {
+            if !self.updates.is_empty() {
+                self.updates_section(ui, tokens, &catalog, &mut open);
+                derisk_frame::subheading(ui, tokens, "Your apps");
+            }
+            let mut installed: Vec<Installed> = self.installed.values().cloned().collect();
+            let name = |id: &str| {
+                catalog
+                    .get(id)
+                    .map_or(id.to_owned(), |a| a.component.name.clone())
+            };
+            installed.sort_by_cached_key(|i| name(&i.id).to_lowercase());
+            derisk_frame::card(ui, tokens, |ui| {
                 if installed.is_empty() {
-                    ui.label(if self.doing.is_some() {
-                        "Looking…"
+                    if self.doing.is_some() {
+                        derisk_frame::empty(ui, tokens, "Looking…", "");
                     } else {
-                        "No apps from Flathub are installed yet. Explore finds some."
-                    });
+                        derisk_frame::empty(
+                            ui,
+                            tokens,
+                            "No apps from Flathub yet",
+                            "Explore finds some.",
+                        );
+                    }
                 }
-                let width = ui.available_width();
                 for item in &installed {
                     let app = catalog.get(&item.id).cloned();
                     ui.horizontal(|ui| {
-                        ui.set_width(width);
                         let (rect, _) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::hover());
                         match &app {
                             Some(app) => self.paint_icon(ui, app, rect),
                             None => {
-                                ui.painter()
-                                    .rect_filled(rect, 8.0, ui.visuals().faint_bg_color);
+                                ui.painter().rect_filled(rect, 8.0, tokens.field);
                             }
                         }
                         ui.vertical(|ui| {
@@ -1133,11 +1211,12 @@ impl StoreApp {
                             } else {
                                 item.version.clone()
                             };
-                            ui.weak(version);
+                            ui.label(derisk_frame::note(tokens, &version));
                         });
                     });
                 }
             });
+        });
         if let Some(page) = open {
             self.go(page);
         }
@@ -1149,23 +1228,28 @@ impl UiApp for StoreApp {
         "Store"
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _theme: &Theme) {
+    fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         self.receive(ui.ctx());
-        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-        ui.spacing_mut().button_padding = egui::vec2(12.0, 6.0);
-        self.top_bar(ui);
-        self.status_line(ui);
-        ui.separator();
-        if !self.query.trim().is_empty() {
-            self.results(ui);
-        } else {
-            match self.page.clone() {
-                Page::Explore => self.explore(ui),
-                Page::Category(category, section) => self.category(ui, category, section),
-                Page::App(id) => self.app_page(ui, &id),
-                Page::Installed => self.installed_page(ui),
-            }
-        }
+        let tokens = derisk_frame::begin(ui, theme);
+        self.sidebar(ui, &tokens);
+        self.status_bar(ui, &tokens);
+        derisk_frame::Page::new()
+            .wide()
+            .fixed()
+            .show(ui, &tokens, |ui| {
+                if !self.query.trim().is_empty() {
+                    self.results(ui, &tokens);
+                } else {
+                    match self.page.clone() {
+                        Page::Explore => self.explore(ui, &tokens),
+                        Page::Category(category, section) => {
+                            self.category(ui, &tokens, category, section)
+                        }
+                        Page::App(id) => self.app_page(ui, &tokens, &id),
+                        Page::Installed => self.installed_page(ui, &tokens),
+                    }
+                }
+            });
         // The threads answer between frames; look again soon while
         // anything is owed, and now and then otherwise.
         let waiting = self.doing.is_some()
@@ -1179,7 +1263,7 @@ impl UiApp for StoreApp {
 
 /// An app's average and how many people gave each number of stars, as
 /// bars in the accent colour.
-fn ratings(ui: &mut egui::Ui, ratings: &Ratings) {
+fn ratings(ui: &mut egui::Ui, tokens: &Tokens, ratings: &Ratings) {
     let total = ratings.total();
     let Some(average) = ratings.average() else {
         return;
@@ -1188,26 +1272,27 @@ fn ratings(ui: &mut egui::Ui, ratings: &Ratings) {
         ui.vertical(|ui| {
             ui.label(RichText::new(format!("{average:.1}")).size(32.0).strong());
             ui.label(stars(average));
-            ui.weak(if total == 1 {
+            let count = if total == 1 {
                 "1 rating".to_owned()
             } else {
                 format!("{total} ratings")
-            });
+            };
+            ui.label(derisk_frame::note(tokens, &count));
         });
         ui.add_space(16.0);
         ui.vertical(|ui| {
-            let visuals = ui.visuals().clone();
+            ui.spacing_mut().item_spacing.y = 4.0;
             for n in (1..=5).rev() {
                 let count = ratings.stars[n - 1];
                 ui.horizontal(|ui| {
                     ui.label(format!("{n} ★"));
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(160.0, 8.0), Sense::hover());
                     let painter = ui.painter();
-                    painter.rect_filled(rect, 4.0, visuals.extreme_bg_color);
+                    painter.rect_filled(rect, 4.0, tokens.field);
                     let mut filled = rect;
                     filled.set_width(rect.width() * count as f32 / total as f32);
-                    painter.rect_filled(filled, 4.0, visuals.selection.bg_fill);
-                    ui.weak(count.to_string());
+                    painter.rect_filled(filled, 4.0, tokens.primary);
+                    ui.label(derisk_frame::note(tokens, &count.to_string()));
                 });
             }
         });
@@ -1215,52 +1300,28 @@ fn ratings(ui: &mut egui::Ui, ratings: &Ratings) {
 }
 
 /// One review: its stars and summary, who wrote it and when, and what they
-/// wrote.
-fn review(ui: &mut egui::Ui, review: &Review, now: i64) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal_wrapped(|ui| {
-            ui.label(stars(f32::from(review.stars)));
-            if !review.summary.is_empty() {
-                ui.strong(&review.summary);
-            }
-        });
-        let mut by = vec![if review.author.is_empty() {
-            "Someone".to_owned()
-        } else {
-            review.author.clone()
-        }];
-        by.push(ago(now, review.date));
-        if !review.version.is_empty() {
-            by.push(format!("version {}", review.version));
-        }
-        ui.weak(by.join(" · "));
-        if !review.text.is_empty() {
-            ui.add(egui::Label::new(&review.text).wrap());
+/// wrote, under a rule from the one before.
+fn review(ui: &mut egui::Ui, tokens: &Tokens, review: &Review, now: i64) {
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(stars(f32::from(review.stars)));
+        if !review.summary.is_empty() {
+            ui.strong(&review.summary);
         }
     });
-}
-
-/// The button that does what the page is for, filled in the accent colour.
-fn primary(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
-    let selection = ui.visuals().selection;
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(RichText::new(label).strong().color(selection.stroke.color))
-            .fill(selection.bg_fill),
-    )
-}
-
-/// Lays `contents` out in `rect`, over what is already painted there,
-/// without moving the parent's cursor as a scope would: a card's text sits
-/// on the card, and the next card still starts after the card.
-fn inside(ui: &mut egui::Ui, rect: egui::Rect, contents: impl FnOnce(&mut egui::Ui)) {
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    contents(&mut child);
+    let mut by = vec![if review.author.is_empty() {
+        "Someone".to_owned()
+    } else {
+        review.author.clone()
+    }];
+    by.push(ago(now, review.date));
+    if !review.version.is_empty() {
+        by.push(format!("version {}", review.version));
+    }
+    ui.label(derisk_frame::note(tokens, &by.join(" · ")));
+    if !review.text.is_empty() {
+        ui.add(egui::Label::new(&review.text).wrap());
+    }
 }
 
 /// A description or release notes: paragraphs, and list items as bullets.
