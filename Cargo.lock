@@ -1827,7 +1827,9 @@ dependencies = [
 name = "derisk-calculator"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
+ "mcsapi-components",
  "mcsapi-ui",
  "miette",
  "thiserror 2.0.21",
