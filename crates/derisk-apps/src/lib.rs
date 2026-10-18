@@ -186,7 +186,7 @@ pub const APPS: [AppInfo; 7] = [
         keywords: &[
             "virtual machine",
             "vm",
-            "quickemu",
+            "libvirt",
             "qube",
             "sandbox",
             "hypervisor",
