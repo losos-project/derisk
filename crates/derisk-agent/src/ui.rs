@@ -938,7 +938,7 @@ impl AgentApp {
         ui.horizontal(|ui| {
             ui.add_space((ui.available_width() - 640.0).max(0.0) / 2.0);
             ui.vertical(|ui| {
-                ui.set_max_width(640.0);
+                ui.set_max_width(ui.available_width().min(640.0));
                 self.composer(ui, tokens, false);
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
@@ -1034,7 +1034,7 @@ impl AgentApp {
         };
         self.project_id = Some(project.id.clone());
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.set_max_width(720.0);
+            ui.set_max_width(ui.available_width().min(720.0));
             ui.label(typography::h3(tokens, "Project"));
             ui.add_space(8.0);
             let mut changed = false;
@@ -1186,7 +1186,7 @@ impl AgentApp {
             return;
         };
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.set_max_width(720.0);
+            ui.set_max_width(ui.available_width().min(720.0));
             ui.label(typography::h3(tokens, "Routine"));
             ui.label(typography::muted(
                 tokens,
