@@ -21,8 +21,6 @@ hmac = "0.12"
 qrcode = { version = "0.14", default-features = false }
 sha1 = { version = "0.10", default-features = false }
 serde_json.workspace = true
-
-# The Network page draws from the same Wi-Fi thread as first-boot setup. Not
-# in the browser demo, whose std has no Unix sockets.
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# The Users page shares first-boot setup's rules for an account, and the
+# Network page its Wi-Fi thread (which the browser demo builds without).
 derisk-install.workspace = true

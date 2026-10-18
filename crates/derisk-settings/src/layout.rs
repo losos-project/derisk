@@ -27,7 +27,7 @@ pub const GROUPS: [(&str, &[Page]); 4] = [
         "Devices",
         &[Page::Input, Page::Shortcuts, Page::Network, Page::Bluetooth],
     ),
-    ("Security", &[Page::Privacy, Page::SignIn]),
+    ("Security", &[Page::Privacy, Page::SignIn, Page::Users]),
     (
         "System",
         &[

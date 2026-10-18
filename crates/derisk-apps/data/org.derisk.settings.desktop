@@ -2,12 +2,12 @@
 Type=Application
 Name=Settings
 GenericName=System Settings
-Comment=Appearance, wallpaper, top bar, desktop, input, shortcuts, privacy, notifications, power, and backups
-Keywords=preferences;theme;accent;keyboard;power;wallpaper;background;shortcuts;panel;privacy;flatpak;permissions;camera;location;backup;losos;
+Comment=Appearance, wallpaper, top bar, desktop, input, shortcuts, privacy, users, notifications, power, and backups
+Keywords=preferences;theme;accent;keyboard;power;wallpaper;background;shortcuts;panel;privacy;flatpak;permissions;camera;location;backup;losos;users;accounts;administrator;
 Icon=preferences-system
 Exec=derisk launch org.derisk.settings
 Categories=Settings;
-Actions=appearance;wallpaper;top-bar;desktop;input;shortcuts;privacy;notifications;power;backups;about;
+Actions=appearance;wallpaper;top-bar;desktop;input;shortcuts;privacy;users;notifications;power;backups;about;
 
 [Desktop Action appearance]
 Name=Appearance
@@ -36,6 +36,10 @@ Exec=derisk launch org.derisk.settings --action shortcuts
 [Desktop Action privacy]
 Name=Privacy
 Exec=derisk launch org.derisk.settings --action privacy
+
+[Desktop Action users]
+Name=Users
+Exec=derisk launch org.derisk.settings --action users
 
 [Desktop Action notifications]
 Name=Notifications

@@ -39,6 +39,7 @@ mod signin;
 pub mod system;
 mod thumbs;
 mod totp;
+pub mod users;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -81,6 +82,8 @@ pub enum Page {
     Privacy,
     /// The password, fingerprints, verification codes and security keys.
     SignIn,
+    /// Everyone with an account, and who administers the machine.
+    Users,
     /// Banners and sounds.
     Notifications,
     /// Dimming, locking, suspend, low power mode, and the power mode.
@@ -98,7 +101,7 @@ pub enum Page {
 
 impl Page {
     /// Every page, in sidebar order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Appearance,
         Self::Wallpaper,
         Self::TopBar,
@@ -109,6 +112,7 @@ impl Page {
         Self::Bluetooth,
         Self::Privacy,
         Self::SignIn,
+        Self::Users,
         Self::Notifications,
         Self::Power,
         Self::Backups,
@@ -128,6 +132,7 @@ impl Page {
             Self::Bluetooth => "Bluetooth",
             Self::Privacy => "Privacy",
             Self::SignIn => "Sign-in",
+            Self::Users => "Users",
             Self::Desktop => "Desktop",
             Self::Input => "Keyboard & pointer",
             Self::Notifications => "Notifications",
@@ -152,6 +157,7 @@ impl Page {
             Self::Bluetooth => "The adapter and the devices paired with it.",
             Self::Privacy => "What apps may reach, what is remembered, and the privacy display.",
             Self::SignIn => "Your password and the other ways you can sign in.",
+            Self::Users => "Everyone who can log in to this computer, and who administers it.",
             Self::Notifications => "Banners, sounds and what the lock screen shows.",
             Self::Power => "When the screen dims and locks, and when the computer sleeps.",
             Self::Backups => "Copies of your files and repositories on a LosOS box.",
@@ -177,6 +183,7 @@ pub struct SettingsApp {
     thumbs: thumbs::Thumbnails,
     privacy: privacy::PrivacyUi,
     signin: signin::SigninUi,
+    users: users::UsersUi,
     network: network::NetworkUi,
     bluetooth: bluetooth::BluetoothUi,
     profiles: profiles::ProfilesUi,
@@ -266,6 +273,7 @@ impl SettingsApp {
             thumbs: thumbs::Thumbnails::default(),
             privacy: privacy::PrivacyUi::default(),
             signin: signin::SigninUi::default(),
+            users: users::UsersUi::default(),
             network: network::NetworkUi::default(),
             bluetooth: bluetooth::BluetoothUi::default(),
             profiles: profiles::ProfilesUi::default(),
@@ -393,6 +401,9 @@ impl SettingsApp {
         }
         if self.page == Page::SignIn {
             return signin::page(ui, &mut self.signin, theme);
+        }
+        if self.page == Page::Users {
+            return users::page(ui, &mut self.users, theme);
         }
         if self.page == Page::Network {
             return network::page(ui, &mut self.network, theme);
@@ -551,6 +562,7 @@ impl SettingsApp {
                 Page::TopBar => pages::top_bar(ui, &mut s.top_bar),
                 Page::Privacy
                 | Page::SignIn
+                | Page::Users
                 | Page::Network
                 | Page::Bluetooth
                 | Page::DefaultApps
