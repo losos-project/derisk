@@ -2081,8 +2081,10 @@ dependencies = [
 name = "derisk-monitor"
 version = "0.1.0"
 dependencies = [
+ "derisk-frame",
  "derisk-icons",
  "derisk-sys",
+ "mcsapi-components",
  "mcsapi-ui",
 ]
 
