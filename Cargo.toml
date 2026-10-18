@@ -50,10 +50,10 @@ derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 derisk-machines = { path = "crates/derisk-machines", version = "0.1.0" }
 derisk-terminal = { path = "crates/derisk-terminal", version = "0.1.0" }
 derisk-store = { path = "crates/derisk-store", version = "0.1.0" }
-# The GPUI mcsapi-components-gpui is built on (Sonne's fork, at the revision
-# mcsapi pins): two GPUIs in one build cannot share a window or an element.
-gpui = { git = "https://github.com/dasmatus/sonne", rev = "b0f67b3b07b28f88151e6f88044ada8d7c4ffb75", default-features = false, features = ["font-kit", "wayland", "x11"] }
-gpui_platform = { git = "https://github.com/dasmatus/sonne", rev = "b0f67b3b07b28f88151e6f88044ada8d7c4ffb75", features = ["font-kit", "wayland", "x11"] }
+# The GPUI mcsapi-components-gpui is built on (Zed's, at the revision mcsapi
+# pins): two GPUIs in one build cannot share a window or an element.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["font-kit", "wayland", "x11"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", features = ["font-kit", "wayland", "x11"] }
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
@@ -134,3 +134,17 @@ opt-level = "z"
 panic = "abort"
 strip = true
 
+# mcsapi at the revision Cargo.lock pins takes GPUI from Sonne, which is no
+# longer public, so nothing can fetch it there. This sends those crates to
+# upstream Zed at the commit Sonne's fork sat on, the same GPUI the
+# workspace uses above. It can go once the pin moves to an mcsapi that takes
+# GPUI from Zed itself (losos-project/mcsapi#66).
+[patch."https://github.com/dasmatus/sonne"]
+# Zed has a second package named gpui, a 0.0.0 stand-in, so name the version.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", version = "=0.2.2" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
+collections = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
+gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
+gpui_util = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
+refineable = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
+syntax_theme = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a" }
