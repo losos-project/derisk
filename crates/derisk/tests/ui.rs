@@ -1502,7 +1502,10 @@ fn a_machines_window_wears_its_label() {
     let named = texts(&shapes);
     let pill = named.iter().position(|t| t == "work");
     let title = named.iter().position(|t| t == "notes.md");
-    assert!(pill.is_some_and(|p| title.is_some_and(|t| p < t)), "{named:?}");
+    assert!(
+        pill.is_some_and(|p| title.is_some_and(|t| p < t)),
+        "{named:?}"
+    );
 
     // Focus elsewhere, the bar names the other window and has no pill, but
     // the machine's window keeps a border in its label all the way round.
