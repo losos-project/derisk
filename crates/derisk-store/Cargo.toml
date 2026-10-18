@@ -8,8 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+derisk-frame.workspace = true
 derisk-icons.workspace = true
 derisk-sys.workspace = true
+mcsapi-components.workspace = true
 mcsapi-ui.workspace = true
 # Flathub's catalogue is 50 MB of XML: read as a stream, so only what the
 # store shows is ever held, and never a document tree of all of it.
