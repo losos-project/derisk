@@ -592,7 +592,7 @@ nothing but the workspace at the root:
 | `derisk-login` | The greetd login protocol, the lock screen's state and the polkit dialog's. |
 | `derisk-portal` | `xdg-desktop-portal-derisk`. |
 | `derisk-machines` | The libvirt machines apps run in (labels, states, starting and stopping them, running programs in them) and the Machines app. |
-| `derisk-apps`, `derisk-gpui`, `derisk-icons` and one crate per app | The core apps, below. |
+| `derisk-apps`, `derisk-gpui`, `derisk-icons`, `derisk-frame` and one crate per app | The core apps, below. |
 | `derisk-terminal` | Terminal, the `derisk-terminal` binary, below. |
 | `derisk-agent`, `derisk-agent-preview` | Agent, the `derisk-agent` binary, and the live previews of the apps it builds, below. |
 | `derisk-index` | The file index the palette searches files' text in: the `derisk-index` user service and the session's client. |

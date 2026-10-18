@@ -1,0 +1,13 @@
+[package]
+name = "derisk-frame"
+description = "The frame every derisk app draws in: Settings' grouped sidebar, page header, cards and action bar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+derisk-icons.workspace = true
+mcsapi-components.workspace = true
+mcsapi-ui.workspace = true
