@@ -42,6 +42,8 @@
               ./crates/derisk-apps/data
               # The store's AppStream fixture, which its tests include_str!.
               ./crates/derisk-store/tests/data
+              # The Agent's built-in skills, which it include_str!s.
+              ./crates/derisk-agent/skills
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
               # The palette's and the overview's plugins, which
               # derisk-plugin's build script compiles to WebAssembly, and the
