@@ -778,7 +778,8 @@ adjective and a verb that share a letter, from Oxford's word lists, and none
 is edited once published (`.github/release`).
 
 `lockfiles.yml` moves every lockfile to what its manifest allows each Monday
-at 03:00 UTC, as a pull request that merges itself once its checks pass. The
+at 03:00 UTC, in one commit pushed straight to the default branch, where
+CI checks it as any other push. The
 mcsapi and pm crates, which come by git, move to their repositories' newest
 weekly releases rather than their default branches, and never backwards.
 
