@@ -8,3 +8,8 @@ Icon=phone
 Exec=derisk launch org.derisk.android
 TryExec=android-app-support
 Categories=System;Emulator;
+Actions=apps;
+
+[Desktop Action apps]
+Name=Android Apps
+Exec=derisk launch org.derisk.android --action apps

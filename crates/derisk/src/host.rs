@@ -353,6 +353,7 @@ fn core_desktop_entries() -> Vec<DesktopEntry> {
     derisk_apps::APPS
         .iter()
         .filter_map(|app| DesktopEntry::parse(&app.desktop_id(), app.desktop_file))
+        .filter(DesktopEntry::installed)
         .collect()
 }
 

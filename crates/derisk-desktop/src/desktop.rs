@@ -69,6 +69,8 @@ pub struct DesktopEntry {
     pub actions: Vec<DesktopAction>,
     /// `NoDisplay`: installed but not meant for menus.
     pub no_display: bool,
+    /// `TryExec`: the program the app needs, empty when it names none.
+    pub try_exec: String,
 }
 
 /// Whether `program`, a `TryExec` value, is an executable file: the path
@@ -253,11 +255,11 @@ impl DesktopEntry {
             exec: String::new(),
             actions: Vec::new(),
             no_display: false,
+            try_exec: String::new(),
         };
         let mut kind = String::new();
         let mut hidden = false;
         let mut shown_here = true;
-        let mut try_exec = String::new();
         let mut action_ids = Vec::new();
         let mut groups: Vec<DesktopAction> = Vec::new();
         // `None` before any group, `Some(None)` in [Desktop Entry],
@@ -300,7 +302,7 @@ impl DesktopEntry {
                     "Exec" => entry.exec = value.to_owned(),
                     "NoDisplay" => entry.no_display = value == "true",
                     "Hidden" => hidden = value == "true",
-                    "TryExec" => try_exec = unescape(value),
+                    "TryExec" => entry.try_exec = unescape(value),
                     "Actions" => action_ids = list(value),
                     "OnlyShowIn" => {
                         shown_here &= list(value).iter().any(|d| d == DESKTOP_NAME);
@@ -321,12 +323,6 @@ impl DesktopEntry {
         if kind != "Application" || hidden || !shown_here || entry.exec.is_empty() {
             return None;
         }
-        // An app whose program this system does not have, as a core app
-        // that only some systems give a backend to (Android, which needs
-        // the OS's android-app-support), is not listed at all.
-        if !try_exec.is_empty() && !installed(&try_exec) {
-            return None;
-        }
         if entry.name.is_empty() {
             entry.name = id.trim_end_matches(".desktop").to_owned();
         }
@@ -337,6 +333,13 @@ impl DesktopEntry {
             .cloned()
             .collect();
         Some(entry)
+    }
+
+    /// Whether this system has the program the app needs. One that does
+    /// not, as a core app only some systems give a backend to (Android,
+    /// which needs the OS's android-app-support), is not listed at all.
+    pub fn installed(&self) -> bool {
+        self.try_exec.is_empty() || installed(&self.try_exec)
     }
 
     /// The command line that starts the app.
@@ -409,7 +412,7 @@ pub fn scan(dirs: &[PathBuf]) -> Vec<DesktopEntry> {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            if let Some(entry) = DesktopEntry::parse(&id, &text) {
+            if let Some(entry) = DesktopEntry::parse(&id, &text).filter(DesktopEntry::installed) {
                 out.push(entry);
             }
         }
@@ -454,21 +457,17 @@ mod tests {
         )
     }
 
+    fn installed(program: &str) -> bool {
+        DesktopEntry::parse("a.desktop", &with_try_exec(program))
+            .unwrap()
+            .installed()
+    }
+
     #[test]
     fn an_app_whose_program_is_missing_is_not_listed() {
         let here = std::env::current_exe().unwrap();
-        assert!(
-            DesktopEntry::parse("a.desktop", &with_try_exec(&here.display().to_string())).is_some()
-        );
-        assert!(
-            DesktopEntry::parse(
-                "a.desktop",
-                &with_try_exec("/nonexistent/android-app-support")
-            )
-            .is_none()
-        );
-        assert!(
-            DesktopEntry::parse("a.desktop", &with_try_exec("no-such-program-anywhere")).is_none()
-        );
+        assert!(installed(&here.display().to_string()));
+        assert!(!installed("/nonexistent/android-app-support"));
+        assert!(!installed("no-such-program-anywhere"));
     }
 }

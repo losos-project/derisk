@@ -87,6 +87,14 @@ impl AndroidSupport {
         }
     }
 
+    /// Opens on the Apps page, as the desktop entry's Apps action does.
+    pub fn apps() -> Self {
+        Self {
+            page: Page::Apps,
+            ..Self::new()
+        }
+    }
+
     /// The Pixel's state as last read.
     pub fn status(&self) -> &Status {
         &self.status

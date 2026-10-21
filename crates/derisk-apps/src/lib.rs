@@ -241,7 +241,11 @@ pub const APPS: [AppInfo; 8] = [
         ],
         desktop_file: include_str!("../data/org.derisk.android.desktop"),
         create: || Box::new(derisk_android::AndroidSupport::new()),
-        action: |_| None,
+        action: |a| {
+            new_window(a, "apps", || {
+                Box::new(derisk_android::AndroidSupport::apps())
+            })
+        },
     },
 ];
 
