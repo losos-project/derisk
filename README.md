@@ -763,6 +763,23 @@ $ nix fmt                    # nixfmt and rustfmt
 mcsapi comes from Cargo.lock, not a flake input: `cargo update -p mcsapi`
 moves it for Cargo and Nix alike.
 
+## Releases
+
+Every push to `main` that passes CI is published as a GitHub prerelease,
+`nightly-<YYYYMMDD>T<HHMM>` after the commit's time in UTC, with the source as `derisk-<version>.tar.gz` and
+a `SHA256SUMS`. Every day at 02:17 UTC `release.yml` also cuts a `weekly-`,
+`monthly-` or `yearly-` release from the newest nightly when that cadence has
+none yet this ISO week, month or year: the same commit and files under the
+cadence's tag. Only a yearly release becomes GitHub's latest. These are the
+cadences the OS releases on ([Release
+cadences](https://github.com/losos-project/desktop/blob/main/docs/releases.md#release-cadences)),
+and a tag is the version to pin derisk at. Each release is named with an
+adjective and a verb that share a letter, from Oxford's word lists, and none
+is edited once published (`.github/release`).
+
+`lockfiles.yml` moves every lockfile to what its manifest allows each Monday
+at 03:00 UTC, as a pull request that merges itself once its checks pass.
+
 ## License
 
 GPL-3.0-only
