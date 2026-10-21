@@ -50,6 +50,7 @@ derisk-gpui = { path = "crates/derisk-gpui", version = "0.1.0" }
 derisk-machines = { path = "crates/derisk-machines", version = "0.1.0" }
 derisk-terminal = { path = "crates/derisk-terminal", version = "0.1.0" }
 derisk-store = { path = "crates/derisk-store", version = "0.1.0" }
+derisk-android = { path = "crates/derisk-android", version = "0.1.0" }
 # The GPUI mcsapi-components-gpui is built on (Zed's, at the revision mcsapi
 # pins): two GPUIs in one build cannot share a window or an element.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["font-kit", "wayland", "x11"] }

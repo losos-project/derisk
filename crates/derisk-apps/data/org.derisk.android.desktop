@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Android
+GenericName=Android App Support
+Comment=Your own Pixel, and its apps in windows of their own
+Keywords=android;apps;pixel;phone;google play;apk;emulator;
+Icon=phone
+Exec=derisk launch org.derisk.android
+TryExec=android-app-support
+Categories=System;Emulator;

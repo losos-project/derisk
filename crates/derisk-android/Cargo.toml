@@ -1,0 +1,24 @@
+[package]
+name = "derisk-android"
+description = "The Android app: a person's virtual Pixel, its state and its apps, each opened as a window of its own"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+derisk-frame.workspace = true
+derisk-icons.workspace = true
+derisk-sys.workspace = true
+mcsapi-components.workspace = true
+mcsapi-ui.workspace = true
+# `android-app-support status` answers in a line of JSON.
+serde.workspace = true
+serde_json.workspace = true
+
+# The Pixel runs on the computer itself; the browser demo of the core apps
+# builds this crate for wasm32 with the parsing and the page alone.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+crossbeam-channel.workspace = true
+tracing.workspace = true

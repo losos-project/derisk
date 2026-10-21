@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+derisk-android.workspace = true
 derisk-calculator.workspace = true
 derisk-editor.workspace = true
 derisk-files.workspace = true
