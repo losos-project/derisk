@@ -48,9 +48,19 @@ jobs:
       # Today's stable cargo resolves each lock; resolver 3 keeps every crate
       # within the workspace's rust-version, which CI builds with.
       - name: Update the lockfiles
+        env:
+          # gh reads mcsapi's and pm's releases with it; they are public.
+          GH_TOKEN: ${{ github.token }}
         run: |
           summary=$RUNNER_TEMP/summary.md
           rustup update --no-self-update stable && rustup default stable
+          # The revision of the git source REPO in Cargo.lock, under either
+          # owner the repository has had.
+          locked() {
+            sed -nE "s|^source = \"git\\+https://github.com/[^/]+/$1(\\?[^#]*)?#([0-9a-f]{40})\"\$|\\2|p" Cargo.lock | sort -u
+          }
+          declare -A before
+          for repo in mcsapi pm; do before[$repo]=$(locked "$repo"); done
           : > "$RUNNER_TEMP/flake"
           if [ -e flake.lock ]; then
             nix flake update 2>&1 | tee "$RUNNER_TEMP/flake"
@@ -62,6 +72,34 @@ jobs:
           git ls-files ':(glob)**/package-lock.json' | while read -r lock; do
             echo "npm update in $(dirname "$lock")"
             (cd "$(dirname "$lock")" && npm update --package-lock-only --ignore-scripts --no-fund --no-audit < /dev/null)
+          done
+
+          # mcsapi and pm come by git, which cargo update moves to their
+          # default branch. They follow their weekly releases instead, the
+          # ones each cut at 02:17 UTC today (its .github/release), as the
+          # OS's submodules do: every crate of the source moves to the
+          # release's commit, unless the lock already held a newer one
+          # someone moved it to by hand. A repository with no weekly
+          # release yet stays on its default branch.
+          : > "$RUNNER_TEMP/releases"
+          for dep in mcsapi:mcsapi pm:pm-signing; do
+            repo=${dep%%:*} crate=${dep#*:}
+            tag=$(gh release list --repo "losos-project/$repo" --limit 1000 --exclude-drafts --json tagName \
+              --jq '.[].tagName | select(test("^weekly-[0-9]{8}T[0-9]{4}$"))' | sort | tail -n 1)
+            if [ -z "$tag" ]; then
+              echo "$repo has no weekly release yet; it stays on its default branch."
+              continue
+            fi
+            rev=$(gh api "repos/losos-project/$repo/commits/$tag" --jq .sha)
+            target=$rev
+            if [ -n "${before[$repo]}" ] && [ "$(gh api "repos/losos-project/$repo/compare/$rev...${before[$repo]}" --jq .status)" = ahead ]; then
+              echo "$repo stays at ${before[$repo]}, ahead of $tag."
+              target=${before[$repo]}
+            fi
+            cargo update -p "$crate" --precise "$target" < /dev/null
+            if [ "$target" = "$rev" ]; then
+              echo "- \`$repo\`: [\`$tag\`](https://github.com/losos-project/$repo/releases/tag/$tag)" >> "$RUNNER_TEMP/releases"
+            fi
           done
 
           # nix prints each input as its name, the old URL and date, then
@@ -77,6 +115,12 @@ jobs:
             ' "$RUNNER_TEMP/flake"
             git diff --numstat -- ':(glob)**/Cargo.lock' ':(glob)**/package-lock.json' |
               awk '{ printf "- `%s`: +%s -%s lines\n", $3, $1, $2 }'
+            if [ -s "$RUNNER_TEMP/releases" ]; then
+              echo
+              echo "Git dependencies at their weekly releases:"
+              echo
+              cat "$RUNNER_TEMP/releases"
+            fi
           } > "$summary"
           cat "$summary" >> "$GITHUB_STEP_SUMMARY"
 
