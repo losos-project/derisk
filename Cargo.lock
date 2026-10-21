@@ -1915,9 +1915,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "derisk-android"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "derisk-frame",
+ "derisk-icons",
+ "derisk-sys",
+ "mcsapi-components",
+ "mcsapi-ui",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "derisk-apps"
 version = "0.1.0"
 dependencies = [
+ "derisk-android",
  "derisk-calculator",
  "derisk-editor",
  "derisk-files",

@@ -40,6 +40,8 @@ pub const CALCULATOR: &str = "org.derisk.calculator";
 pub const MACHINES: &str = derisk_machines::APP_ID;
 /// App ID of the Store.
 pub const STORE: &str = derisk_store::APP_ID;
+/// App ID of Android.
+pub const ANDROID: &str = derisk_android::APP_ID;
 
 /// A catalog entry for one core app.
 #[derive(Clone, Copy, Debug)]
@@ -99,7 +101,7 @@ impl AppInfo {
 }
 
 /// Every core app, in launcher order.
-pub const APPS: [AppInfo; 7] = [
+pub const APPS: [AppInfo; 8] = [
     AppInfo {
         id: FILES,
         name: "Files",
@@ -220,6 +222,28 @@ pub const APPS: [AppInfo; 7] = [
                 let mut store = derisk_store::StoreApp::new();
                 store.show_installed();
                 Box::new(store) as Box<dyn App>
+            })
+        },
+    },
+    AppInfo {
+        id: ANDROID,
+        name: "Android",
+        summary: "Your own Pixel, and its apps in windows of their own",
+        icon: "📱",
+        keywords: &[
+            "android",
+            "apps",
+            "pixel",
+            "phone",
+            "google play",
+            "apk",
+            "emulator",
+        ],
+        desktop_file: include_str!("../data/org.derisk.android.desktop"),
+        create: || Box::new(derisk_android::AndroidSupport::new()),
+        action: |a| {
+            new_window(a, "apps", || {
+                Box::new(derisk_android::AndroidSupport::apps())
             })
         },
     },

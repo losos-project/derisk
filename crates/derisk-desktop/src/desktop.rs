@@ -69,6 +69,23 @@ pub struct DesktopEntry {
     pub actions: Vec<DesktopAction>,
     /// `NoDisplay`: installed but not meant for menus.
     pub no_display: bool,
+    /// `TryExec`: the program the app needs, empty when it names none.
+    pub try_exec: String,
+}
+
+/// Whether `program`, a `TryExec` value, is an executable file: the path
+/// itself when it has a slash, else a file of that name in a `PATH`
+/// directory.
+fn installed(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = |path: &Path| {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        return executable(Path::new(program));
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| executable(&dir.join(program))))
 }
 
 /// Unescapes a string value (`\s`, `\n`, `\t`, `\r`, `\\`).
@@ -238,6 +255,7 @@ impl DesktopEntry {
             exec: String::new(),
             actions: Vec::new(),
             no_display: false,
+            try_exec: String::new(),
         };
         let mut kind = String::new();
         let mut hidden = false;
@@ -284,6 +302,7 @@ impl DesktopEntry {
                     "Exec" => entry.exec = value.to_owned(),
                     "NoDisplay" => entry.no_display = value == "true",
                     "Hidden" => hidden = value == "true",
+                    "TryExec" => entry.try_exec = unescape(value),
                     "Actions" => action_ids = list(value),
                     "OnlyShowIn" => {
                         shown_here &= list(value).iter().any(|d| d == DESKTOP_NAME);
@@ -314,6 +333,13 @@ impl DesktopEntry {
             .cloned()
             .collect();
         Some(entry)
+    }
+
+    /// Whether this system has the program the app needs. One that does
+    /// not, as a core app only some systems give a backend to (Android,
+    /// which needs the OS's android-app-support), is not listed at all.
+    pub fn installed(&self) -> bool {
+        self.try_exec.is_empty() || installed(&self.try_exec)
     }
 
     /// The command line that starts the app.
@@ -386,7 +412,7 @@ pub fn scan(dirs: &[PathBuf]) -> Vec<DesktopEntry> {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            if let Some(entry) = DesktopEntry::parse(&id, &text) {
+            if let Some(entry) = DesktopEntry::parse(&id, &text).filter(DesktopEntry::installed) {
                 out.push(entry);
             }
         }
@@ -418,5 +444,30 @@ fn collect(root: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, PathBuf
                 .join("-");
             out.push((id, path));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_try_exec(program: &str) -> String {
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Android\nExec=derisk launch org.derisk.android\nTryExec={program}\n"
+        )
+    }
+
+    fn installed(program: &str) -> bool {
+        DesktopEntry::parse("a.desktop", &with_try_exec(program))
+            .unwrap()
+            .installed()
+    }
+
+    #[test]
+    fn an_app_whose_program_is_missing_is_not_listed() {
+        let here = std::env::current_exe().unwrap();
+        assert!(installed(&here.display().to_string()));
+        assert!(!installed("/nonexistent/android-app-support"));
+        assert!(!installed("no-such-program-anywhere"));
     }
 }
