@@ -228,6 +228,9 @@ pub struct Session {
     /// Whether the output is phone-sized, shared with [`CoreApps`] so the
     /// apps get touch-sized widgets too.
     phone: Arc<AtomicBool>,
+    /// The theme's font families, shared with [`CoreApps`]: egui draws
+    /// only its own fonts until they are installed in each context.
+    fonts: Arc<Mutex<mcsapi_ui::theme::Fonts>>,
     /// Where the on-screen keyboard keeps the words it learned, and when it
     /// last wrote them.
     words: Option<PathBuf>,
@@ -422,7 +425,12 @@ impl Session {
         );
     }
 
-    fn new(options: &Options, pending_actions: PendingActions, phone: Arc<AtomicBool>) -> Self {
+    fn new(
+        options: &Options,
+        pending_actions: PendingActions,
+        phone: Arc<AtomicBool>,
+        fonts: Arc<Mutex<mcsapi_ui::theme::Fonts>>,
+    ) -> Self {
         let (w, h) = options.size;
         let mut shell = Shell::new(rect(0, 0, w, h), false);
         phone.store(shell.is_phone(), Ordering::Relaxed);
@@ -482,6 +490,7 @@ impl Session {
             model: None,
             asking: None,
             phone,
+            fonts,
             words,
             tutorial_mark: tutorial::mark_path(),
             tutorial_checked: false,
@@ -876,6 +885,7 @@ impl Session {
         }
         self.ui.theme = Theme::from(&theme);
         self.ui.tokens = mcsapi_components::Tokens::from_spec(&theme);
+        *self.fonts.lock().unwrap_or_else(|e| e.into_inner()) = theme.fonts.clone();
         // The chrome and the core apps share this process, so they all
         // draw from the icon theme the theme names.
         derisk::icons::set_theme(&theme.icons.theme);
@@ -2139,6 +2149,7 @@ impl compositor::Shell for Session {
     }
 
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
+        install_fonts(ui.ctx(), &self.fonts);
         if self.lock.is_locked() {
             self.poll_unlock();
         }
@@ -2526,6 +2537,7 @@ struct CoreApps {
     session: derisk_apps::Session,
     pending_actions: PendingActions,
     phone: Arc<AtomicBool>,
+    fonts: Arc<Mutex<mcsapi_ui::theme::Fonts>>,
 }
 
 impl Apps for CoreApps {
@@ -2572,7 +2584,15 @@ impl Apps for CoreApps {
     fn prepare(&mut self, ctx: &egui::Context, theme: &Theme) {
         ctx.set_visuals(derisk_apps::visuals(theme));
         set_touch_style(ctx, self.phone.load(Ordering::Relaxed));
+        install_fonts(ctx, &self.fonts);
     }
+}
+
+/// Draws `ctx` in the theme's font families, which the chrome and the core
+/// apps share.
+fn install_fonts(ctx: &egui::Context, fonts: &Mutex<mcsapi_ui::theme::Fonts>) {
+    let fonts = fonts.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    mcsapi_components::install_fonts(ctx, &fonts);
 }
 
 /// Whether to open Settings on its Default apps page at login: the OS's
@@ -2591,7 +2611,13 @@ fn choice_needed() -> bool {
 pub fn run(options: Options) -> Result {
     let pending_actions = PendingActions::default();
     let phone = Arc::new(AtomicBool::new(false));
-    let session = Session::new(&options, pending_actions.clone(), phone.clone());
+    let fonts = Arc::default();
+    let session = Session::new(
+        &options,
+        pending_actions.clone(),
+        phone.clone(),
+        Arc::clone(&fonts),
+    );
     let lock_path = session.session_path.clone();
     if options.execute {
         let _ = systemd::run(&systemd::stop_headless_agent_argv());
@@ -2600,6 +2626,7 @@ pub fn run(options: Options) -> Result {
         session: derisk_apps::Session::new()?,
         pending_actions: pending_actions.clone(),
         phone,
+        fonts,
     };
     let (w, h) = options.size;
     let mut compositor = Compositor::new(session)

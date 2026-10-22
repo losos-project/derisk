@@ -180,8 +180,8 @@ accent = "#2563eb"           # or a built-in accent name such as "sky"
 destructive = "#dc2626"
 
 [fonts]                      # families must be installed (fc-list)
-sans = "Ubuntu"
-sans_weight = 300            # 1 to 1000; 400 regular, 700 bold
+sans = "Inter"
+sans_weight = 400            # 1 to 1000; 400 regular, 700 bold
 monospace = "Hack"
 size = 14                    # logical pixels, 6 to 72
 small_size = 12
@@ -198,7 +198,7 @@ radius = 6                   # control corners, 0 to 32; cards use twice this
 
 Defaults: dark is background `#0f172a`, surface `#1e293b`, foreground
 `#f8fafc`, border `#64748b`; light is `#f8fafc`, `#e2e8f0`, `#0f172a`,
-`#94a3b8`. Both use Ubuntu 300 at 14 px, Hack at 12 px and a radius of 6;
+`#94a3b8`. Both use Inter 400 (the LosOS web interface's font) at 14 px, Hack at 12 px and a radius of 6;
 dark uses Papirus-Dark and light uses Papirus, with the Adwaita cursor at 24.
 High contrast is black and white with a `#ffd600` accent.
 
