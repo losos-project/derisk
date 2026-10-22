@@ -102,6 +102,8 @@ impl<F: Flow> compositor::Shell for Host<F> {
             egui::vec2(self.output.0 as f32, self.output.1 as f32),
         );
         let ctx = ui.ctx().clone();
+        // In the default theme's letters, as the desktop it sets up.
+        mcsapi_components::install_fonts(&ctx, &mcsapi_ui::theme::Fonts::default());
         let phone = wizard::screen_layout(self.output, false).phone;
         if self.phone_style != Some(phone) {
             set_touch_style(&ctx, phone);

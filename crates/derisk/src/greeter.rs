@@ -280,6 +280,8 @@ impl compositor::Shell for Greeter {
     }
 
     fn chrome(&mut self, ui: &mut egui::Ui, elapsed_ms: u32) {
+        // In the default theme's letters, as the session after it.
+        mcsapi_components::install_fonts(ui.ctx(), &mcsapi_ui::theme::Fonts::default());
         self.poll(elapsed_ms);
         if std::mem::take(&mut self.auto_submit) {
             let request = self.login.submit();
