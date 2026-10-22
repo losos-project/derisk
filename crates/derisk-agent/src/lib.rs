@@ -29,7 +29,7 @@ pub use ui::AgentApp;
 
 use std::path::{Path, PathBuf};
 
-use mcsapi_ui::{Theme, egui::Color32};
+use mcsapi_ui::{Theme, egui::Color32, theme::Fonts};
 
 /// The app ID the window and its desktop entry share.
 pub const APP_ID: &str = "org.derisk.agent";
@@ -38,10 +38,7 @@ pub const APP_ID: &str = "org.derisk.agent";
 /// window, a process of its own, matches the desktop. `None` outside a derisk
 /// session, or when a colour does not parse.
 pub fn desktop_theme() -> Option<Theme> {
-    let path = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?)
-        .join("derisk")
-        .join("theme.json");
-    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let json = published_theme()?;
     let color = |name: &str| parse_hex(json["palette"][name].as_str()?);
     Some(Theme {
         background: color("background")?,
@@ -50,6 +47,38 @@ pub fn desktop_theme() -> Option<Theme> {
         border: color("border")?,
         accent: color("accent")?,
     })
+}
+
+/// The font families of the theme derisk publishes (see [`desktop_theme`]),
+/// for [`mcsapi_components::install_fonts`]. The default theme's outside a
+/// derisk session, and for each family the file leaves out.
+pub fn desktop_fonts() -> Fonts {
+    let mut fonts = Fonts::default();
+    let Some(json) = published_theme() else {
+        return fonts;
+    };
+    let published = &json["fonts"];
+    if let Some(sans) = published["sans"].as_str() {
+        fonts.sans = sans.to_owned();
+    }
+    if let Some(weight) = published["sans_weight"]
+        .as_u64()
+        .and_then(|weight| u16::try_from(weight).ok())
+    {
+        fonts.sans_weight = weight;
+    }
+    if let Some(monospace) = published["monospace"].as_str() {
+        fonts.monospace = monospace.to_owned();
+    }
+    fonts
+}
+
+/// `$XDG_RUNTIME_DIR/derisk/theme.json`, parsed.
+fn published_theme() -> Option<serde_json::Value> {
+    let path = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?)
+        .join("derisk")
+        .join("theme.json");
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 fn parse_hex(text: &str) -> Option<Color32> {

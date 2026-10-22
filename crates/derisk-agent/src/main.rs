@@ -12,7 +12,7 @@ use std::{
 };
 
 use derisk_agent::{AgentApp, routines, store::Store, tools::ToolContext};
-use mcsapi_ui::{App as _, Theme};
+use mcsapi_ui::{App as _, Theme, theme::Fonts};
 use miette::{Result, bail, miette};
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -94,6 +94,7 @@ const THEME_POLL: Duration = Duration::from_secs(1);
 struct Window {
     app: AgentApp,
     theme: Theme,
+    fonts: Fonts,
     theme_read: Instant,
 }
 
@@ -106,7 +107,9 @@ impl eframe::App for Window {
             if let Some(theme) = derisk_agent::desktop_theme() {
                 self.theme = theme;
             }
+            self.fonts = derisk_agent::desktop_fonts();
         }
+        mcsapi_components::install_fonts(ui.ctx(), &self.fonts);
         egui::CentralPanel::no_frame().show(ui, |ui| self.app.ui(ui, &self.theme));
     }
 }
@@ -132,6 +135,7 @@ fn window(ask: Option<String>) -> Result<()> {
             Ok(Box::new(Window {
                 app,
                 theme: derisk_agent::desktop_theme().unwrap_or_default(),
+                fonts: derisk_agent::desktop_fonts(),
                 theme_read: Instant::now(),
             }))
         }),
