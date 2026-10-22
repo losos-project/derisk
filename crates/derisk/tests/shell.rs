@@ -566,6 +566,37 @@ fn a_dialog_floats_centred_on_its_parent() {
 }
 
 #[test]
+fn a_floating_window_takes_the_size_it_draws_at() {
+    let mut shell = desktop();
+    let (_first, _) = shell.map_window("other", "Other");
+    let (calculator, _) = shell.map_window("macos.com.apple.calculator", "Calculator");
+    shell
+        .apply(Action::Float {
+            window: Some(calculator.get()),
+        })
+        .unwrap();
+    let before = frame_of(&shell, calculator);
+    shell.fit_floating(calculator, (230, 408)).unwrap();
+    let after = frame_of(&shell, calculator);
+    assert_eq!((after.size.w, after.size.h), (230, 408));
+    let centre = |g: mcsapi::Geometry| (2 * g.loc.x + g.size.w, 2 * g.loc.y + g.size.h);
+    let ((ax, ay), (bx, by)) = (centre(after), centre(before));
+    assert!((ax - bx).abs() <= 1 && (ay - by).abs() <= 1, "same centre");
+
+    // Larger than the work area, it is kept inside it.
+    let area = shell.work_area();
+    shell.fit_floating(calculator, (5000, 5000)).unwrap();
+    let big = frame_of(&shell, calculator);
+    assert_eq!((big.loc, big.size), (area.loc, area.size));
+
+    // A tiled window keeps its tile.
+    let (tiled, _) = shell.map_window("app", "Tiled");
+    let tile = frame_of(&shell, tiled);
+    shell.fit_floating(tiled, (100, 100)).unwrap();
+    assert_eq!(frame_of(&shell, tiled), tile);
+}
+
+#[test]
 fn a_modal_dialog_keeps_its_parents_input() {
     let mut shell = desktop();
     let (main, _) = shell.map_window("app", "Main");

@@ -1137,6 +1137,30 @@ impl Shell {
         Ok(())
     }
 
+    /// Fits a floating window's frame to the size its content was drawn at
+    /// (`WindowHint::Size`), about the same centre and inside the work
+    /// area. A client may draw a floating window at a size other than the
+    /// one it was given, as a fixed-size dialog or a window streamed from
+    /// macOS does, and its frame would otherwise keep empty space around
+    /// it. Tiled and snapped windows keep the size their place gives them.
+    pub fn fit_floating(&mut self, window: WindowId, (w, h): (i32, i32)) -> Result<(), Error> {
+        let area = self.work_area();
+        let info = self.info_mut(window)?;
+        let Mode::Floating { frame } = info.mode else {
+            return Ok(());
+        };
+        let (w, h) = (w.clamp(1, area.size.w), h.clamp(1, area.size.h));
+        if (frame.w, frame.h) == (w, h) {
+            return Ok(());
+        }
+        let x = (frame.x + (frame.w - w) / 2).clamp(area.loc.x, area.loc.x + area.size.w - w);
+        let y = (frame.y + (frame.h - h) / 2).clamp(area.loc.y, area.loc.y + area.size.h - h);
+        info.mode = Mode::Floating {
+            frame: rect(x, y, w, h).into(),
+        };
+        Ok(())
+    }
+
     /// Asks for the person's attention on `window`, or stops asking. A
     /// focused window needs none; focusing it later clears it.
     pub fn set_attention(&mut self, window: WindowId, on: bool) -> Result<(), Error> {
