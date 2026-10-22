@@ -2411,6 +2411,7 @@ impl compositor::Shell for Session {
         let result = match hint {
             WindowHint::Parent(parent) => self.shell.set_parent(window, parent),
             WindowHint::Modal(modal) => self.shell.set_modal(window, modal),
+            WindowHint::Size(size) => self.shell.fit_floating(window, size),
             _ => Ok(()),
         };
         if let Err(e) = result {
