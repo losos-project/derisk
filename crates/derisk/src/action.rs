@@ -263,6 +263,31 @@ pub enum Action {
         /// Unit name.
         unit: String,
     },
+    /// Offer to report a failed user unit as an issue (performed by the
+    /// host, through [`crate::report`]).
+    ReportUnit {
+        /// Unit name.
+        unit: String,
+    },
+    /// Offer to report that a window stopped responding.
+    ReportWindow {
+        /// Target window.
+        #[serde(default)]
+        window: Option<u64>,
+    },
+    /// Offer to report that an app's action never finished: a Settings
+    /// page still busy long after it should be done, say.
+    ReportStuck {
+        /// The app's ID.
+        app: String,
+        /// The action, as the app labels it.
+        label: String,
+        /// How long it has been running.
+        seconds: u64,
+        /// The process doing it, whose journal goes with the report.
+        #[serde(default)]
+        pid: Option<u32>,
+    },
     /// Answer the on-screen confirmation of a session operation an agent
     /// or injected input asked for ([`crate::shell::Shell::pending_confirmation`]).
     /// Accepting only works from real input.
@@ -361,6 +386,9 @@ impl Action {
             Self::ActivateWidget { id, item } => format!("Press {item} on widget {id}"),
             Self::RestartUnit { unit } => format!("Restart {unit}"),
             Self::ResetFailed { unit } => format!("Dismiss {unit}"),
+            Self::ReportUnit { unit } => format!("Report {unit}"),
+            Self::ReportWindow { .. } => "Report a window that stopped responding".into(),
+            Self::ReportStuck { app, label, .. } => format!("Report {app}: {label}"),
             Self::Confirm { accept: true } => "Confirm".into(),
             Self::Confirm { accept: false } => "Cancel".into(),
         }
@@ -461,5 +489,14 @@ pub enum Effect {
     ResetFailed {
         /// Unit name.
         unit: String,
+    },
+    /// Show the report of a problem, for the person to send or not.
+    Report {
+        /// What went wrong.
+        problem: crate::report::Problem,
+        /// The window that stopped responding, for the host to add its
+        /// process and how long it has been silent.
+        #[serde(default)]
+        window: Option<u64>,
     },
 }

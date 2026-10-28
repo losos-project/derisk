@@ -41,6 +41,9 @@
 //!   journald, logind session actions and focus-aware resource weights.
 //! - [`ui`]: egui rendering of all shell surfaces.
 //! - [`privacy`]: forgetting recent files and emptying old trash.
+//! - [`report`]: offering to report a window that stopped responding, a
+//!   failed service or an action that never finished as an issue, and the
+//!   page that shows the report before it is sent.
 //! - [`privacy_display`]: covering the screen while someone else looks at
 //!   it, Samsung's privacy display in software.
 //! - [`wallpaper`]: the desktop background, from a color to a looping video.
@@ -93,6 +96,7 @@ pub mod password_age;
 pub mod plugins;
 pub mod privacy;
 pub mod privacy_display;
+pub mod report;
 pub mod setup;
 pub mod shell;
 pub mod systemd;

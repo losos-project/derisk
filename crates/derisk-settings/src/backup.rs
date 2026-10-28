@@ -490,10 +490,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BackupUi, theme: &Theme) {
         return;
     };
     if let Some((label, _)) = &state.job {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(format!("{}…", job_label(label)));
-        });
+        crate::stuck::working(ui, &format!("{}…", job_label(label)));
         if let Some(prompt) = state.prompt.clone() {
             login_step(ui, &prompt, theme);
         }
