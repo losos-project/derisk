@@ -6,7 +6,8 @@
 //! is forgotten. It draws from the same thread the setup's Network page does
 //! ([`derisk_install::wifi`]), started when the page is first shown, and
 //! applies at once, like the Sign-in page, since none of it is derisk's own
-//! setting: NetworkManager keeps the connections itself.
+//! setting: NetworkManager keeps the connections itself. So is encrypted
+//! DNS, LosOS's ad blocker's setting ([`crate::encrypted_dns`]).
 
 use derisk_install::{
     network::{Network, WiredState},
@@ -21,6 +22,7 @@ pub(crate) struct NetworkUi {
     wifi: Option<Wifi>,
     picked: Option<Vec<u8>>,
     passphrase: String,
+    encrypted_dns: crate::encrypted_dns::EncryptedDnsUi,
 }
 
 impl std::fmt::Debug for NetworkUi {
@@ -100,6 +102,9 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
         ui.label(egui::RichText::new(message).color(egui::Color32::from_rgb(248, 113, 113)));
         ui.add_space(8.0);
     }
+
+    // Above Wi-Fi, which returns early on a computer without it.
+    crate::encrypted_dns::section(ui, &mut state.encrypted_dns, theme);
 
     if status.interface.is_none() {
         hint(ui, "No Wi-Fi adapter was found.");

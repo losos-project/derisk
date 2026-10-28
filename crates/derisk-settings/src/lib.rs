@@ -20,6 +20,8 @@
 pub mod backup;
 pub mod bluetooth;
 pub mod choice;
+#[cfg(not(target_family = "wasm"))]
+mod encrypted_dns;
 pub mod familiarity;
 pub mod flatpak;
 mod layout;
