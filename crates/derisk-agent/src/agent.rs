@@ -101,6 +101,12 @@ pub fn command(project: &Project, chat: &Chat, prompt: &str, store: &Store) -> R
         // no terminal in `--print` mode for Claude Code to ask on. derisk
         // asks on screen itself before anything that logs out or loses work.
         .args(["--allowedTools", "mcp__desktop", "mcp__derisk"])
+        // And the servers the person put in every chat (mcp::global_file).
+        .args(
+            mcp::global_servers()
+                .iter()
+                .map(|server| format!("mcp__{}", server.name)),
+        )
         .arg("--mcp-config")
         .arg(mcp::claude_config(project, &chat.id)?.to_string())
         // The built-in skills, for this turn only.

@@ -381,10 +381,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BackupUi, theme: &Theme) {
         return;
     };
     if let Some((label, _)) = &state.job {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(format!("{}…", job_label(label)));
-        });
+        crate::stuck::working(ui, &format!("{}…", job_label(label)));
         ui.add_space(8.0);
     } else if let Some((message, error)) = &state.message {
         ui.label(egui::RichText::new(message).color(if *error { RED } else { theme.accent }));

@@ -1,5 +1,6 @@
 //! System: the tray's items, and each failed user service with a row to
-//! restart it and one to dismiss it.
+//! restart it, one to dismiss it and one to report it. derisk leaves the
+//! report rows out where nothing sends reports.
 
 use derisk_palette_sdk::{Category, Entry, Guest, Hook, Input, Manifest, View, export, json};
 
@@ -11,7 +12,12 @@ impl Guest for System {
             .hooks(&[Hook::Entries])
             .inputs(&[Input::Tray, Input::Units])
             .categories(&[Category::System])
-            .actions(&["activate_tray", "restart_unit", "reset_failed"])
+            .actions(&[
+                "activate_tray",
+                "restart_unit",
+                "reset_failed",
+                "report_unit",
+            ])
     }
 
     fn entries(view: View) -> Vec<Entry> {
@@ -53,6 +59,14 @@ pub fn entries(view: &View) -> Vec<Entry> {
             )
             .detail("Failed service")
             .keywords("unit service systemd reset"),
+            Entry::new(
+                Category::System,
+                "dialog-warning",
+                format!("Report {unit}"),
+                &[json!({"action": "report_unit", "unit": unit})],
+            )
+            .detail("Failed service")
+            .keywords("unit service systemd bug issue problem"),
         ]
     });
     tray.chain(units).collect()

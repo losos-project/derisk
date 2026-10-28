@@ -38,6 +38,7 @@ pub mod profiles;
 mod schizo;
 mod shortcuts;
 mod signin;
+pub mod stuck;
 pub mod system;
 mod thumbs;
 mod totp;
@@ -101,7 +102,8 @@ pub enum Page {
     /// The browser and search engine choice screens; listed only while the
     /// policy turns one on ([`choice`]).
     DefaultApps,
-    /// The security report and the factory reset.
+    /// Which releases updates come from, the security report and the
+    /// factory reset.
     System,
     /// Version and file location.
     About,
@@ -175,7 +177,9 @@ impl Page {
             Self::Power => "When the screen dims and locks, and when the computer sleeps.",
             Self::Backups => "Copies of your files and repositories on a LosOS box.",
             Self::DefaultApps => "The browser and search engine the desktop opens.",
-            Self::System => "The security report and resetting this computer.",
+            Self::System => {
+                "Where updates come from, the security report and resetting this computer."
+            }
             Self::About => "This version of Settings and where it keeps them.",
         }
     }
