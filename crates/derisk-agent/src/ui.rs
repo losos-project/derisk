@@ -81,6 +81,11 @@ enum Job {
         name: String,
         result: Result<String, String>,
     },
+    /// A folder picked in the desktop's file dialog for a project.
+    Folder {
+        project: String,
+        result: Result<Option<PathBuf>, String>,
+    },
 }
 
 struct FolderPulls {
@@ -243,6 +248,21 @@ impl AgentApp {
                 }
                 Job::Routine { name, result } => match result {
                     Ok(message) => toast(context, name, Some(message)),
+                    Err(error) => self.error = Some(error),
+                },
+                Job::Folder { project, result } => match result {
+                    Ok(Some(folder)) => {
+                        let result = self.store.update_projects(|projects| {
+                            if let Some(project) = projects.iter_mut().find(|p| p.id == project)
+                                && !project.folders.contains(&folder)
+                            {
+                                project.folders.push(folder);
+                            }
+                        });
+                        self.report(result);
+                        self.reload();
+                    }
+                    Ok(None) => {}
                     Err(error) => self.error = Some(error),
                 },
             }
@@ -1078,6 +1098,22 @@ impl AgentApp {
                 changed = true;
             }
             ui.horizontal(|ui| {
+                // The desktop's dialog, which in a machine is also the way
+                // to the person's files outside it (portal.rs).
+                if ui
+                    .add(
+                        Button::new("Choose folder…")
+                            .variant(ButtonVariant::Secondary)
+                            .size(ButtonSize::Sm),
+                    )
+                    .clicked()
+                {
+                    let id = project.id.clone();
+                    self.spawn_job(move || Job::Folder {
+                        project: id,
+                        result: crate::portal::choose_folder("Add a folder to the project"),
+                    });
+                }
                 ui.add(
                     Input::new(&mut self.new_folder)
                         .placeholder("/home/you/src/repo")
