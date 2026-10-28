@@ -505,8 +505,8 @@ fn secret_field(ui: &mut egui::Ui, text: &mut String, hint: &str) {
 }
 
 /// Draws `code` as squares, dark on light whatever the theme, since that
-/// is what cameras read.
-fn qr(ui: &mut egui::Ui, code: &qrcode::QrCode) {
+/// is what cameras read. The installer draws its sign-in code with it too.
+pub fn qr(ui: &mut egui::Ui, code: &qrcode::QrCode) {
     let width = code.width();
     let quiet = 4;
     let side = (width + 2 * quiet) as f32;

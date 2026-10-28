@@ -58,6 +58,8 @@ pub use model::{
 pub use pages::{IMAGE_EXTENSIONS, candidates};
 pub use shortcuts::{Chord, Group, KeyName, Keys, Resolved, Shortcut, Shortcuts};
 pub use thumbs::thumbnail;
+// The installer shows its sign-in code as a QR code drawn the same way.
+pub use signin::qr;
 
 /// A page of the Settings app.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

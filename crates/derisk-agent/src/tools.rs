@@ -15,7 +15,7 @@ use std::{
 };
 
 use derisk_agent_preview::PreviewSource;
-use miette::{Context as _, IntoDiagnostic as _, Result, bail};
+use miette::{Context as _, IntoDiagnostic as _, Result, bail, miette};
 use serde_json::{Value, json};
 
 use crate::{
@@ -208,7 +208,7 @@ fn run(context: &ToolContext, name: &str, arguments: &Value) -> Result<String> {
             let pulls = forge::open_pull_requests(&repo)?;
             Ok(serde_json::to_string(&json!({"repo": repo, "open": pulls})).into_diagnostic()?)
         }
-        _ => bail!("unknown tool {name}"),
+        _ => Err(miette!("unknown tool {name}")),
     }
 }
 
@@ -224,7 +224,7 @@ fn command_output(command: &mut Command, program: &str) -> Result<String> {
     if output.status.success() {
         Ok(text)
     } else {
-        bail!("{program} failed ({}):\n{text}", output.status)
+        Err(miette!("{program} failed ({}):\n{text}", output.status))
     }
 }
 
@@ -260,7 +260,7 @@ fn preview_build(
             true
         }
         "native" => false,
-        other => bail!("unknown target {other}; use wasm or native"),
+        other => return Err(miette!("unknown target {other}; use wasm or native")),
     };
     if let Some(package) = package {
         command.args(["--package", package]);
@@ -447,7 +447,7 @@ fn derisk(request: &Value) -> Result<Value> {
     if reply["ok"] == true {
         Ok(reply["result"].clone())
     } else {
-        bail!("derisk refused: {}", reply["error"])
+        Err(miette!("derisk refused: {}", reply["error"]))
     }
 }
 
