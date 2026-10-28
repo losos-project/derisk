@@ -215,8 +215,10 @@ pub fn effect_argv(
             .to_vec(),
         ),
         // The host resolves the action's command from the app's .desktop
-        // file and uses `launch_command_argv`.
+        // file and uses `launch_command_argv`; a file opens in a core app,
+        // which the host draws itself.
         Effect::LaunchAction { .. }
+        | Effect::OpenIn { .. }
         | Effect::Close { .. }
         | Effect::MenuActivated { .. }
         | Effect::TrayActivated { .. }

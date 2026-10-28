@@ -35,6 +35,14 @@ pub enum Action {
         /// Action ID from the app's `.desktop` file.
         id: String,
     },
+    /// Start an app on a file or folder (performed by the host): the Text
+    /// Editor on a document, Files on a folder.
+    OpenIn {
+        /// Core app ID or desktop file ID.
+        app: String,
+        /// The file or folder, absolute.
+        path: std::path::PathBuf,
+    },
     /// Ask a window to close (performed by the host).
     Close {
         /// Target window.
@@ -291,6 +299,7 @@ impl Action {
         match self {
             Self::Launch { app } => format!("Open {app}"),
             Self::LaunchAction { app, id } => format!("Run {app} action {id}"),
+            Self::OpenIn { app, path } => format!("Open {} in {app}", path.display()),
             Self::Close { window } => format!("Close {}", which(window)),
             Self::Focus { window } => format!("Focus window {window}"),
             Self::FocusNext => "Focus the next window".into(),
@@ -400,6 +409,13 @@ pub enum Effect {
         app: String,
         /// Action ID.
         id: String,
+    },
+    /// Start an app on a file or folder.
+    OpenIn {
+        /// Core app ID or desktop file ID.
+        app: String,
+        /// The file or folder.
+        path: std::path::PathBuf,
     },
     /// Send the client a close request (e.g. `xdg_toplevel.close`).
     Close {

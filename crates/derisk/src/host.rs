@@ -345,7 +345,16 @@ enum TreeQuery {
 /// Core-app actions waiting for the compositor to launch their app, shared
 /// between [`Session`] (which queues them) and [`CoreApps`] (which takes
 /// them when the launch arrives).
-type PendingActions = Arc<Mutex<Vec<(String, String)>>>;
+type PendingActions = Arc<Mutex<Vec<(String, Pending)>>>;
+
+/// How a queued core app starts.
+#[derive(Debug)]
+enum Pending {
+    /// Through one of its desktop actions.
+    Action(String),
+    /// On a file or folder.
+    Open(PathBuf),
+}
 
 /// What the palette indexes in the background: files under home and the
 /// installed applications.
@@ -1395,7 +1404,7 @@ impl Session {
                 return;
             }
             if let Ok(mut pending) = self.pending_actions.lock() {
-                pending.push((core.id.to_owned(), id.to_owned()));
+                pending.push((core.id.to_owned(), Pending::Action(id.to_owned())));
             }
             self.commands.push(Command::Launch(core.id.to_owned()));
             return;
@@ -1407,11 +1416,26 @@ impl Session {
         self.spawn_command(app, &argv);
     }
 
+    /// Opens `path` in a core app, as `xdg-open` asks through the app's
+    /// desktop file. Only derisk's own apps are drawn here, so another
+    /// app's ID opens nothing.
+    fn open_in(&mut self, app: &str, path: &Path) {
+        let Some(core) = derisk_apps::find(app) else {
+            info!("{app} is not a core app, so it opens no file here");
+            return;
+        };
+        if let Ok(mut pending) = self.pending_actions.lock() {
+            pending.push((core.id.to_owned(), Pending::Open(path.to_owned())));
+        }
+        self.commands.push(Command::Launch(core.id.to_owned()));
+    }
+
     fn perform(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match &effect {
                 Effect::Launch { app } => self.launch(app),
                 Effect::LaunchAction { app, id } => self.launch_action(app, id),
+                Effect::OpenIn { app, path } => self.open_in(app, path),
                 Effect::Close { window } => {
                     if let Some(id) = WindowId::new(*window) {
                         self.commands.push(Command::Close(id));
@@ -2567,7 +2591,8 @@ impl Apps for CoreApps {
             Some(pending.remove(i).1)
         });
         match action {
-            Some(action) => self.session.launch_action(app, &action),
+            Some(Pending::Action(action)) => self.session.launch_action(app, &action),
+            Some(Pending::Open(path)) => self.session.launch_path(app, &path),
             None => self.session.launch(app),
         }
     }
@@ -2669,7 +2694,10 @@ pub fn run(options: Options) -> Result {
     }
     if choice_needed() {
         if let Ok(mut pending) = pending_actions.lock() {
-            pending.push((derisk_apps::SETTINGS.to_owned(), "default-apps".to_owned()));
+            pending.push((
+                derisk_apps::SETTINGS.to_owned(),
+                Pending::Action("default-apps".to_owned()),
+            ));
         }
         compositor = compositor.launch(derisk_apps::SETTINGS);
     }

@@ -1327,6 +1327,13 @@ impl Shell {
                 self.habits.record(&app, self.clock.hour);
                 return Ok(vec![Effect::LaunchAction { app, id }]);
             }
+            Action::OpenIn { app, path } => {
+                if !systemd::is_launchable(&app) {
+                    return Err(Error::NotLaunchable(app));
+                }
+                self.habits.record(&app, self.clock.hour);
+                return Ok(vec![Effect::OpenIn { app, path }]);
+            }
             Action::Close { window } => {
                 let window = self.target(window)?.get();
                 return Ok(vec![Effect::Close { window }]);
@@ -1671,7 +1678,9 @@ impl Shell {
         let mut steps = steps.into_iter().peekable();
         while let Some((action, step)) = steps.next() {
             let launched = match &action {
-                Action::Launch { app } | Action::LaunchAction { app, .. } => {
+                Action::Launch { app }
+                | Action::LaunchAction { app, .. }
+                | Action::OpenIn { app, .. } => {
                     Some(app.strip_suffix(".desktop").unwrap_or(app).to_lowercase())
                 }
                 _ => None,

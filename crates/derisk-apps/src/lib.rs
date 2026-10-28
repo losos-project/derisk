@@ -21,7 +21,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use mcsapi_runtime::{AppId, Error, InstanceId, Manifest, Runtime};
 use mcsapi_ui::{App, Theme, egui};
@@ -61,7 +64,13 @@ pub struct AppInfo {
     pub desktop_file: &'static str,
     create: fn() -> Box<dyn App>,
     action: fn(&str) -> Option<Box<dyn App>>,
+    /// Opens the app on a file or folder, for the apps whose desktop file
+    /// takes one (`%F`): `None` for the others.
+    open: Option<Opener>,
 }
+
+/// Makes an app open on a file or folder.
+type Opener = fn(&Path) -> Box<dyn App>;
 
 impl AppInfo {
     /// The validated app ID.
@@ -90,6 +99,12 @@ impl AppInfo {
         (self.action)(action)
     }
 
+    /// Creates the app opened on `path`, or `None` for an app that opens
+    /// no files.
+    pub fn create_open(&self, path: &Path) -> Option<Box<dyn App>> {
+        self.open.map(|open| open(path))
+    }
+
     /// Whether the app matches a case-insensitive search.
     pub fn matches(&self, query: &str) -> bool {
         let query = query.trim().to_lowercase();
@@ -111,6 +126,7 @@ pub const APPS: [AppInfo; 8] = [
         desktop_file: include_str!("../data/org.derisk.files.desktop"),
         create: || Box::new(derisk_files::FilesApp::default()),
         action: files_action,
+        open: Some(|path| files_in(path.to_owned())),
     },
     AppInfo {
         id: SETTINGS,
@@ -137,6 +153,7 @@ pub const APPS: [AppInfo; 8] = [
         desktop_file: include_str!("../data/org.derisk.settings.desktop"),
         create: || Box::new(settings()),
         action: settings_action,
+        open: None,
     },
     AppInfo {
         id: EDITOR,
@@ -151,6 +168,7 @@ pub const APPS: [AppInfo; 8] = [
                 Box::new(derisk_editor::EditorApp::new())
             })
         },
+        open: Some(|path| Box::new(derisk_editor::EditorApp::open(path))),
     },
     AppInfo {
         id: MONITOR,
@@ -165,6 +183,7 @@ pub const APPS: [AppInfo; 8] = [
                 Box::new(derisk_monitor::MonitorApp::default())
             })
         },
+        open: None,
     },
     AppInfo {
         id: CALCULATOR,
@@ -179,6 +198,7 @@ pub const APPS: [AppInfo; 8] = [
                 Box::new(derisk_calculator::CalculatorApp::default())
             })
         },
+        open: None,
     },
     AppInfo {
         id: MACHINES,
@@ -200,6 +220,7 @@ pub const APPS: [AppInfo; 8] = [
                 Box::new(derisk_machines::MachinesApp::new())
             })
         },
+        open: None,
     },
     AppInfo {
         id: STORE,
@@ -224,6 +245,7 @@ pub const APPS: [AppInfo; 8] = [
                 Box::new(store) as Box<dyn App>
             })
         },
+        open: None,
     },
     AppInfo {
         id: ANDROID,
@@ -246,6 +268,7 @@ pub const APPS: [AppInfo; 8] = [
                 Box::new(derisk_android::AndroidSupport::apps())
             })
         },
+        open: None,
     },
 ];
 
@@ -262,10 +285,15 @@ fn files_action(action: &str) -> Option<Box<dyn App>> {
         "downloads" => home.join("Downloads"),
         _ => return None,
     };
-    Some(Box::new(derisk_files::FilesApp::new(
+    Some(files_in(dir))
+}
+
+/// Files showing `dir`, opening what is picked there with `xdg-open`.
+fn files_in(dir: PathBuf) -> Box<dyn App> {
+    Box::new(derisk_files::FilesApp::new(
         derisk_files::Browser::new(dir),
         Box::new(derisk_files::xdg_open),
-    )))
+    ))
 }
 
 /// Settings, its Privacy page reading Flatpak's apps from the machine they
@@ -398,6 +426,19 @@ impl Session {
         let info = find(id.as_str()).ok_or_else(|| Error::UnknownApp(id.clone()))?;
         let app = info
             .create_action(action)
+            .ok_or_else(|| Error::UnknownApp(id.clone()))?;
+        let instance = self.runtime.launch(id)?;
+        self.apps.insert(instance, app);
+        Ok(instance)
+    }
+
+    /// Starts a core app on a file or folder, for example the Text Editor
+    /// on a document `xdg-open` handed it. An app that opens no files is
+    /// reported as an unknown app.
+    pub fn launch_path(&mut self, id: &AppId, path: &Path) -> Result<InstanceId, Error> {
+        let info = find(id.as_str()).ok_or_else(|| Error::UnknownApp(id.clone()))?;
+        let app = info
+            .create_open(path)
             .ok_or_else(|| Error::UnknownApp(id.clone()))?;
         let instance = self.runtime.launch(id)?;
         self.apps.insert(instance, app);
