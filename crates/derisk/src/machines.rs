@@ -235,7 +235,9 @@ impl MachineDisplays {
     }
 
     /// The machines as the palette's `machines` plugin reads them: each
-    /// one's name, label and whether it runs, and the apps it has.
+    /// one's name, label and whether it runs, and the apps it has. The
+    /// OS's service machines are there for their apps, such as the
+    /// Flatpak machine's, marked so the plugin offers nothing else of them.
     pub fn palette(&self) -> Value {
         palette(&self.machines, &self.apps)
     }
@@ -244,12 +246,25 @@ impl MachineDisplays {
     /// shutting down each, and one opening the Machines app. `None` when
     /// there are no machines, so the overview has no empty card.
     pub fn card(&self) -> Option<CustomWidget> {
-        card(&self.machines)
+        card(&self.people())
     }
 
-    /// Machines that run, in libvirt's order.
+    /// Machines that run, in libvirt's order, other than the OS's own.
     pub fn running(&self) -> impl Iterator<Item = &Machine> {
-        self.machines.iter().filter(|m| m.state.is_active())
+        self.machines
+            .iter()
+            .filter(|m| m.state.is_active() && !m.service)
+    }
+
+    /// The machines a person has, which the overview and the top bar show:
+    /// not the OS's service machines, such as the Tor gateway, whose
+    /// windows (if any) are still framed through [`Self::machine`].
+    fn people(&self) -> Vec<Machine> {
+        self.machines
+            .iter()
+            .filter(|m| !m.service)
+            .cloned()
+            .collect()
     }
 
     /// Takes the latest list from libvirt and opens or closes each
@@ -385,6 +400,7 @@ fn palette(machines: &[Machine], apps: &HashMap<String, Vec<GuestApp>>) -> Value
                 "label": m.label.name(),
                 "running": m.state.is_active(),
                 "screen": m.screen,
+                "service": m.service,
                 "apps": apps,
             })
         })
@@ -660,6 +676,7 @@ mod tests {
             cpus: 2,
             state,
             cid: None,
+            service: false,
         }
     }
 
@@ -689,11 +706,11 @@ mod tests {
         assert_eq!(
             palette(&machines, &apps),
             json!({"machines": [
-                {"name": "work", "label": "blue", "running": true, "screen": false,
+                {"name": "work", "label": "blue", "running": true, "screen": false, "service": false,
                  "apps": [{"id": "foot", "name": "Foot"}]},
-                {"name": "flatpak", "label": "purple", "running": false, "screen": false,
+                {"name": "flatpak", "label": "purple", "running": false, "screen": false, "service": false,
                  "apps": [{"id": "io.github.kolunmi.Bazaar", "name": "Bazaar"}]},
-                {"name": "web", "label": "red", "running": false, "screen": false,
+                {"name": "web", "label": "red", "running": false, "screen": false, "service": false,
                  "apps": []},
             ]})
         );
