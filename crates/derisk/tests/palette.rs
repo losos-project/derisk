@@ -387,7 +387,11 @@ fn hibernate_is_offered_only_where_logind_can() {
     // One catalog, kept between frames, follows the answer as it changes.
     let mut catalog = palette::Catalog::default();
     let view = palette::view(&shell, &[]);
-    let count = |catalog: &mut palette::Catalog, can| {
+    let count = |catalog: &mut palette::Catalog, hibernate| {
+        let can = palette::Can {
+            hibernate,
+            ..palette::Can::default()
+        };
         catalog
             .entries(palette::plugins(), &view, &[], can)
             .iter()
@@ -492,7 +496,12 @@ fn files_found_by_their_text_join_the_files_found_by_name() {
     let plugins = palette::plugins();
     let mut catalog = palette::Catalog::default();
     let entries = catalog
-        .entries(plugins, &view, std::slice::from_ref(&todo), false)
+        .entries(
+            plugins,
+            &view,
+            std::slice::from_ref(&todo),
+            palette::Can::default(),
+        )
         .to_vec();
     for query in ["todo", "/todo"] {
         let rows = catalog.rows(plugins, &view, query).clone();

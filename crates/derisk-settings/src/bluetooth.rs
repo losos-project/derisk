@@ -313,10 +313,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BluetoothUi, theme: &Theme) {
     };
 
     if let Some((label, _)) = &state.running {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(label);
-        });
+        crate::stuck::working(ui, label);
         ui.add_space(8.0);
     } else if let Some(status) = &state.status {
         ui.label(egui::RichText::new(status).color(egui::Color32::from_rgb(248, 113, 113)));

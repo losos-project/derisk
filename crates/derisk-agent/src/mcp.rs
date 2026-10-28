@@ -78,7 +78,9 @@ fn handle(context: &ToolContext, line: &str) -> Option<Value> {
 }
 
 /// Claude Code's `--mcp-config` for one chat: the Agent's own server,
-/// derisk's when `derisk` is on `PATH`, and the project's enabled servers.
+/// derisk's when `derisk` is on `PATH`, the servers of [`global_file`], and
+/// the project's enabled servers, which win over a global one of the same
+/// name.
 pub fn claude_config(project: &Project, chat_id: &str) -> Result<Value> {
     let executable = std::env::current_exe().into_diagnostic()?;
     let mut servers = serde_json::Map::new();
@@ -100,10 +102,33 @@ pub fn claude_config(project: &Project, chat_id: &str) -> Result<Value> {
             json!({"type": "stdio", "command": derisk, "args": ["mcp"]}),
         );
     }
-    for server in project.mcp_servers.iter().filter(|server| server.enabled) {
+    for server in global_servers()
+        .iter()
+        .chain(project.mcp_servers.iter().filter(|server| server.enabled))
+    {
         servers.insert(server.name.clone(), transport_config(&server.transport));
     }
     Ok(json!({"mcpServers": servers}))
+}
+
+/// The MCP servers every project's chats get, in Claude Code's
+/// `{"mcpServers": {...}}` shape: `$XDG_CONFIG_HOME/derisk-agent/mcp.json`.
+///
+/// Other programs put their servers here on the person's say-so, as
+/// `losos agents install derisk-agent` puts the LosOS companion, so that
+/// the Agent knows them without a project's MCP tab. Their tools run
+/// without a prompt, like the Agent's own: `--print` has no terminal to ask
+/// on, and a server lands in this file only once the person agreed to it.
+pub fn global_file() -> Option<std::path::PathBuf> {
+    Some(dirs::config_dir()?.join("derisk-agent").join("mcp.json"))
+}
+
+/// The servers of [`global_file`], none when it is missing or not JSON.
+pub fn global_servers() -> Vec<McpServer> {
+    let Some(file) = global_file() else {
+        return Vec::new();
+    };
+    read_servers(&file)
 }
 
 /// The first executable `name` in `$PATH`.
@@ -129,11 +154,16 @@ fn transport_config(transport: &McpTransport) -> Value {
 /// The servers a folder's `.mcp.json` declares, which Claude Code loads by
 /// itself when it runs there.
 pub fn folder_servers(folder: &Path) -> Vec<McpServer> {
-    let Ok(bytes) = std::fs::read(folder.join(".mcp.json")) else {
+    read_servers(&folder.join(".mcp.json"))
+}
+
+/// The `mcpServers` of a Claude Code MCP config file.
+fn read_servers(file: &Path) -> Vec<McpServer> {
+    let Ok(bytes) = std::fs::read(file) else {
         return Vec::new();
     };
     let Ok(config) = serde_json::from_slice::<Value>(&bytes) else {
-        tracing::warn!("{} has a .mcp.json that is not JSON", folder.display());
+        tracing::warn!("{} is not JSON", file.display());
         return Vec::new();
     };
     config["mcpServers"]
@@ -397,6 +427,32 @@ mod tests {
         ).into_diagnostic()?;
         let servers = folder_servers(dir.path());
         assert_eq!(servers.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn global_servers_reach_every_chat_and_a_project_overrides_them() -> Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let file = dir.path().join("mcp.json");
+        // As `losos agents install derisk-agent` writes it.
+        std::fs::write(
+            &file,
+            r#"{"mcpServers":{"losos":{"command":"/run/current-system/sw/bin/losos","args":["mcp"]}}}"#,
+        )
+        .into_diagnostic()?;
+        let servers = read_servers(&file);
+        assert_eq!(
+            servers,
+            vec![McpServer {
+                name: "losos".into(),
+                transport: McpTransport::Stdio {
+                    command: "/run/current-system/sw/bin/losos".into(),
+                    args: vec!["mcp".into()],
+                },
+                enabled: true,
+            }]
+        );
+        assert!(read_servers(&dir.path().join("missing.json")).is_empty());
         Ok(())
     }
 }

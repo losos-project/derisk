@@ -815,7 +815,7 @@ impl ShellUi {
                 Align2::CENTER_CENTER,
                 elide(title, r.width() - 16.0, name * 0.75),
                 FontId::proportional(name * 0.75),
-                self.theme.border,
+                dim(&self.theme),
             );
         }
     }
@@ -2835,7 +2835,7 @@ impl ShellUi {
                                 .desired_rows(usize::from(field.lines.max(1)))
                                 .desired_width(width)
                                 .background_color(theme.surface)
-                                .hint_text(RichText::new(&field.hint).color(theme.border)),
+                                .hint_text(RichText::new(&field.hint).color(dim(&theme))),
                         );
                     }
                 }
@@ -2988,9 +2988,10 @@ impl ShellUi {
             (&[][..], Vec::new(), None)
         } else {
             let query_rows = state.catalog.rows(plugins, &view, &state.query).clone();
-            let entries = state
-                .catalog
-                .entries(plugins, &view, &state.files, shell.can_hibernate);
+            let entries =
+                state
+                    .catalog
+                    .entries(plugins, &view, &state.files, palette::Can::of(shell));
             let hits = palette::search(entries, &state.query, &state.history);
             (
                 entries,
@@ -3274,7 +3275,7 @@ impl ShellUi {
                             if rows.is_empty() {
                                 ui.label(
                                     RichText::new("Type to search, or ask in plain words.")
-                                        .color(theme.border),
+                                        .color(dim(&theme)),
                                 );
                             }
                             let selected = state.selected;
@@ -3337,7 +3338,7 @@ impl ShellUi {
                                                 Align2::LEFT_CENTER,
                                                 entry.category.heading(),
                                                 FontId::proportional(11.0),
-                                                theme.border.gamma_multiply(o),
+                                                dim(&theme).gamma_multiply(o),
                                             );
                                         }
                                         let fade = motion::appear(
@@ -3390,7 +3391,7 @@ impl ShellUi {
                                 "⬆⬇ select   Enter run   Esc close   > commands   @ windows   / files   ? ask"
                             })
                             .size(11.0)
-                            .color(theme.border),
+                            .color(dim(&theme)),
                         );
                     });
                 let laid = inner.response.rect;
@@ -3942,12 +3943,12 @@ fn conversation(
     let mut clear = false;
     let mut pressed = ModelPressed::default();
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Conversation").size(11.0).color(theme.border));
+        ui.label(RichText::new("Conversation").size(11.0).color(dim(theme)));
         if let Some(model) = &shell.model {
             ui.label(
                 RichText::new(format!("· {model}"))
                     .size(11.0)
-                    .color(theme.border),
+                    .color(dim(theme)),
             );
         }
         if !turns.is_empty() {
@@ -3971,7 +3972,7 @@ fn conversation(
                 "Ask in plain words, e.g. \"open calculator and snap it right, then go to workspace 2\". \
                  Requests from other agents show up here too.",
             )
-            .color(theme.border),
+            .color(dim(theme)),
         );
         return (clear, pressed);
     }
@@ -4001,12 +4002,12 @@ fn conversation(
                     };
                     let (icon, color) = match &step.status {
                         StepStatus::Done => (Some("object-select"), theme.accent),
-                        StepStatus::Waiting => (Some("view-refresh"), theme.border),
+                        StepStatus::Waiting => (Some("view-refresh"), dim(theme)),
                         StepStatus::Asking => (Some("dialog-question"), theme.accent),
                         StepStatus::Failed(_) => {
                             (Some("dialog-error"), button_color(Button::Close))
                         }
-                        StepStatus::Skipped => (None, theme.border),
+                        StepStatus::Skipped => (None, dim(theme)),
                     };
                     ui.horizontal(|ui| {
                         ui.multiply_opacity(shown);
@@ -4037,7 +4038,7 @@ fn conversation(
                         }
                         ui.label(RichText::new(&step.label).color(
                             if step.status == StepStatus::Skipped {
-                                theme.border
+                                dim(theme)
                             } else {
                                 theme.foreground
                             },
@@ -4081,7 +4082,7 @@ fn conversation(
                     ui.label(RichText::new(turn.reply()).color(if failed {
                         button_color(Button::Close)
                     } else {
-                        theme.border
+                        dim(theme)
                     }));
                 });
             }
@@ -4170,7 +4171,7 @@ fn palette_row(
             Align2::LEFT_CENTER,
             elide(&entry.detail, room, 13.0),
             FontId::proportional(13.0),
-            theme.border,
+            dim(theme),
         );
     }
     if let Some(shortcut) = &entry.shortcut {
@@ -4179,17 +4180,25 @@ fn palette_row(
             Align2::RIGHT_CENTER,
             shortcut,
             FontId::monospace(12.0),
-            theme.border,
+            dim(theme),
         );
     }
     response
+}
+
+/// Secondary text: the foreground toward the surface, as mcsapi's
+/// `muted_foreground` is. The border colour is for lines; drawn as text
+/// it all but vanished, #212c36 on the dark theme's #1e2832 surface, so
+/// the palette's descriptions and hints could not be read.
+fn dim(theme: &Theme) -> Color32 {
+    theme.foreground.lerp_to_gamma(theme.surface, 0.4)
 }
 
 /// The theme's color for `tone`.
 fn tone_color(theme: &Theme, tone: Tone) -> Color32 {
     match tone {
         Tone::Normal => theme.foreground,
-        Tone::Dim => theme.border,
+        Tone::Dim => dim(theme),
         Tone::Accent => theme.accent,
         Tone::Danger => button_color(Button::Close),
     }
@@ -4559,7 +4568,7 @@ fn login_status(ui: &mut Ui, text: &str, error: bool, theme: &Theme) {
     let color = if error {
         Color32::from_rgb(248, 113, 113)
     } else {
-        theme.border
+        dim(theme)
     };
     ui.label(RichText::new(text).color(color));
 }
@@ -4850,6 +4859,73 @@ pub fn show_choice(
         Some(_) => ChoiceInput::Pick(*picked),
         None if !open => ChoiceInput::Cancel,
         None => input,
+    }
+}
+
+/// What the person did in the card about a window that stopped
+/// responding, this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HungInput {
+    /// Nothing to act on.
+    None,
+    /// Wait for it: Escape, Wait, or closing the card.
+    Wait,
+    /// End its process.
+    ForceQuit,
+    /// Report it.
+    Report,
+}
+
+/// Draws the card for a window of `name` that stopped responding, as
+/// mcsapi's [`NativeDialog`] over the dimmed desktop: Wait, Force Quit when
+/// its process is known (`can_quit`), and Report when this system sends
+/// reports (`can_report`). Enter waits, since ending it loses what it has
+/// not saved.
+///
+/// [`NativeDialog`]: mcsapi_components::NativeDialog
+pub fn show_hung(
+    ui: &mut Ui,
+    name: &str,
+    can_quit: bool,
+    can_report: bool,
+    shell: &Shell,
+) -> HungInput {
+    use mcsapi_components::NativeDialog;
+    use mcsapi_ui::dialog::{ActionRole, DialogAction};
+
+    let mut actions = Vec::new();
+    let mut answers = Vec::new();
+    if can_report {
+        actions.push(DialogAction::new("Report", ActionRole::Other));
+        answers.push(HungInput::Report);
+    }
+    if can_quit {
+        actions.push(DialogAction::new("Force Quit", ActionRole::Other));
+        answers.push(HungInput::ForceQuit);
+    }
+    actions.push(DialogAction::new("Wait", ActionRole::Default));
+    answers.push(HungInput::Wait);
+    let mut open = true;
+    let title = format!("{name} isn\u{2019}t responding");
+    let width = 420.0_f32.min(to_rect(shell.output()).width() - 80.0);
+    let answer = NativeDialog::new("derisk-hung", &mut open, &title)
+        .width(width)
+        .show(ui.ctx(), |ui| {
+            ui.label(RichText::new(&title).size(18.0).strong());
+            ui.add_space(10.0);
+            ui.label(if can_quit {
+                "It has stopped answering. It may still be busy with something and come back; forcing it to quit loses anything it has not saved."
+            } else {
+                "It has stopped answering. It may still be busy with something and come back."
+            });
+            ui.add_space(12.0);
+            NativeDialog::actions(ui, &actions)
+        })
+        .flatten();
+    match answer {
+        Some(index) => answers[index],
+        None if !open => HungInput::Wait,
+        None => HungInput::None,
     }
 }
 

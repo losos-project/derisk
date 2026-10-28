@@ -411,6 +411,9 @@ pub struct State {
     pub failed_units: Vec<String>,
     /// A session operation waiting for the person to confirm it on screen.
     pub awaiting_confirmation: Option<crate::systemd::SessionOp>,
+    /// Whether problems can be reported as issues (`report_unit`,
+    /// `report_window`, `report_stuck`).
+    pub can_report: bool,
 }
 
 /// Builds a [`State`] snapshot.
@@ -455,6 +458,7 @@ pub fn state(shell: &Shell) -> State {
         low_power: shell.look().low_power,
         failed_units: shell.failed_units.clone(),
         awaiting_confirmation: shell.pending_confirmation(),
+        can_report: shell.can_report,
     }
 }
 
@@ -484,7 +488,9 @@ pub fn tools() -> Value {
             {"type": "object", "required": ["action", "op"], "properties": {"action": {"const": "session"}, "op": {"enum": ["lock", "suspend", "hibernate", "logout", "reboot", "power_off"]}, "confirmed": {"type": "boolean", "description": "Required for logout/reboot/power_off. Even then the person is asked on screen, and only they can accept"}}},
             {"type": "object", "required": ["action", "id"], "properties": {"action": {"const": "activate_tray"}, "id": {"type": "string"}, "item": {"type": "string"}}},
             {"type": "object", "required": ["action", "id", "item"], "properties": {"action": {"const": "activate_widget"}, "id": {"type": "string", "description": "A custom widget's ID"}, "item": {"type": "string", "description": "One of that widget's button items"}}},
-            {"type": "object", "required": ["action", "unit"], "properties": {"action": {"enum": ["restart_unit", "reset_failed"]}, "unit": {"type": "string", "description": "A unit listed in failed_units"}}}
+            {"type": "object", "required": ["action", "unit"], "properties": {"action": {"enum": ["restart_unit", "reset_failed", "report_unit"]}, "unit": {"type": "string", "description": "A unit listed in failed_units; report_unit shows the person a report of it to send as an issue"}}},
+            {"type": "object", "required": ["action"], "properties": {"action": {"const": "report_window"}, "window": window}, "description": "Show the person a report that this window stopped responding, to send as an issue"},
+            {"type": "object", "required": ["action", "app", "label", "seconds"], "properties": {"action": {"const": "report_stuck"}, "app": {"type": "string", "description": "The app's ID"}, "label": {"type": "string", "description": "The action still running, as the app labels it"}, "seconds": {"type": "integer", "minimum": 0}, "pid": {"type": "integer", "minimum": 1, "description": "The process doing it"}}, "description": "Show the person a report that an app's action never finished, to send as an issue"}
         ]
     });
     json!({"tools": [
