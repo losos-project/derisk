@@ -412,10 +412,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
         ui.label(egui::RichText::new(error).color(RED));
     }
     if state.resetting.is_some() {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label("Asking for a factory reset…");
-        });
+        crate::stuck::working(ui, "Asking for a factory reset…");
     } else if state.confirm {
         ui.label(
             egui::RichText::new(

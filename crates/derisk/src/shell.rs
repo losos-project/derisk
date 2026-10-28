@@ -22,6 +22,7 @@ use crate::{
     menu::{self, GlobalMenu},
     mobile::NavBar,
     overview::Battery,
+    report,
     snap::{Nudge, SnapZone, zone_at},
     systemd::{self, SessionOp},
     time::Clock,
@@ -335,6 +336,10 @@ pub struct Shell {
     /// (see [`systemd::can_hibernate`]). The palette offers Hibernate only
     /// when it can.
     pub can_hibernate: bool,
+    /// Whether problems can be reported from here, updated by the host
+    /// (see [`report::probe`]). The palette offers to report a failed
+    /// service only when they can.
+    pub can_report: bool,
     /// Effect preferences, updated by the host from the settings file.
     pub effects: Effects,
     /// Whether the on-screen keyboard is showing (see
@@ -501,6 +506,7 @@ impl Shell {
             failed_units: Vec::new(),
             machines: Vec::new(),
             can_hibernate: false,
+            can_report: false,
             effects: Effects::default(),
             keyboard: false,
             synthetic_input: false,
@@ -1589,6 +1595,43 @@ impl Shell {
                 self.check_failed_unit(&unit)?;
                 self.failed_units.retain(|u| *u != unit);
                 return Ok(vec![Effect::ResetFailed { unit }]);
+            }
+            Action::ReportUnit { unit } => {
+                self.check_failed_unit(&unit)?;
+                return Ok(vec![Effect::Report {
+                    problem: report::Problem::Failed { unit, user: true },
+                    window: None,
+                }]);
+            }
+            // The host knows what the window's process is and how long it
+            // has been silent; it fills them in.
+            Action::ReportWindow { window } => {
+                let window = self.target(window)?;
+                let app = self.windows[&window].app_id.clone();
+                return Ok(vec![Effect::Report {
+                    problem: report::Problem::NotResponding {
+                        app,
+                        pid: None,
+                        seconds: 0,
+                    },
+                    window: Some(window.get()),
+                }]);
+            }
+            Action::ReportStuck {
+                app,
+                label,
+                seconds,
+                pid,
+            } => {
+                return Ok(vec![Effect::Report {
+                    problem: report::Problem::Stuck {
+                        app,
+                        action: label,
+                        seconds,
+                        pid,
+                    },
+                    window: None,
+                }]);
             }
         }
         Ok(Vec::new())

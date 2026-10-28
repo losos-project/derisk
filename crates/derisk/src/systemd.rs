@@ -223,6 +223,7 @@ pub fn effect_argv(
         | Effect::WidgetActivated { .. }
         | Effect::PaletteCommand { .. }
         | Effect::Screenshot
+        | Effect::Report { .. }
         | Effect::TutorialSeen => None,
     }
 }
