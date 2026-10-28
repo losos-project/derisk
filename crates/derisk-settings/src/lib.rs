@@ -36,6 +36,7 @@ mod privacy;
 pub mod profiles;
 mod shortcuts;
 mod signin;
+pub mod stuck;
 pub mod system;
 mod thumbs;
 mod totp;

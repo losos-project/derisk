@@ -2978,9 +2978,10 @@ impl ShellUi {
             (&[][..], Vec::new(), None)
         } else {
             let query_rows = state.catalog.rows(plugins, &view, &state.query).clone();
-            let entries = state
-                .catalog
-                .entries(plugins, &view, &state.files, shell.can_hibernate);
+            let entries =
+                state
+                    .catalog
+                    .entries(plugins, &view, &state.files, palette::Can::of(shell));
             let hits = palette::search(entries, &state.query, &state.history);
             (
                 entries,
@@ -4840,6 +4841,73 @@ pub fn show_choice(
         Some(_) => ChoiceInput::Pick(*picked),
         None if !open => ChoiceInput::Cancel,
         None => input,
+    }
+}
+
+/// What the person did in the card about a window that stopped
+/// responding, this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HungInput {
+    /// Nothing to act on.
+    None,
+    /// Wait for it: Escape, Wait, or closing the card.
+    Wait,
+    /// End its process.
+    ForceQuit,
+    /// Report it.
+    Report,
+}
+
+/// Draws the card for a window of `name` that stopped responding, as
+/// mcsapi's [`NativeDialog`] over the dimmed desktop: Wait, Force Quit when
+/// its process is known (`can_quit`), and Report when this system sends
+/// reports (`can_report`). Enter waits, since ending it loses what it has
+/// not saved.
+///
+/// [`NativeDialog`]: mcsapi_components::NativeDialog
+pub fn show_hung(
+    ui: &mut Ui,
+    name: &str,
+    can_quit: bool,
+    can_report: bool,
+    shell: &Shell,
+) -> HungInput {
+    use mcsapi_components::NativeDialog;
+    use mcsapi_ui::dialog::{ActionRole, DialogAction};
+
+    let mut actions = Vec::new();
+    let mut answers = Vec::new();
+    if can_report {
+        actions.push(DialogAction::new("Report", ActionRole::Other));
+        answers.push(HungInput::Report);
+    }
+    if can_quit {
+        actions.push(DialogAction::new("Force Quit", ActionRole::Other));
+        answers.push(HungInput::ForceQuit);
+    }
+    actions.push(DialogAction::new("Wait", ActionRole::Default));
+    answers.push(HungInput::Wait);
+    let mut open = true;
+    let title = format!("{name} isn\u{2019}t responding");
+    let width = 420.0_f32.min(to_rect(shell.output()).width() - 80.0);
+    let answer = NativeDialog::new("derisk-hung", &mut open, &title)
+        .width(width)
+        .show(ui.ctx(), |ui| {
+            ui.label(RichText::new(&title).size(18.0).strong());
+            ui.add_space(10.0);
+            ui.label(if can_quit {
+                "It has stopped answering. It may still be busy with something and come back; forcing it to quit loses anything it has not saved."
+            } else {
+                "It has stopped answering. It may still be busy with something and come back."
+            });
+            ui.add_space(12.0);
+            NativeDialog::actions(ui, &actions)
+        })
+        .flatten();
+    match answer {
+        Some(index) => answers[index],
+        None if !open => HungInput::Wait,
+        None => HungInput::None,
     }
 }
 
