@@ -105,6 +105,44 @@ fn ipc_menus_feed_the_global_menu() {
     assert_eq!(bar.last().unwrap().title, "Window");
 }
 
+#[test]
+fn an_apps_window_menu_takes_the_shells_entries() {
+    let mut shell = Shell::new(rect(0, 0, 1920, 1080), false);
+    let (w, _) = shell.map_window("macos.com.apple.Calculator", "Calculator");
+    shell.menus.register(
+        w.get(),
+        vec![
+            Menu {
+                title: "Calculator".into(),
+                entries: vec![MenuEntry::item("1.0", "About Calculator")],
+            },
+            Menu {
+                title: "Window".into(),
+                entries: vec![MenuEntry::item("4.0", "Zoom")],
+            },
+            Menu {
+                title: "Help".into(),
+                entries: vec![],
+            },
+        ],
+    );
+    let bar: Vec<_> = shell.menus.bar(Some(w.get())).collect();
+    let titles: Vec<_> = bar.iter().map(|m| m.title.as_str()).collect();
+    assert_eq!(titles, ["Calculator", "Window", "Help"]);
+    let window = &bar[1].entries;
+    assert_eq!(window[0], MenuEntry::item("4.0", "Zoom"));
+    assert_eq!(window[1], MenuEntry::Separator);
+    assert!(window.contains(&MenuEntry::item("derisk.float", "Float").with_shortcut("Super+F")));
+
+    // The first menu is named after the app, and the title shows it.
+    assert!(derisk::menu::named_after(
+        &bar,
+        &["Calculator", "Calculator"]
+    ));
+    assert!(!derisk::menu::named_after(&bar[1..], &["Calculator"]));
+    assert!(!derisk::menu::named_after(&bar, &["TextEdit", "Untitled"]));
+}
+
 fn tabs(titles: &[&str]) -> Vec<Menu> {
     vec![Menu {
         title: "Tabs".into(),

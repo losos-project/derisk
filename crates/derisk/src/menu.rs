@@ -2,7 +2,10 @@
 //!
 //! Apps (or a `com.canonical.AppMenu.Registrar` / dbusmenu bridge in the host)
 //! register menus per window. The top bar shows the focused window's menus,
-//! followed by a shell-provided "Window" menu.
+//! followed by a shell-provided "Window" menu, or with the shell's entries
+//! added to the app's own Window menu when it has one. An app's first menu
+//! named after it opens from the window's title instead of standing beside
+//! it.
 
 use std::collections::BTreeMap;
 
@@ -77,7 +80,7 @@ pub const SHELL_PREFIX: &str = "derisk.";
 /// The shell's own "Window" menu, appended after every app's menus.
 pub fn window_menu() -> Menu {
     Menu {
-        title: "Window".into(),
+        title: WINDOW.into(),
         entries: vec![
             MenuEntry::item("derisk.minimize", "Minimize").with_shortcut("Super+↓"),
             MenuEntry::item("derisk.maximize", "Maximize").with_shortcut("Super+↑"),
@@ -211,15 +214,44 @@ impl GlobalMenu {
         self.menus.get(&window).map_or(&[], Vec::as_slice)
     }
 
-    /// Everything the bar shows for `window`: app menus then the Window menu.
+    /// Everything the bar shows for `window`: app menus then the Window
+    /// menu. An app with a Window menu of its own, as every macOS app has,
+    /// gets the shell's entries after its own in that menu rather than a
+    /// second menu of the same name.
     pub fn bar(&self, window: Option<u64>) -> impl Iterator<Item = Menu> + '_ {
         window.into_iter().flat_map(|w| {
-            self.app_menus(w)
+            let menus = self.app_menus(w);
+            let own = menus.iter().position(|m| m.title == WINDOW);
+            menus
                 .iter()
-                .cloned()
-                .chain(std::iter::once_with(window_menu))
+                .enumerate()
+                .map(move |(i, m)| {
+                    let mut m = m.clone();
+                    if Some(i) == own {
+                        m.entries.push(MenuEntry::Separator);
+                        m.entries.extend(window_menu().entries);
+                    }
+                    m
+                })
+                .chain(own.is_none().then(window_menu))
         })
     }
+}
+
+/// The title of the shell's Window menu.
+const WINDOW: &str = "Window";
+
+/// Whether the first of `menus` is the app's own menu, named after the app
+/// or the window, as macOS names its application menu (About, Settings,
+/// Hide, Quit). The bar opens that one from the window's title, which shows
+/// the same name, rather than showing the name twice.
+pub fn named_after(menus: &[Menu], names: &[&str]) -> bool {
+    menus.first().is_some_and(|m| {
+        let title = m.title.trim();
+        !title.is_empty()
+            && title != WINDOW
+            && names.iter().any(|n| n.trim().eq_ignore_ascii_case(title))
+    })
 }
 
 /// Whether `entries`, submenus included, hold an enabled item `id`.
