@@ -6,9 +6,16 @@
 //! `losos-installer serve`.
 //!
 //! The pages: what is being installed and from where; the network, skipped
-//! when a cable already brought the machine online; the disk; a last page
-//! that names the disk and says it will be erased, with the only red button;
-//! the install's steps and output; and Restart.
+//! when a cable already brought the machine online; the disk; whether to ask
+//! for a PIN at startup, only when the backend can encrypt on this computer;
+//! a last page that names the disk and says it will be erased, with the only
+//! red button; the install's steps and output; and Restart.
+//!
+//! With a PIN, the backend encrypts the installed system's data so that the
+//! computer's TPM unlocks it only once the PIN is typed, and hands back a
+//! recovery key. The last page shows that key once, with a QR code, and
+//! Restart waits until the person says they have kept it: it is the only
+//! way in without the PIN, and nothing else has a copy.
 //!
 //! When an install fails and the backend can send reports (its hello names
 //! where), the failed page's button is "Report the problem". That page shows
@@ -49,13 +56,53 @@ enum Step {
     Welcome,
     Network,
     Disk,
+    Pin,
     Confirm,
     Installing,
     Report,
 }
 
 impl Step {
-    const PAGES: [Step; 4] = [Step::Welcome, Step::Network, Step::Disk, Step::Confirm];
+    const PAGES: [Step; 5] = [
+        Step::Welcome,
+        Step::Network,
+        Step::Disk,
+        Step::Pin,
+        Step::Confirm,
+    ];
+}
+
+/// The shortest PIN the backend takes (losos-installer's encrypt.rs).
+const MIN_PIN: usize = 6;
+
+/// The PIN page's state.
+#[derive(Default)]
+struct PinChoice {
+    wanted: bool,
+    pin: String,
+    again: String,
+}
+
+impl PinChoice {
+    /// Why the page cannot go on yet, if it cannot.
+    fn problem(&self) -> Option<&'static str> {
+        if !self.wanted {
+            None
+        } else if self.pin.chars().count() < MIN_PIN {
+            Some("The PIN needs at least 6 characters.")
+        } else if self.pin.chars().any(char::is_control) {
+            Some("The PIN cannot hold a line break or a tab.")
+        } else if self.pin != self.again {
+            Some("The two PINs are not the same.")
+        } else {
+            None
+        }
+    }
+
+    /// The PIN to send, when one was asked for.
+    fn chosen(&self) -> Option<String> {
+        (self.wanted && self.problem().is_none()).then(|| self.pin.clone())
+    }
 }
 
 struct Backend {
@@ -124,6 +171,10 @@ struct Install {
     failed: bool,
     error: Option<mcsapi_ui::Error>,
     show_log: bool,
+    /// The recovery key, when root was encrypted, and its QR code.
+    recovery: Option<(String, Option<qrcode::QrCode>)>,
+    /// Whether the person said they have kept it.
+    recovery_kept: bool,
 }
 
 struct Installer {
@@ -140,6 +191,9 @@ struct Installer {
     network: NetworkPage,
     disks: Option<Vec<Disk>>,
     disk: Option<usize>,
+    /// Whether the backend can encrypt on this computer.
+    encryption: bool,
+    pin: PinChoice,
     error: Option<mcsapi_ui::Error>,
     install: Install,
 }
@@ -157,11 +211,16 @@ impl Installer {
                     source,
                     release,
                     report,
+                    encryption,
                 } => {
                     self.name = name;
                     self.source = source;
                     self.release = release;
                     self.reports_to = report;
+                    self.encryption = encryption;
+                    if !encryption {
+                        self.pin = PinChoice::default();
+                    }
                 }
                 Event::Report {
                     repository,
@@ -209,6 +268,10 @@ impl Installer {
                     if log.len() > LOG_LINES {
                         log.drain(..log.len() - LOG_LINES);
                     }
+                }
+                Event::RecoveryKey { key } => {
+                    let qr = qrcode::QrCode::new(key.as_bytes()).ok();
+                    self.install.recovery = Some((key, qr));
                 }
                 Event::Installed => {
                     self.install.done = true;
@@ -307,6 +370,50 @@ impl Installer {
         }
     }
 
+    fn pin_page(&mut self, ui: &mut Ui) {
+        let tokens = Tokens::current(ui.ctx());
+        ui.add(
+            mcsapi_components::Checkbox::new(&mut self.pin.wanted)
+                .label("Ask for a PIN at startup"),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "The system's data is encrypted, and this computer's security chip unlocks it only once the PIN is typed. Someone who takes the computer or its disk cannot read it without the PIN. Each person's own files are encrypted with their password either way.",
+            )
+            .font(tokens.body_font())
+            .color(tokens.muted_foreground),
+        );
+        ui.add_space(12.0);
+        if !self.pin.wanted {
+            return;
+        }
+        wizard::field(
+            ui,
+            "PIN",
+            &mut self.pin.pin,
+            wizard::Entry::Secret,
+            "At least 6 characters",
+        );
+        wizard::field(
+            ui,
+            "PIN again",
+            &mut self.pin.again,
+            wizard::Entry::Secret,
+            "",
+        );
+        if !self.pin.again.is_empty()
+            && let Some(problem) = self.pin.problem()
+        {
+            wizard::notice(ui, problem, true);
+        }
+        wizard::notice(
+            ui,
+            "A recovery key is shown once the install is done. Keep it somewhere safe: it is the only way in if the PIN is forgotten.",
+            false,
+        );
+    }
+
     fn confirm_page(&mut self, ui: &mut Ui) {
         let Some(disk) = self.chosen() else { return };
         let tokens = Tokens::current(ui.ctx());
@@ -322,14 +429,25 @@ impl Installer {
             "Everything on this disk will be erased: every partition, every file and any other system on it.",
             true,
         );
+        if self.pin.chosen().is_some() {
+            ui.add_space(8.0);
+            wizard::notice(
+                ui,
+                "The system's data will be encrypted, and the computer will ask for the PIN at every start.",
+                false,
+            );
+        }
     }
 
     fn installing_page(&mut self, ui: &mut Ui) {
         let install = &mut self.install;
+        // Once the key is there the steps are all ticked, and the key needs
+        // the room more: on a phone it would not fit beside them.
+        let showing_key = install.done && install.recovery.is_some();
         let labels: Vec<&str> = install.labels.iter().map(String::as_str).collect();
         if labels.is_empty() {
             wizard::busy(ui, "Starting…");
-        } else {
+        } else if !showing_key {
             wizard::steps(ui, &labels, install.current, install.failed);
         }
         if let Some(fraction) = install.fraction
@@ -345,6 +463,43 @@ impl Installer {
                 RichText::new("Installed. Remove the installer's medium, then restart.").strong(),
             );
             ui.add_space(8.0);
+        }
+        if install.recovery.is_some() {
+            // Scrolls on a screen too short for the key, its QR code, the
+            // notice and the box under them, so the box is never out of
+            // reach and Restart never stuck.
+            egui::ScrollArea::vertical()
+                .id_salt("recovery-key")
+                .max_height((ui.available_height() - 48.0).max(120.0))
+                .show(ui, |ui| {
+                if let Some((key, qr)) = &install.recovery {
+                    let tokens = Tokens::current(ui.ctx());
+                    ui.label(
+                        RichText::new("Recovery key")
+                            .font(tokens.small_font())
+                            .strong(),
+                    );
+                    ui.label(
+                        RichText::new(key)
+                            .monospace()
+                            .size(16.0)
+                            .color(tokens.foreground),
+                    );
+                    if let Some(qr) = qr {
+                        derisk_settings::qr(ui, qr);
+                    }
+                    wizard::notice(
+                        ui,
+                        "Write this down or scan it, and keep it apart from the computer. It unlocks the system's data without the PIN, and it is not shown again.",
+                        false,
+                    );
+                    ui.add(
+                        mcsapi_components::Checkbox::new(&mut install.recovery_kept)
+                            .label("I have kept the recovery key"),
+                    );
+                    ui.add_space(8.0);
+                }
+                });
         }
         let toggle = if install.show_log {
             "Hide details"
@@ -410,6 +565,12 @@ impl Flow for Installer {
                 Next::new("Next", self.chosen().is_some()),
                 true,
             ),
+            Step::Pin => (
+                "PIN at startup",
+                "Choose whether the computer asks for a PIN when it starts.",
+                Next::new("Next", self.pin.problem().is_none()),
+                true,
+            ),
             Step::Confirm => (
                 "Erase this disk?",
                 "This cannot be undone.",
@@ -448,7 +609,9 @@ impl Flow for Installer {
                     } else if failed && self.reports_to.is_some() {
                         Next::new("Report the problem", true)
                     } else {
-                        Next::new("Restart", done)
+                        // Not before the recovery key is kept, when there is one.
+                        let kept = self.install.recovery.is_none() || self.install.recovery_kept;
+                        Next::new("Restart", done && kept)
                     },
                     failed,
                 )
@@ -487,6 +650,7 @@ impl Flow for Installer {
             Step::Welcome => self.welcome_page(ui),
             Step::Network => self.network.show(ui, &self.wifi, &status),
             Step::Disk => self.disk_page(ui),
+            Step::Pin => self.pin_page(ui),
             Step::Confirm => self.confirm_page(ui),
             Step::Installing => self.installing_page(ui),
             Step::Report => self.report.show(ui),
@@ -498,13 +662,22 @@ impl Flow for Installer {
                 Step::Network
             }),
             (Nav::Next, Step::Network) => self.go(Step::Disk),
-            (Nav::Next, Step::Disk) => self.go(Step::Confirm),
+            (Nav::Next, Step::Disk) => self.go(if self.encryption {
+                Step::Pin
+            } else {
+                Step::Confirm
+            }),
+            (Nav::Next, Step::Pin) => self.go(Step::Confirm),
             (Nav::Next, Step::Confirm) => {
                 if let Some(disk) = self.chosen().map(|d| d.path.clone()) {
-                    info!("installing onto {disk}");
+                    let pin = self.pin.chosen();
+                    info!(
+                        "installing onto {disk}{}",
+                        if pin.is_some() { ", encrypted" } else { "" }
+                    );
                     self.install = Install::default();
                     self.report = Report::default();
-                    self.backend.send(&Request::Install { disk });
+                    self.backend.send(&Request::Install { disk, pin });
                     self.step = Step::Installing;
                 }
             }
@@ -543,7 +716,13 @@ impl Flow for Installer {
             } else {
                 Step::Network
             }),
-            (Nav::Back, Step::Confirm | Step::Installing) => self.go(Step::Disk),
+            (Nav::Back, Step::Pin) => self.go(Step::Disk),
+            (Nav::Back, Step::Confirm) => self.go(if self.encryption {
+                Step::Pin
+            } else {
+                Step::Disk
+            }),
+            (Nav::Back, Step::Installing) => self.go(Step::Disk),
             _ => {}
         }
     }
@@ -569,6 +748,8 @@ pub fn run(backend: Vec<String>, size: (i32, i32)) -> Result {
         network: NetworkPage::default(),
         disks: None,
         disk: None,
+        encryption: false,
+        pin: PinChoice::default(),
         error: None,
         install: Install::default(),
     };
