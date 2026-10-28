@@ -176,7 +176,7 @@ impl Page {
             Self::Backups => "Copies of your files and repositories on a LosOS box.",
             Self::DefaultApps => "The browser and search engine the desktop opens.",
             Self::System => {
-                "Where updates come from, the security report and resetting this computer."
+                "Where updates come from, the security report, Secure Boot and resetting this computer."
             }
             Self::About => "This version of Settings and where it keeps them.",
         }
