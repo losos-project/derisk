@@ -432,8 +432,9 @@ const ICON_PX: u32 = 64;
 
 /// Command palette state. The host fills [`PaletteUi::apps`], the files
 /// ([`PaletteUi::set_files`]) and what the file index found for the typed
-/// text ([`PaletteUi::file_search`], [`PaletteUi::set_file_matches`]); the
-/// rest is kept between openings.
+/// text ([`PaletteUi::file_search`], [`PaletteUi::set_file_matches`]), and
+/// searches the LosOS boxes for it ([`PaletteUi::box_search`]); the rest is
+/// kept between openings.
 #[derive(Default)]
 pub struct PaletteUi {
     /// Installed apps, for the apps plugin.
@@ -506,6 +507,15 @@ impl PaletteUi {
             && matches!(scope, palette::Scope::All | palette::Scope::Files)
             && !text.is_empty())
         .then_some(text)
+    }
+
+    /// The text to search the LosOS boxes for: the typed text while the
+    /// palette is open on a search with no prefix, which is the only one
+    /// the `boxes` plugin's rows show in, and `None` otherwise.
+    pub fn box_search(&self) -> Option<&str> {
+        let (scope, text) = palette::scope(&self.query);
+        (self.open && !self.chat && scope == palette::Scope::All && !text.is_empty())
+            .then_some(text)
     }
 
     /// What the file index found for the text [`PaletteUi::file_search`]

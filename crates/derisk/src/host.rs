@@ -77,6 +77,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     ask,
+    box_search::{self, BoxSearch},
     file_search::FileSearch,
     machines::{self, MachineDisplays},
     notifications, pam, polkit_agent, power, unlock,
@@ -316,6 +317,8 @@ pub struct Session {
     power_modes: power::PowerModes,
     /// Searches of the file index for the palette's typed text.
     file_search: Option<FileSearch>,
+    /// Searches of the LosOS boxes' files and Git for it.
+    box_search: Option<BoxSearch>,
     /// Apps' notifications, which `crate::notifications` fills.
     notifications: notifications::Center,
 }
@@ -530,6 +533,7 @@ impl Session {
             machines: MachineDisplays::start(),
             power_modes: power::PowerModes::default(),
             file_search: FileSearch::start(),
+            box_search: BoxSearch::start(),
             notifications: notifications::Center::default(),
         }
     }
@@ -1742,6 +1746,28 @@ impl compositor::Shell for Session {
             && let Some(found) = search.poll(self.ui.palette.file_search())
         {
             self.ui.palette.set_file_matches(found);
+            self.redraw = true;
+        }
+        // The same for the boxes, whose rows come from the `boxes` source.
+        // The shell holds it from the start, with no rows until a search
+        // finds some, so no agent connection can register rows under it.
+        if !self.shell.palette_sources.has(box_search::SOURCE) {
+            let _ = self.shell.palette_sources.register(
+                box_search::SOURCE.into(),
+                box_search::palette("", Vec::new()),
+                Some(SHELL),
+            );
+        }
+        if let Some(search) = &mut self.box_search
+            && let Some((text, hits)) = search.poll(self.ui.palette.box_search())
+        {
+            if let Err(e) = self.shell.palette_sources.register(
+                box_search::SOURCE.into(),
+                box_search::palette(&text, hits),
+                Some(SHELL),
+            ) {
+                debug!(error = e, "the boxes' rows are not in the palette");
+            }
             self.redraw = true;
         }
         // Every frame, before the host asks where the windows are.

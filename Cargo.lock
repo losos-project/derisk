@@ -6137,6 +6137,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "palette-boxes"
+version = "0.1.0"
+dependencies = [
+ "derisk-palette-sdk",
+]
+
+[[package]]
 name = "palette-browser"
 version = "0.1.0"
 dependencies = [

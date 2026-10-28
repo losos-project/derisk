@@ -175,6 +175,13 @@ impl Hypervisor {
         bytes
     }
 
+    /// Runs `program` in `machine`, which must be running with its guest
+    /// agent up, and waits up to `wait` for it to finish.
+    pub fn run(&self, machine: &str, program: &Program, wait: Duration) -> Result<Exit> {
+        let pid = self.spawn(machine, program)?;
+        self.wait(machine, pid, wait, &program.path)
+    }
+
     /// Waits up to `wait` for the guest program `pid` to exit.
     pub(crate) fn wait(&self, machine: &str, pid: u32, wait: Duration, what: &str) -> Result<Exit> {
         let deadline = Instant::now() + wait;
