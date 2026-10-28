@@ -290,7 +290,8 @@ fn backend_protocol_round_trips() {
         Some(Event::Hello {
             name: "LosOS Desktop".into(),
             source: None,
-            release: None
+            release: None,
+            report: None,
         })
     );
     assert_eq!(
@@ -300,7 +301,19 @@ fn backend_protocol_round_trips() {
         Some(Event::Hello {
             name: "LosOS Desktop".into(),
             source: None,
-            release: Some("/run/losos/release".into())
+            release: Some("/run/losos/release".into()),
+            report: None,
+        })
+    );
+    assert_eq!(
+        install::parse_event(
+            "{\"event\":\"hello\",\"name\":\"LosOS Desktop\",\"report\":\"losos-project/desktop\"}"
+        ),
+        Some(Event::Hello {
+            name: "LosOS Desktop".into(),
+            source: None,
+            release: None,
+            report: Some("losos-project/desktop".into()),
         })
     );
     let disks = install::parse_event(
@@ -323,6 +336,56 @@ fn backend_protocol_round_trips() {
     assert_eq!(disks[0].size_text(), "21.5 GB");
     assert_eq!(install::parse_event("not json"), None);
     assert_eq!(install::parse_event("{\"event\":\"unknown\"}"), None);
+}
+
+#[test]
+fn a_report_round_trips() {
+    assert_eq!(
+        install::request_line(&Request::Report),
+        "{\"method\":\"report\"}\n"
+    );
+    assert_eq!(
+        install::request_line(&Request::ReportSend {
+            note: "It froze".into()
+        }),
+        "{\"method\":\"report_send\",\"note\":\"It froze\"}\n"
+    );
+    assert_eq!(
+        install::request_line(&Request::ReportCancel),
+        "{\"method\":\"report_cancel\"}\n"
+    );
+    assert_eq!(
+        install::parse_event(
+            "{\"event\":\"report\",\"repository\":\"o/r\",\"title\":\"T\",\"body\":\"B\"}"
+        ),
+        Some(Event::Report {
+            repository: "o/r".into(),
+            title: "T".into(),
+            body: "B".into(),
+        })
+    );
+    assert_eq!(
+        install::parse_event(
+            "{\"event\":\"report_sign_in\",\"uri\":\"https://github.com/login/device\",\"code\":\"WDJB-MJHT\"}"
+        ),
+        Some(Event::ReportSignIn {
+            uri: "https://github.com/login/device".into(),
+            code: "WDJB-MJHT".into(),
+        })
+    );
+    assert_eq!(
+        install::parse_event("{\"event\":\"reported\",\"url\":\"https://x/7\"}"),
+        Some(Event::Reported {
+            url: "https://x/7".into(),
+            existing: false,
+        })
+    );
+    assert_eq!(
+        install::parse_event("{\"event\":\"report_failed\",\"message\":\"declined\"}"),
+        Some(Event::ReportFailed {
+            message: "declined".into()
+        })
+    );
 }
 
 #[test]

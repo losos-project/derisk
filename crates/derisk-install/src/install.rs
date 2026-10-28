@@ -24,6 +24,19 @@
 //! ← {"method":"reboot"}
 //! ```
 //!
+//! A backend that can report a failed install says where in
+//! [`Event::Hello`]'s `report`. After [`Event::Failed`], the installer can
+//! then ask for the report to show ([`Request::Report`]), and send it once
+//! the person has read it ([`Request::ReportSend`]):
+//!
+//! ```text
+//! ← {"method":"report"}
+//! → {"event":"report","repository":"owner/name","title":"…","body":"…"}
+//! ← {"method":"report_send","note":"It stopped at 3%"}
+//! → {"event":"report_sign_in","uri":"https://github.com/login/device","code":"WDJB-MJHT"}
+//! → {"event":"reported","url":"https://github.com/owner/name/issues/7","existing":false}
+//! ```
+//!
 //! Getting online is not the backend's: the installer joins networks itself
 //! (see [`crate::network`]), since a live system and an installed one do
 //! that the same way.
@@ -45,6 +58,15 @@ pub enum Request {
     Reboot,
     /// Power off.
     PowerOff,
+    /// Write up the install that just failed, as [`Event::Report`].
+    Report,
+    /// Send the report written last, with the person's own words added.
+    ReportSend {
+        /// What the person wrote, which may be empty.
+        note: String,
+    },
+    /// Stop waiting for the person to sign in.
+    ReportCancel,
 }
 
 /// A disk the backend offers.
@@ -98,6 +120,10 @@ pub enum Event {
         /// again when such a disk is plugged in or removed.
         #[serde(default)]
         release: Option<String>,
+        /// Where a failed install can be reported, such as a repository's
+        /// `owner/name`, when the backend can send reports.
+        #[serde(default)]
+        report: Option<String>,
     },
     /// The answer to [`Request::Disks`].
     Disks {
@@ -131,6 +157,37 @@ pub enum Event {
     Installed,
     /// The request failed.
     Failed {
+        /// Why, in a sentence.
+        message: String,
+    },
+    /// The answer to [`Request::Report`]: exactly what would be sent.
+    Report {
+        /// Where it goes.
+        repository: String,
+        /// The issue's title.
+        title: String,
+        /// The issue's text, in Markdown.
+        body: String,
+    },
+    /// To send the report, the person signs in on this machine or another.
+    ReportSignIn {
+        /// The page to sign in at.
+        uri: String,
+        /// What to enter there.
+        code: String,
+    },
+    /// The report was filed.
+    Reported {
+        /// Where it can be read.
+        url: String,
+        /// Whether it went onto a report of the same failure that was
+        /// already open, rather than a new one.
+        #[serde(default)]
+        existing: bool,
+    },
+    /// The report could not be written or sent. The install's own failure
+    /// stands as it was.
+    ReportFailed {
         /// Why, in a sentence.
         message: String,
     },

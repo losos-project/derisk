@@ -9,6 +9,14 @@
 //! when a cable already brought the machine online; the disk; a last page
 //! that names the disk and says it will be erased, with the only red button;
 //! the install's steps and output; and Restart.
+//!
+//! When an install fails and the backend can send reports (its hello names
+//! where), the failed page's button is "Report the problem". That page shows
+//! the report exactly as it would be sent, takes a note from the person, and
+//! sends it only when they say so: the backend asks GitHub for a sign-in
+//! code, the page shows it with a QR code for another device, and once the
+//! person approves there the backend files the issue and the page shows its
+//! address.
 
 use std::{
     io::{BufRead, BufReader, Write},
@@ -42,6 +50,7 @@ enum Step {
     Disk,
     Confirm,
     Installing,
+    Report,
 }
 
 impl Step {
@@ -116,12 +125,50 @@ struct Install {
     show_log: bool,
 }
 
+/// Where a report of the failed install is.
+#[derive(Default)]
+enum Reporting {
+    /// The backend is writing it.
+    #[default]
+    Writing,
+    /// Written, shown, not sent.
+    Ready,
+    /// Asked to send; waiting for the sign-in code.
+    Starting,
+    /// Waiting for the person to sign in with `code` at `uri`.
+    SignIn {
+        uri: String,
+        code: String,
+        qr: Option<qrcode::QrCode>,
+    },
+    /// Filed at `url`.
+    Sent {
+        url: String,
+        existing: bool,
+        qr: Option<qrcode::QrCode>,
+    },
+    /// Could not be written or sent, and why.
+    Failed(String),
+}
+
+#[derive(Default)]
+struct Report {
+    state: Reporting,
+    /// The repository, title and body, as the backend wrote them.
+    written: Option<(String, String, String)>,
+    /// The person's own words, added before the rest.
+    note: String,
+}
+
 struct Installer {
     backend: Backend,
     step: Step,
     name: String,
     source: Option<String>,
     release: Option<String>,
+    /// Where a failed install can be reported, when the backend can.
+    reports_to: Option<String>,
+    report: Report,
     backend_lost: bool,
     wifi: Wifi,
     network: NetworkPage,
@@ -143,10 +190,32 @@ impl Installer {
                     name,
                     source,
                     release,
+                    report,
                 } => {
                     self.name = name;
                     self.source = source;
                     self.release = release;
+                    self.reports_to = report;
+                }
+                Event::Report {
+                    repository,
+                    title,
+                    body,
+                } => {
+                    self.report.written = Some((repository, title, body));
+                    self.report.state = Reporting::Ready;
+                }
+                Event::ReportSignIn { uri, code } => {
+                    let qr = qrcode::QrCode::new(uri.as_bytes()).ok();
+                    self.report.state = Reporting::SignIn { uri, code, qr };
+                }
+                Event::Reported { url, existing } => {
+                    info!("reported at {url}");
+                    let qr = qrcode::QrCode::new(url.as_bytes()).ok();
+                    self.report.state = Reporting::Sent { url, existing, qr };
+                }
+                Event::ReportFailed { message } => {
+                    self.report.state = Reporting::Failed(message);
                 }
                 Event::Disks { disks } => {
                     if self.disk.is_some_and(|d| d >= disks.len()) {
@@ -291,6 +360,99 @@ impl Installer {
         );
     }
 
+    fn report_page(&mut self, ui: &mut Ui) {
+        let tokens = Tokens::current(ui.ctx());
+        let report = &mut self.report;
+        match &report.state {
+            Reporting::Writing => {
+                wizard::busy(ui, "Writing the report…");
+                return;
+            }
+            Reporting::Starting => {
+                wizard::busy(ui, "Asking GitHub for a sign-in code…");
+                return;
+            }
+            Reporting::SignIn { uri, code, qr } => {
+                ui.label(
+                    RichText::new(format!(
+                        "On a phone or another computer, open {uri} and enter this code:"
+                    ))
+                    .font(tokens.body_font()),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(code)
+                        .font(egui::FontId::monospace(32.0))
+                        .strong(),
+                );
+                ui.add_space(8.0);
+                if let Some(qr) = qr {
+                    derisk_settings::qr(ui, qr);
+                    ui.add_space(8.0);
+                }
+                wizard::busy(ui, "The report is sent as soon as you approve it there.");
+                return;
+            }
+            Reporting::Sent { url, existing, qr } => {
+                let said = if *existing {
+                    "Someone already reported this problem, so the report was added to theirs."
+                } else {
+                    "Reported. Thank you: the developers can see what went wrong."
+                };
+                ui.label(RichText::new(said).font(tokens.body_font()).strong());
+                ui.add_space(8.0);
+                ui.label(RichText::new(url).monospace());
+                ui.add_space(8.0);
+                if let Some(qr) = qr {
+                    derisk_settings::qr(ui, qr);
+                }
+                return;
+            }
+            Reporting::Failed(message) => {
+                wizard::notice(ui, message, true);
+                ui.add_space(8.0);
+            }
+            Reporting::Ready => {}
+        }
+        let Some((repository, title, body)) = &report.written else {
+            return;
+        };
+        wizard::notice(
+            ui,
+            &format!(
+                "This opens an issue in {repository} on GitHub with the text below. It is public, so MAC and IP addresses are left out. Nothing is sent until you sign in to GitHub and approve it."
+            ),
+            false,
+        );
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("What were you doing? (optional)")
+                .font(tokens.small_font())
+                .strong()
+                .color(tokens.foreground),
+        );
+        ui.add_space(2.0);
+        ui.add(
+            egui::TextEdit::multiline(&mut report.note)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(10.0);
+        egui::ScrollArea::vertical()
+            .id_salt("report-text")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.label(RichText::new(title).strong());
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(body)
+                        .monospace()
+                        .size(12.0)
+                        .color(tokens.muted_foreground),
+                );
+            });
+    }
+
     fn installing_page(&mut self, ui: &mut Ui) {
         let install = &mut self.install;
         let labels: Vec<&str> = install.labels.iter().map(String::as_str).collect();
@@ -398,7 +560,9 @@ impl Flow for Installer {
                     } else {
                         "Installing"
                     },
-                    if failed {
+                    if failed && self.reports_to.is_some() {
+                        "Nothing was installed. Report the problem, or go back to try again."
+                    } else if failed {
                         "Nothing was installed. Go back to try again, or pick another disk."
                     } else if done {
                         "The computer is ready to restart into the new system."
@@ -407,9 +571,37 @@ impl Flow for Installer {
                     } else {
                         "This takes a while: the system is downloaded as it installs."
                     },
-                    Next::new("Restart", done),
+                    if failed && matches!(self.report.state, Reporting::Sent { .. }) {
+                        // Once is enough for one failure.
+                        Next::new("Reported", false)
+                    } else if failed && self.reports_to.is_some() {
+                        Next::new("Report the problem", true)
+                    } else {
+                        Next::new("Restart", done)
+                    },
                     failed,
                 )
+            }
+            Step::Report => {
+                let (subtitle, next) = match &self.report.state {
+                    Reporting::Ready => (
+                        "Send what went wrong to the developers.",
+                        Next::new("Send", true),
+                    ),
+                    Reporting::Failed(_) => (
+                        "The report was not sent.",
+                        Next::new("Try again", self.report.written.is_some()),
+                    ),
+                    Reporting::Sent { .. } => ("The report was sent.", Next::new("Done", true)),
+                    Reporting::SignIn { .. } => {
+                        ("Sign in to GitHub to send it.", Next::new("Send", false))
+                    }
+                    Reporting::Writing | Reporting::Starting => (
+                        "Send what went wrong to the developers.",
+                        Next::new("Send", false),
+                    ),
+                };
+                ("Report the problem", subtitle, next, true)
             }
         };
         let page = Page {
@@ -426,6 +618,7 @@ impl Flow for Installer {
             Step::Disk => self.disk_page(ui),
             Step::Confirm => self.confirm_page(ui),
             Step::Installing => self.installing_page(ui),
+            Step::Report => self.report_page(ui),
         });
         match (nav, step) {
             (Nav::Next, Step::Welcome) => self.go(if offline_ok {
@@ -439,12 +632,39 @@ impl Flow for Installer {
                 if let Some(disk) = self.chosen().map(|d| d.path.clone()) {
                     info!("installing onto {disk}");
                     self.install = Install::default();
+                    self.report = Report::default();
                     self.backend.send(&Request::Install { disk });
                     self.step = Step::Installing;
                 }
             }
+            (Nav::Next, Step::Installing) if self.install.failed => {
+                // Written afresh each time: the journal has more in it now.
+                self.report = Report {
+                    note: std::mem::take(&mut self.report.note),
+                    ..Report::default()
+                };
+                self.backend.send(&Request::Report);
+                self.step = Step::Report;
+            }
             (Nav::Next, Step::Installing) => {
                 self.backend.send(&Request::Reboot);
+            }
+            (Nav::Next, Step::Report) => match self.report.state {
+                Reporting::Sent { .. } => self.step = Step::Installing,
+                _ => {
+                    self.report.state = Reporting::Starting;
+                    let note = self.report.note.clone();
+                    self.backend.send(&Request::ReportSend { note });
+                }
+            },
+            (Nav::Back, Step::Report) => {
+                if matches!(
+                    self.report.state,
+                    Reporting::Starting | Reporting::SignIn { .. }
+                ) {
+                    self.backend.send(&Request::ReportCancel);
+                }
+                self.step = Step::Installing;
             }
             (Nav::Back, Step::Network) => self.go(Step::Welcome),
             (Nav::Back, Step::Disk) => self.go(if offline_ok {
@@ -469,6 +689,8 @@ pub fn run(backend: Vec<String>, size: (i32, i32)) -> Result {
         name: "the system".into(),
         source: None,
         release: None,
+        reports_to: None,
+        report: Report::default(),
         backend_lost: false,
         // Nothing to save Wi-Fi into: the live system forgets it, and the
         // installed one asks again on its first boot.

@@ -25,6 +25,9 @@ derisk-settings.workspace = true
 mcsapi.workspace = true
 # Buttons, fields and alerts for the installer and first-boot setup.
 mcsapi-components.workspace = true
+# The installer's sign-in code for reporting a failed install, as a QR code
+# for a phone, drawn by derisk-settings' own.
+qrcode = { version = "0.14", default-features = false }
 # Wallpapers in the formats the Settings app offers.
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 mcsapi-theme.workspace = true
