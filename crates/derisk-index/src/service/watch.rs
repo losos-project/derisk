@@ -1,5 +1,6 @@
-//! Keeping the index in step with home: one walk at the start, then a
-//! shallow walk of each folder inotify says something changed in.
+//! Keeping the index in step with home and the other folders indexed: one
+//! walk at the start, then a shallow walk of each folder inotify says
+//! something changed in.
 //!
 //! inotify only says which folder to look at again. Looking again compares
 //! each entry's stamp with the one it was indexed with, so a missed or
@@ -123,22 +124,39 @@ impl<'a> Indexer<'a> {
         })
     }
 
-    /// Walks the whole of home, indexing what is new or changed since the
-    /// index was last written and forgetting what is gone.
+    /// Walks the whole of home and the other folders indexed, indexing
+    /// what is new or changed since the index was last written and
+    /// forgetting what is gone, and what is under a folder Settings no
+    /// longer names.
     ///
     /// # Errors
     ///
     /// When the index cannot be read or written.
     pub fn walk(&mut self) -> Result<(), Error> {
         let started = Instant::now();
-        let home = self.store.home().to_owned();
-        self.watch(&home);
-        self.sync(&home, true)?;
+        for dropped in self.store.dropped() {
+            info!(folder = %dropped.display(), "no longer indexed");
+            for (path, stamp) in self.store.indexed(&dropped, true)? {
+                self.store.remove(&self.writer, &path, stamp.folder);
+                self.written()?;
+            }
+        }
+        for root in self.store.roots().to_vec() {
+            // A disk not mounted yet keeps what was indexed from it until
+            // it is, rather than losing it at every login without it.
+            if !root.is_dir() {
+                info!(folder = %root.display(), "not there to index");
+                continue;
+            }
+            self.watch(&root);
+            self.sync(&root, true)?;
+        }
         self.commit()?;
+        self.store.walked()?;
         info!(
             folders = self.folders.len(),
             seconds = started.elapsed().as_secs_f32(),
-            "home is indexed"
+            "files are indexed"
         );
         Ok(())
     }
@@ -195,7 +213,7 @@ impl<'a> Indexer<'a> {
             .mask
             .intersects(EventMask::DELETE_SELF | EventMask::MOVE_SELF)
         {
-            if let Some(parent) = dir.parent().filter(|p| p.starts_with(self.store.home())) {
+            if let Some(parent) = dir.parent().filter(|p| self.indexed(p)) {
                 dirty.entry(parent.to_owned()).or_insert(false);
             }
             return false;
@@ -311,8 +329,12 @@ impl<'a> Indexer<'a> {
             self.written()?;
         }
         // What is indexed and was not walked is gone, hidden, a symlink now
-        // or ignored.
+        // or ignored, unless another folder indexed holds it: a hidden one
+        // in home that Settings names is walked from there.
         for (path, stamp) in indexed {
+            if self.claimed(dir, &path) {
+                continue;
+            }
             self.store.remove(&self.writer, &path, stamp.folder);
             if stamp.folder {
                 self.unwatch(&path);
@@ -323,6 +345,20 @@ impl<'a> Indexer<'a> {
             self.sync(&folder, true)?;
         }
         Ok(())
+    }
+
+    /// Whether `dir` is in a folder indexed.
+    fn indexed(&self, dir: &Path) -> bool {
+        self.store.roots().iter().any(|root| dir.starts_with(root))
+    }
+
+    /// Whether `path` is under a folder indexed in its own right inside
+    /// `dir`, whose own walk keeps it.
+    fn claimed(&self, dir: &Path, path: &Path) -> bool {
+        self.store
+            .roots()
+            .iter()
+            .any(|root| root != dir && root.starts_with(dir) && path.starts_with(root))
     }
 
     /// Counts one entry written, committing every [`BATCH`].
@@ -405,6 +441,39 @@ mod tests {
             set(&["notes", "notes/a.txt", "code", "code/main.rs"])
         );
         assert_eq!(indexer.folders.len(), 3, "home, notes and code are watched");
+    }
+
+    #[test]
+    fn other_folders_are_indexed_until_dropped() {
+        let (dir, home) = scratch("roots");
+        let index = dir.0.join("index");
+        let data = dir.0.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("report.txt"), "zeta").unwrap();
+        // Hidden, so home's own walk leaves it out and would forget it.
+        let secret = home.join(".secret");
+        let paths = |store: &Store, text| -> Vec<PathBuf> {
+            let found = store.search(text, 5).unwrap();
+            found.into_iter().map(|m| m.path).collect()
+        };
+        {
+            let store = Store::open_with(&index, &home, &[data.clone(), secret.clone()]).unwrap();
+            let inotify = Inotify::init().unwrap();
+            let mut indexer = Indexer::new(&store, inotify.watches()).unwrap();
+            indexer.walk().unwrap();
+            assert_eq!(paths(&store, "zeta"), [data.join("report.txt")]);
+            assert_eq!(paths(&store, "data report"), [data.join("report.txt")]);
+            indexer.walk().unwrap();
+            assert_eq!(paths(&store, "beta"), [secret.join("key")]);
+        }
+        let store = Store::open(&index, &home).unwrap();
+        let inotify = Inotify::init().unwrap();
+        Indexer::new(&store, inotify.watches())
+            .unwrap()
+            .walk()
+            .unwrap();
+        assert!(paths(&store, "zeta").is_empty());
+        assert!(paths(&store, "beta").is_empty());
     }
 
     #[test]
