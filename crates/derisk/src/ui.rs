@@ -1679,11 +1679,12 @@ impl ShellUi {
                 if search.is_some_and(|s| s.clicked()) {
                     actions.push(Action::Palette { visible: None });
                 }
+                let mut menus: Vec<Menu> = shell.menus.bar(focused.map(|w| w.get())).collect();
                 if let Some(w) = focused {
-                    self.window_controls(ui, shell, w, machine, ink, actions);
+                    self.window_controls(ui, shell, w, machine, &mut menus, ink, actions);
                 }
-                for menu in shell.menus.bar(focused.map(|w| w.get())) {
-                    menu_button(ui, &menu, focused.map(|w| w.get()), actions);
+                for menu in &menus {
+                    menu_button(ui, menu, focused.map(|w| w.get()), actions);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // The overview's clock widget shows the time and date
@@ -1726,13 +1727,17 @@ impl ShellUi {
     /// The focused window's buttons and title, which its title bar had:
     /// Close, Minimize and Maximize on the left as they were, then its icon
     /// and title. The title is where the window is moved from (see
-    /// [`ShellUi::title_rect`]), and a double click on it maximizes.
+    /// [`ShellUi::title_rect`]), and a double click on it maximizes. When
+    /// the first of `menus` is the app's menu named after it, a click on the
+    /// title opens that menu, and it is taken out of `menus`.
+    #[allow(clippy::too_many_arguments)]
     fn window_controls(
         &mut self,
         ui: &mut Ui,
         shell: &Shell,
         window: WindowId,
         machine: Option<&crate::shell::WindowMachine>,
+        menus: &mut Vec<Menu>,
         ink: Color32,
         actions: &mut Vec<Action>,
     ) {
@@ -1811,6 +1816,20 @@ impl ShellUi {
         if grip.double_clicked() {
             actions.push(Action::ToggleMaximize {
                 window: Some(window.get()),
+            });
+        }
+        if crate::menu::named_after(menus, &[shown, &look.name]) {
+            let app = menus.remove(0);
+            egui::Popup::menu(&grip).show(|ui| {
+                entries(
+                    ui,
+                    &app.entries,
+                    &mut |item| Action::ActivateMenu {
+                        window: Some(window.get()),
+                        item,
+                    },
+                    actions,
+                );
             });
         }
         let at = grip.interact_pointer_pos();
