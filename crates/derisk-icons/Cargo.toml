@@ -12,4 +12,4 @@ derisk-sys.workspace = true
 # App icons from the icon theme are PNG; SVG goes through resvg.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 mcsapi-ui.workspace = true
-resvg = { version = "0.48.1", default-features = false }
+resvg = { version = "0.49.0", default-features = false }
