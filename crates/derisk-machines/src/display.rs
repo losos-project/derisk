@@ -267,6 +267,7 @@ mod tests {
             cpus: 1,
             state: State::Running,
             cid: Some(3),
+            service: false,
         };
         assert!(has_display(&machine));
         assert_eq!(sandbox(&machine), ["org.libvirt", "work", "u"]);

@@ -46,7 +46,9 @@ everything. Type to search, in a single ranked list:
   tabs (switch, close, new tab) and its extensions (enable, disable,
   options). An address typed into the palette opens in Danube, or in the
   default browser when Danube is not running.
-- **Files** under your home folder, by name and by what is in them. A
+- **Files** under your home folder, and other folders named on Settings'
+  Privacy page, by name and by what is in them, PDFs and office documents
+  included. A
   file found by its text shows the line that matched and the folder it is
   in (`~/notes · Quarterly budget: rent, …`). The text comes from
   `derisk-index.service`, a user service that indexes home once and then

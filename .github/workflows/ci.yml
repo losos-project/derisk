@@ -12,11 +12,37 @@ permissions:
 # by whoever controls the action's repository, and these steps run with the
 # checkout's token in reach.
 
+# A newer push to a pull request cancels the run already going: the older
+# commit's result no longer decides anything. Pushes to main each finish,
+# since release.yml releases the ones that pass.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Whether the change can affect the code (.github/changes): one that only
+  # edits text, screenshots or another workflow skips the jobs below, which
+  # a required check reads as passed. If this job fails, they run anyway.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: .github/changes .github/workflows/ci.yml >> "$GITHUB_OUTPUT"
+
   check:
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -38,6 +64,8 @@ jobs:
       - run: cargo test --workspace ${{ matrix.features }}
 
   nix:
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

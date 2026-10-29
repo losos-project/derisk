@@ -5,7 +5,8 @@ GenericName=File Manager
 Comment=Browse, copy, rename, and trash files
 Keywords=file manager;folders;browse;trash;
 Icon=system-file-manager
-Exec=derisk launch org.derisk.files
+Exec=derisk launch org.derisk.files %F
+MimeType=inode/directory;
 Categories=System;FileManager;
 Actions=new-window;documents;downloads;
 

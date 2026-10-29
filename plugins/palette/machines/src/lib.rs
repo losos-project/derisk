@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! {"machines":[{"name":"work","label":"blue","running":true,"screen":false,
-//!   "apps":[{"id":"foot","name":"Foot"}]}]}
+//!   "service":false,"apps":[{"id":"foot","name":"Foot"}]}]}
 //! {"op":"open","machine":"work","app":"foot"}
 //! {"op":"start","machine":"work"}
 //! {"op":"shut_down","machine":"work"}
@@ -19,6 +19,10 @@
 //! session asked, kept while the machine is off, or until then what its
 //! template ships; picking one of a machine that is off starts it. A
 //! machine nothing is known of yet has none.
+//!
+//! A `service` machine is the OS's own, such as the Flatpak machine: its
+//! apps are offered, and starting it is left to them, but it is not
+//! offered to start, shut down or show.
 
 use derisk_palette_sdk::{
     Category, Entry, Guest, Hook, Input, Manifest, Value, View, export, json,
@@ -75,7 +79,8 @@ pub fn entries(view: &View) -> Vec<Entry> {
         // whose windows are drawn blue.
         let label = text(machine, "label");
         let running = machine["running"].as_bool() == Some(true);
-        if !running {
+        let service = machine["service"].as_bool() == Some(true);
+        if !running && !service {
             out.push(
                 Entry::new(
                     Category::Command,
@@ -108,7 +113,7 @@ pub fn entries(view: &View) -> Vec<Entry> {
                 .keywords(format!("{id} machine vm {label}")),
             );
         }
-        if !running {
+        if !running || service {
             continue;
         }
         // The session shows a running machine's screen by itself; this is
@@ -205,6 +210,19 @@ mod tests {
             [json!({"action": "palette_command", "source": "machines",
                     "command": {"op": "screen", "machine": "win"}})]
         );
+    }
+
+    #[test]
+    fn a_service_machine_offers_only_its_apps() {
+        for running in [false, true] {
+            let rows = entries(&view(json!({"machines": [
+                {"name": "flatpak", "label": "black", "running": running,
+                 "screen": true, "service": true,
+                 "apps": [{"id": "org.gnome.Maps", "name": "Maps"}]},
+            ]})));
+            let titles: Vec<_> = rows.iter().map(|e| e.title.as_str()).collect();
+            assert_eq!(titles, ["Maps in flatpak"]);
+        }
     }
 
     #[test]
