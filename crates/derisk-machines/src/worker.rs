@@ -141,7 +141,8 @@ fn run(orders: &Receiver<Order>, events: &Sender<Event>) {
     loop {
         match looking.machines() {
             Ok(machines) => {
-                let machines: Vec<Machine> = machines.collect();
+                // The OS's own machines are not the person's to manage.
+                let machines: Vec<Machine> = machines.filter(|m| !m.service).collect();
                 if last.as_ref() != Some(&machines) {
                     last = Some(machines.clone());
                     if events.send(Event::Machines(machines)).is_err() {

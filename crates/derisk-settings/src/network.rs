@@ -19,6 +19,7 @@ use mcsapi_ui::{Theme, egui};
 /// passphrase.
 #[derive(Default)]
 pub(crate) struct NetworkUi {
+    schizo: crate::schizo::SchizoUi,
     wifi: Option<Wifi>,
     picked: Option<Vec<u8>>,
     passphrase: String,
@@ -84,6 +85,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(500));
 
+    crate::schizo::section(ui, &mut state.schizo, theme);
     ui.label(
         egui::RichText::new(headline(&status))
             .strong()

@@ -472,6 +472,7 @@ pub fn tools() -> Value {
         "oneOf": [
             {"type": "object", "required": ["action", "app"], "properties": {"action": {"const": "launch"}, "app": {"type": "string"}}},
             {"type": "object", "required": ["action", "app", "id"], "properties": {"action": {"const": "launch_action"}, "app": {"type": "string", "description": "Desktop file ID or core app ID"}, "id": {"type": "string", "description": "Desktop action ID from the app's .desktop file"}}},
+            {"type": "object", "required": ["action", "app", "path"], "properties": {"action": {"const": "open_in"}, "app": {"type": "string", "description": "Core app ID, such as org.derisk.editor"}, "path": {"type": "string", "description": "Absolute path of the file or folder to open"}}},
             {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["close", "tile", "float", "toggle_maximize", "minimize"]}, "window": window}},
             {"type": "object", "required": ["action", "window"], "properties": {"action": {"enum": ["focus", "restore"]}, "window": {"type": "integer"}}},
             {"type": "object", "required": ["action"], "properties": {"action": {"enum": ["focus_next", "focus_previous", "promote"]}}},
