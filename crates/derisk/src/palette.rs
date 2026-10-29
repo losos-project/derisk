@@ -170,6 +170,23 @@ impl Entry {
         })
     }
 
+    /// Whether choosing this entry offers to report a problem.
+    pub fn reports(&self) -> bool {
+        self.actions.iter().any(|a| {
+            matches!(
+                a,
+                Action::ReportUnit { .. }
+                    | Action::ReportWindow { .. }
+                    | Action::ReportStuck { .. }
+            )
+        })
+    }
+
+    /// Whether this machine can carry the entry out, by `can`.
+    pub fn possible(&self, can: Can) -> bool {
+        (can.hibernate || !self.hibernates()) && (can.report || !self.reports())
+    }
+
     /// The key [`History`] remembers this entry by.
     pub fn key(&self) -> String {
         format!("{:?}:{}:{}", self.category, self.title, self.detail)
@@ -429,10 +446,30 @@ pub struct Catalog {
     entries: Vec<Entry>,
     files_generation: u64,
     built: bool,
-    /// The `can_hibernate` the entries were filtered with.
-    hibernate: bool,
+    /// What the entries were filtered with.
+    can: Can,
     query: Option<(String, View)>,
     rows: Rows,
+}
+
+/// What this machine can do that not every one can: the catalog leaves
+/// out rows for the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Can {
+    /// Hibernate, as logind says.
+    pub hibernate: bool,
+    /// Report a problem, when a reporter says where reports go.
+    pub report: bool,
+}
+
+impl Can {
+    /// What `shell`'s host found the machine can do.
+    pub fn of(shell: &Shell) -> Self {
+        Self {
+            hibernate: shell.can_hibernate,
+            report: shell.can_report,
+        }
+    }
 }
 
 /// The rows for the typed text, by where they go.
@@ -471,13 +508,13 @@ impl Catalog {
 
     /// The catalog for `view` and `files`, asking again only the plugins
     /// whose part of it changed. Rows the machine cannot carry out are left
-    /// out: Hibernate unless `can_hibernate`.
+    /// out (see [`Can`]).
     pub fn entries(
         &mut self,
         plugins: &Plugins,
         view: &View,
         files: &[File],
-        can_hibernate: bool,
+        can: Can,
     ) -> &[Entry] {
         self.answers.resize_with(plugins.len(), Answer::default);
         let stale: Vec<(usize, View, Option<u64>)> = plugins
@@ -492,7 +529,7 @@ impl Catalog {
                     .then_some((i, seen, files))
             })
             .collect();
-        if stale.is_empty() && self.built && self.hibernate == can_hibernate {
+        if stale.is_empty() && self.built && self.can == can {
             return &self.entries;
         }
         let fresh = plugins.each(
@@ -513,12 +550,12 @@ impl Catalog {
             };
         }
         self.built = true;
-        self.hibernate = can_hibernate;
+        self.can = can;
         let mut entries: Vec<Entry> = self
             .answers
             .iter()
             .flat_map(|a| a.rows.iter())
-            .filter(|e| can_hibernate || !e.hibernates())
+            .filter(|e| e.possible(can))
             .cloned()
             .collect();
         // Stable: within a category, plugins' own order stands.
@@ -577,7 +614,7 @@ impl Catalog {
 /// from the loaded [`plugins`], asked afresh.
 pub fn entries(shell: &Shell, apps: &[App], files: &[File]) -> Vec<Entry> {
     Catalog::default()
-        .entries(plugins(), &view(shell, apps), files, shell.can_hibernate)
+        .entries(plugins(), &view(shell, apps), files, Can::of(shell))
         .to_vec()
 }
 

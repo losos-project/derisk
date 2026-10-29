@@ -27,6 +27,7 @@ use std::{
 
 use derisk::{
     install::{self, Disk, Event, Request},
+    report::{self, Report, Reporting},
     wifi::{NetworkPage, Wifi},
     wizard::{self, Nav, Next, Page, Row, ScreenLayout},
 };
@@ -125,41 +126,6 @@ struct Install {
     show_log: bool,
 }
 
-/// Where a report of the failed install is.
-#[derive(Default)]
-enum Reporting {
-    /// The backend is writing it.
-    #[default]
-    Writing,
-    /// Written, shown, not sent.
-    Ready,
-    /// Asked to send; waiting for the sign-in code.
-    Starting,
-    /// Waiting for the person to sign in with `code` at `uri`.
-    SignIn {
-        uri: String,
-        code: String,
-        qr: Option<qrcode::QrCode>,
-    },
-    /// Filed at `url`.
-    Sent {
-        url: String,
-        existing: bool,
-        qr: Option<qrcode::QrCode>,
-    },
-    /// Could not be written or sent, and why.
-    Failed(String),
-}
-
-#[derive(Default)]
-struct Report {
-    state: Reporting,
-    /// The repository, title and body, as the backend wrote them.
-    written: Option<(String, String, String)>,
-    /// The person's own words, added before the rest.
-    note: String,
-}
-
 struct Installer {
     backend: Backend,
     step: Step,
@@ -201,21 +167,19 @@ impl Installer {
                     repository,
                     title,
                     body,
-                } => {
-                    self.report.written = Some((repository, title, body));
-                    self.report.state = Reporting::Ready;
-                }
+                } => self.report.apply(report::Event::Report {
+                    repository,
+                    title,
+                    body,
+                }),
                 Event::ReportSignIn { uri, code } => {
-                    let qr = qrcode::QrCode::new(uri.as_bytes()).ok();
-                    self.report.state = Reporting::SignIn { uri, code, qr };
+                    self.report.apply(report::Event::ReportSignIn { uri, code });
                 }
                 Event::Reported { url, existing } => {
-                    info!("reported at {url}");
-                    let qr = qrcode::QrCode::new(url.as_bytes()).ok();
-                    self.report.state = Reporting::Sent { url, existing, qr };
+                    self.report.apply(report::Event::Reported { url, existing });
                 }
                 Event::ReportFailed { message } => {
-                    self.report.state = Reporting::Failed(message);
+                    self.report.apply(report::Event::ReportFailed { message });
                 }
                 Event::Disks { disks } => {
                     if self.disk.is_some_and(|d| d >= disks.len()) {
@@ -358,99 +322,6 @@ impl Installer {
             "Everything on this disk will be erased: every partition, every file and any other system on it.",
             true,
         );
-    }
-
-    fn report_page(&mut self, ui: &mut Ui) {
-        let tokens = Tokens::current(ui.ctx());
-        let report = &mut self.report;
-        match &report.state {
-            Reporting::Writing => {
-                wizard::busy(ui, "Writing the report…");
-                return;
-            }
-            Reporting::Starting => {
-                wizard::busy(ui, "Asking GitHub for a sign-in code…");
-                return;
-            }
-            Reporting::SignIn { uri, code, qr } => {
-                ui.label(
-                    RichText::new(format!(
-                        "On a phone or another computer, open {uri} and enter this code:"
-                    ))
-                    .font(tokens.body_font()),
-                );
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(code)
-                        .font(egui::FontId::monospace(32.0))
-                        .strong(),
-                );
-                ui.add_space(8.0);
-                if let Some(qr) = qr {
-                    derisk_settings::qr(ui, qr);
-                    ui.add_space(8.0);
-                }
-                wizard::busy(ui, "The report is sent as soon as you approve it there.");
-                return;
-            }
-            Reporting::Sent { url, existing, qr } => {
-                let said = if *existing {
-                    "Someone already reported this problem, so the report was added to theirs."
-                } else {
-                    "Reported. Thank you: the developers can see what went wrong."
-                };
-                ui.label(RichText::new(said).font(tokens.body_font()).strong());
-                ui.add_space(8.0);
-                ui.label(RichText::new(url).monospace());
-                ui.add_space(8.0);
-                if let Some(qr) = qr {
-                    derisk_settings::qr(ui, qr);
-                }
-                return;
-            }
-            Reporting::Failed(message) => {
-                wizard::notice(ui, message, true);
-                ui.add_space(8.0);
-            }
-            Reporting::Ready => {}
-        }
-        let Some((repository, title, body)) = &report.written else {
-            return;
-        };
-        wizard::notice(
-            ui,
-            &format!(
-                "This opens an issue in {repository} on GitHub with the text below. It is public, so MAC and IP addresses are left out. Nothing is sent until you sign in to GitHub and approve it."
-            ),
-            false,
-        );
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("What were you doing? (optional)")
-                .font(tokens.small_font())
-                .strong()
-                .color(tokens.foreground),
-        );
-        ui.add_space(2.0);
-        ui.add(
-            egui::TextEdit::multiline(&mut report.note)
-                .desired_rows(2)
-                .desired_width(f32::INFINITY),
-        );
-        ui.add_space(10.0);
-        egui::ScrollArea::vertical()
-            .id_salt("report-text")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.label(RichText::new(title).strong());
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(body)
-                        .monospace()
-                        .size(12.0)
-                        .color(tokens.muted_foreground),
-                );
-            });
     }
 
     fn installing_page(&mut self, ui: &mut Ui) {
@@ -618,7 +489,7 @@ impl Flow for Installer {
             Step::Disk => self.disk_page(ui),
             Step::Confirm => self.confirm_page(ui),
             Step::Installing => self.installing_page(ui),
-            Step::Report => self.report_page(ui),
+            Step::Report => self.report.show(ui),
         });
         match (nav, step) {
             (Nav::Next, Step::Welcome) => self.go(if offline_ok {

@@ -16,6 +16,40 @@ fn catalog_ids_are_valid_and_unique() {
 }
 
 #[test]
+fn every_desktop_action_opens_its_app() {
+    // The palette lists a desktop file's actions, and an action the app
+    // does not know opens nothing. Settings' System page, where updates are
+    // chosen, was missing from its list once, so the palette could not
+    // reach it.
+    for app in &APPS {
+        let actions = app
+            .desktop_file
+            .lines()
+            .find_map(|line| line.strip_prefix("Actions="))
+            .unwrap_or_default();
+        for action in actions.split(';').filter(|a| !a.is_empty()) {
+            assert!(
+                app.desktop_file
+                    .contains(&format!("[Desktop Action {action}]")),
+                "{} lists {action} without its group",
+                app.id
+            );
+            assert!(
+                app.create_action(action).is_some(),
+                "{} does not open {action}",
+                app.id
+            );
+        }
+    }
+    let settings = find("org.derisk.settings").unwrap();
+    let actions = settings
+        .desktop_file
+        .lines()
+        .find(|l| l.starts_with("Actions="));
+    assert!(actions.is_some_and(|l| l.contains(";system;")));
+}
+
+#[test]
 fn search_matches_names_summaries_and_keywords() {
     let hits = |q: &str| {
         APPS.iter()

@@ -58,14 +58,15 @@ use derisk::{
     overview::Battery,
     palette, privacy,
     privacy_display::{self, Area as CoverArea, PrivacyDisplay, Report as FacesReport},
+    report::{self, Problem, ReportDialog, Reporter},
     shell::{Mode, PointerOutcome, Shell, WindowMachine},
     snap::{Direction, SnapZone},
     systemd::{self, SessionOp},
     time::Clock,
     tutorial,
     ui::{
-        ChoiceInput, KeyHint, LockInput, PolkitInput, ShellUi, TitleDragPhase, WindowPictures,
-        set_touch_style, show_choice, show_lock, show_polkit,
+        ChoiceInput, HungInput, KeyHint, LockInput, PolkitInput, ShellUi, TitleDragPhase,
+        WindowPictures, set_touch_style, show_choice, show_hung, show_lock, show_polkit,
     },
     wallpaper::{self, Visibility, WallpaperPainter},
     widgets,
@@ -318,7 +319,32 @@ pub struct Session {
     file_search: Option<FileSearch>,
     /// Apps' notifications, which `crate::notifications` fills.
     notifications: notifications::Center,
+    /// The process behind each Wayland window, from its connection.
+    pids: HashMap<WindowId, u32>,
+    /// Windows that stopped answering the compositor's pings, oldest
+    /// first; the first one not waited for has its card on screen.
+    hung: Vec<Hung>,
+    /// The report on screen, while there is one.
+    report: Option<ReportDialog>,
+    /// Where reports go, once the reporter said at startup (see
+    /// [`report::probe`]).
+    reports_to: mpsc::Receiver<Option<String>>,
 }
+
+/// A window that stopped responding.
+struct Hung {
+    window: WindowId,
+    /// When it went silent: the compositor tells only once it has been for
+    /// [`UNRESPONSIVE_AFTER`].
+    since: Instant,
+    /// Whether the person chose to wait for it, or reported it: its card
+    /// stays away until it answers and stops again.
+    waiting: bool,
+}
+
+/// How long mcsapi's compositor waits for a pong before it says a window
+/// stopped responding.
+const UNRESPONSIVE_AFTER: Duration = Duration::from_secs(5);
 
 /// A choice waiting for the person: the screen to share, say.
 struct Choice {
@@ -531,6 +557,18 @@ impl Session {
             power_modes: power::PowerModes::default(),
             file_search: FileSearch::start(),
             notifications: notifications::Center::default(),
+            pids: HashMap::new(),
+            hung: Vec::new(),
+            report: None,
+            reports_to: {
+                // The reporter answers at once, but it is a process to
+                // start: not on the way to the first frame.
+                let (tx, rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(report::probe(&report::command()));
+                });
+                rx
+            },
         }
     }
 
@@ -857,6 +895,96 @@ impl Session {
         };
         let _ = choice.reply.send(answer.to_string());
         self.choices.remove(0);
+    }
+
+    /// Whether a dialog over the desktop takes the pointer and the keys:
+    /// polkit's, a choice, a report, or a hung window's card.
+    fn dialog_open(&self) -> bool {
+        !self.polkit.is_empty()
+            || !self.choices.is_empty()
+            || self.report.is_some()
+            || self.hung.iter().any(|h| !h.waiting)
+    }
+
+    /// Draws the report on screen, else the card of the first window that
+    /// stopped responding and nobody chose to wait for.
+    fn show_report(&mut self, ui: &mut egui::Ui) {
+        let width = 560.0_f32.min(self.output.0 as f32 - 80.0);
+        if let Some(dialog) = &mut self.report {
+            if !dialog.show(ui, width) {
+                self.report = None;
+            }
+            return;
+        }
+        let Some(i) = self.hung.iter().position(|h| !h.waiting) else {
+            return;
+        };
+        let window = self.hung[i].window;
+        let Some((app, _)) = self.shell.window_label(window) else {
+            self.hung.remove(i);
+            return;
+        };
+        let app = app.to_owned();
+        let name = self.shell.apps.look(&app).name.into_owned();
+        let pid = self.pids.get(&window).copied();
+        match show_hung(ui, &name, pid.is_some(), self.shell.can_report, &self.shell) {
+            HungInput::None => {}
+            HungInput::Wait => self.hung[i].waiting = true,
+            // Only real input ends a process: an agent may wait or report,
+            // not throw away what the person has not saved.
+            HungInput::ForceQuit if self.shell.synthetic_input() => {}
+            HungInput::ForceQuit => {
+                self.hung[i].waiting = true;
+                if let Some(pid) = pid {
+                    force_quit(pid);
+                }
+            }
+            HungInput::Report => {
+                self.hung[i].waiting = true;
+                self.open_report(
+                    Problem::NotResponding {
+                        app,
+                        pid: None,
+                        seconds: 0,
+                    },
+                    Some(window),
+                );
+            }
+        }
+    }
+
+    /// Shows the report of `problem`, written by the reporter. For a window
+    /// that stopped responding, `window` is where its process and how long
+    /// it has been silent come from.
+    fn open_report(&mut self, mut problem: Problem, window: Option<WindowId>) {
+        if !self.shell.can_report {
+            info!(?problem, "this system sends no reports");
+            return;
+        }
+        if let (Problem::NotResponding { pid, seconds, .. }, Some(window)) = (&mut problem, window)
+        {
+            *pid = self.pids.get(&window).copied();
+            *seconds = self
+                .hung
+                .iter()
+                .find(|h| h.window == window)
+                .map_or(0, |h| h.since.elapsed().as_secs());
+        }
+        let name = match &problem {
+            Problem::NotResponding { app, .. } | Problem::Stuck { app, .. } => {
+                self.shell.apps.look(app).name.into_owned()
+            }
+            Problem::Failed { .. } => String::new(),
+        };
+        match Reporter::start(&report::command(), &problem) {
+            Ok(reporter) => {
+                self.report = Some(ReportDialog {
+                    summary: problem.summary(&name),
+                    reporter,
+                });
+            }
+            Err(e) => warn!(error = %e, "cannot start {}", report::PROGRAM),
+        }
     }
 
     /// A key on the lock screen: wakes a reader that stopped listening.
@@ -1410,6 +1538,9 @@ impl Session {
     fn perform(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match &effect {
+                Effect::Report { problem, window } => {
+                    self.open_report(problem.clone(), window.and_then(WindowId::new));
+                }
                 Effect::Launch { app } => self.launch(app),
                 Effect::LaunchAction { app, id } => self.launch_action(app, id),
                 Effect::Close { window } => {
@@ -1619,6 +1750,25 @@ impl compositor::Shell for Session {
 
     fn unmap_window(&mut self, window: WindowId) {
         let _ = self.shell.unmap_window(window);
+        self.pids.remove(&window);
+        self.hung.retain(|h| h.window != window);
+    }
+
+    fn window_process(&mut self, window: WindowId, pid: u32) {
+        self.pids.insert(window, pid);
+    }
+
+    fn window_responding(&mut self, window: WindowId, responding: bool) {
+        if responding {
+            self.hung.retain(|h| h.window != window);
+        } else if !self.hung.iter().any(|h| h.window == window) {
+            let now = Instant::now();
+            self.hung.push(Hung {
+                window,
+                since: now.checked_sub(UNRESPONSIVE_AFTER).unwrap_or(now),
+                waiting: false,
+            });
+        }
     }
 
     /// A window that came in through a machine's socket wears that
@@ -1656,7 +1806,7 @@ impl compositor::Shell for Session {
     }
 
     fn focused(&self) -> Option<WindowId> {
-        if self.lock.is_locked() || !self.polkit.is_empty() {
+        if self.lock.is_locked() || !self.polkit.is_empty() || self.report.is_some() {
             return None;
         }
         self.shell.focused()
@@ -1838,6 +1988,12 @@ impl compositor::Shell for Session {
         }
         self.sweep();
         self.sync_idle();
+        if let Ok(to) = self.reports_to.try_recv() {
+            if let Some(to) = &to {
+                info!(to, "problems can be reported");
+            }
+            self.shell.can_report = to.is_some();
+        }
         if self.execute {
             self.shell.failed_units = systemd::failed_units();
             // logind works the answer out from swap and memory, which is
@@ -1867,8 +2023,7 @@ impl compositor::Shell for Session {
             x >= g.loc.x && y >= g.loc.y && x < g.loc.x + g.size.w && y < g.loc.y + g.size.h
         };
         self.lock.is_locked()
-            || !self.polkit.is_empty()
-            || !self.choices.is_empty()
+            || self.dialog_open()
             || self.shell.overview_visible()
             || self.shell.palette_visible()
             || self.shell.pending_confirmation().is_some()
@@ -1899,7 +2054,7 @@ impl compositor::Shell for Session {
 
     fn pointer_down(&mut self, at: (i32, i32), time_ms: u64) -> Press {
         self.super_tap.cancel();
-        if self.lock.is_locked() || !self.polkit.is_empty() || !self.choices.is_empty() {
+        if self.lock.is_locked() || self.dialog_open() {
             return Press::Handled;
         }
         match self.shell.pointer_down(at, time_ms) {
@@ -1939,8 +2094,9 @@ impl compositor::Shell for Session {
             return KeyRoute::Chrome;
         }
         // So do polkit's dialog, so nothing typed into it reaches a window
-        // or triggers a shortcut, and a choice, so Enter answers it.
-        if !self.polkit.is_empty() || !self.choices.is_empty() {
+        // or triggers a shortcut, and a choice, a report or a hung window's
+        // card, so Enter answers it.
+        if self.dialog_open() {
             self.super_tap.cancel();
             return KeyRoute::Chrome;
         }
@@ -2196,6 +2352,9 @@ impl compositor::Shell for Session {
         self.show_polkit(ui);
         if self.polkit.is_empty() {
             self.show_choice(ui);
+        }
+        if self.polkit.is_empty() && self.choices.is_empty() {
+            self.show_report(ui);
         }
         self.ui.show_privacy_cover(ui, &self.shell);
         // What the on-screen keyboard typed for windows goes to the focused
@@ -3119,6 +3278,21 @@ fn tiled_edges(mode: Mode) -> Edges {
             SnapZone::BottomRight => edges(false, true, false, true),
             SnapZone::Maximize => Edges::NONE,
         },
+    }
+}
+
+/// Ends a window's process that stopped responding, with SIGKILL: it is
+/// not running its event loop, so it would not act on a gentler signal
+/// either. Through kill(1), which keeps unsafe code to `pam`.
+fn force_quit(pid: u32) {
+    let pid = pid.to_string();
+    match ProcessCommand::new("kill")
+        .args(["-s", "KILL", "--", &pid])
+        .status()
+    {
+        Ok(status) if status.success() => info!(pid, "force quit"),
+        Ok(status) => warn!(pid, %status, "kill refused"),
+        Err(e) => warn!(pid, error = %e, "cannot run kill"),
     }
 }
 
