@@ -267,11 +267,17 @@ pub struct Session {
     /// Agents waiting for a screenshot, and whether they want it inline.
     shots: HashMap<u64, (mpsc::Sender<String>, bool)>,
     /// Captures the person asked for with Print, and the pictures being
-    /// saved from them: where each landed, or why not.
+    /// saved from them: where each landed and what was blacked out, or why
+    /// not.
     pictures: (
         Vec<u64>,
-        Vec<mpsc::Receiver<std::result::Result<PathBuf, String>>>,
+        Vec<mpsc::Receiver<std::result::Result<Saved, String>>>,
     ),
+    /// Screenshots being redacted (`privacy.redact_screenshots`): the
+    /// capture each accessibility tree was asked for with, by the tree's
+    /// request, and the hints it gave, by the capture's.
+    redact_trees: HashMap<u64, u64>,
+    redact_hints: HashMap<u64, Vec<derisk_redact::Hint>>,
     /// Accessibility nodes programs registered for their windows, with
     /// the agent connection that owns them.
     registered: HashMap<WindowId, (u64, Subtree)>,
@@ -375,6 +381,54 @@ enum TreeQuery {
         name: Option<String>,
         window: Option<u64>,
     },
+}
+
+/// A screenshot the person took, saved: where, and what was blacked out
+/// in it when screenshots are redacted.
+type Saved = (PathBuf, Option<derisk_redact::Report>);
+
+/// Blacks out the secrets in `capture` when `hints` is there, which is
+/// when screenshots are redacted, and says what went black. Reading the
+/// screen's text takes a second or two, so this runs on the thread that
+/// encodes the picture.
+fn redact(
+    capture: &mut Capture,
+    hints: Option<Vec<derisk_redact::Hint>>,
+) -> Option<derisk_redact::Report> {
+    let hints = hints?;
+    let report = derisk_redact::redact(
+        capture.width,
+        capture.height,
+        &mut capture.rgba,
+        &hints,
+        derisk_redact::Ocr::shared(),
+    );
+    info!(
+        boxes = report.boxes.len(),
+        unread = report.unread.as_deref().unwrap_or(""),
+        "redacted a screenshot"
+    );
+    Some(report)
+}
+
+/// What a screenshot's notification adds about redaction: what was blacked
+/// out, and a warning when the text could not be read, since then only
+/// what the desktop itself knew about was.
+fn redaction_note(report: Option<&derisk_redact::Report>) -> String {
+    let Some(report) = report else {
+        return String::new();
+    };
+    let mut note = String::new();
+    if let Some(summary) = report.summary() {
+        note.push_str(&format!(" Blacked out {summary}."));
+    }
+    if report.unread.is_some() {
+        note.push_str(
+            " Its text couldn't be read, so only password fields and password managers \
+             were blacked out: check it before you share it.",
+        );
+    }
+    note
 }
 
 /// Core-app actions waiting for the compositor to launch their app, shared
@@ -552,6 +606,8 @@ impl Session {
             trees: HashMap::new(),
             shots: HashMap::new(),
             pictures: (Vec::new(), Vec::new()),
+            redact_trees: HashMap::new(),
+            redact_hints: HashMap::new(),
             registered: HashMap::new(),
             listeners: HashMap::new(),
             theme_env: Vec::new(),
@@ -1237,9 +1293,8 @@ impl Session {
                 respond(Ok(json!({"queued": true})));
             }
             LiveRequest::Screenshot { inline } => {
-                self.requests += 1;
-                self.shots.insert(self.requests, (reply, inline));
-                self.commands.push(Command::Capture(self.requests));
+                let request = self.capture();
+                self.shots.insert(request, (reply, inline));
             }
             LiveRequest::Input { events } => match computer::inputs(&events) {
                 Ok(inputs) => {
@@ -1314,6 +1369,22 @@ impl Session {
         self.palette_opened();
     }
 
+    /// Asks for a capture of the screen and returns its request number.
+    /// When screenshots are redacted the accessibility tree is asked for
+    /// first, in the same frame, for where the password fields are.
+    fn capture(&mut self) -> u64 {
+        if self.settings.current().privacy.redact_screenshots {
+            self.requests += 1;
+            let tree = self.requests;
+            self.commands.push(Command::Describe(tree));
+            self.redact_trees.insert(tree, tree + 1);
+            self.redact_hints.insert(tree + 1, Vec::new());
+        }
+        self.requests += 1;
+        self.commands.push(Command::Capture(self.requests));
+        self.requests
+    }
+
     /// Tells the person where each screenshot they took landed.
     fn poll_pictures(&mut self) {
         let mut saved = Vec::new();
@@ -1327,10 +1398,16 @@ impl Session {
         });
         for result in saved {
             let (summary, body) = match result {
-                Ok(path) => (
+                Ok((path, report)) => (
                     "Screenshot saved",
                     path.file_name()
-                        .map(|n| format!("In Pictures/Screenshots as {}", n.to_string_lossy()))
+                        .map(|n| {
+                            format!(
+                                "In Pictures/Screenshots as {}.{}",
+                                n.to_string_lossy(),
+                                redaction_note(report.as_ref())
+                            )
+                        })
                         .unwrap_or_default(),
                 ),
                 Err(e) => ("Couldn't save the screenshot", e),
@@ -1639,9 +1716,8 @@ impl Session {
                     }
                 }
                 Effect::Screenshot => {
-                    self.requests += 1;
-                    self.pictures.0.push(self.requests);
-                    self.commands.push(Command::Capture(self.requests));
+                    let request = self.capture();
+                    self.pictures.0.push(request);
                 }
                 Effect::Open { path } => {
                     if self.execute {
@@ -2597,6 +2673,15 @@ impl compositor::Shell for Session {
     }
 
     fn described(&mut self, request: u64, tree: Snapshot) {
+        if let Some(capture) = self.redact_trees.remove(&request) {
+            let hints = computer::redaction_hints(&tree, |window| {
+                self.shell
+                    .window_label(window)
+                    .map(|(app_id, _)| app_id.to_owned())
+            });
+            self.redact_hints.insert(capture, hints);
+            return;
+        }
         let Some((reply, query)) = self.trees.remove(&request) else {
             return;
         };
@@ -2610,6 +2695,15 @@ impl compositor::Shell for Session {
     }
 
     fn captured(&mut self, request: u64, frame: std::result::Result<Capture, String>) {
+        // Hints are in logical coordinates, the capture in pixels.
+        let scale = match (&frame, self.output.0) {
+            (Ok(capture), width) if width > 0 => f64::from(capture.width) / f64::from(width),
+            _ => 1.0,
+        };
+        let hints = self
+            .redact_hints
+            .remove(&request)
+            .map(|hints| computer::scale_hints(hints, scale));
         if let Some(i) = self.pictures.0.iter().position(|r| *r == request) {
             self.pictures.0.swap_remove(i);
             let clock = Clock::now_local();
@@ -2621,11 +2715,14 @@ impl compositor::Shell for Session {
             self.pictures.1.push(rx);
             // Encoding takes a while; keep it off the compositor thread.
             std::thread::spawn(move || {
-                let saved = frame.and_then(|capture| {
+                let saved = frame.and_then(|mut capture| {
+                    let report = redact(&mut capture, hints);
                     let png = computer::png(&capture)?;
                     let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
                     let dir = PathBuf::from(home).join("Pictures").join("Screenshots");
-                    computer::save_picture(&dir, &stamp, &png).map_err(|e| e.to_string())
+                    computer::save_picture(&dir, &stamp, &png)
+                        .map(|path| (path, report))
+                        .map_err(|e| e.to_string())
                 });
                 let _ = tx.send(saved);
             });
@@ -2636,7 +2733,8 @@ impl compositor::Shell for Session {
         };
         // Encoding takes a while; keep it off the compositor thread.
         std::thread::spawn(move || {
-            let result = frame.and_then(|capture| {
+            let result = frame.and_then(|mut capture| {
+                let report = redact(&mut capture, hints);
                 let png = computer::png(&capture)?;
                 let dir = computer::screenshot_dir()
                     .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_owned())?;
@@ -2646,6 +2744,10 @@ impl compositor::Shell for Session {
                     "path": path,
                     "width": capture.width,
                     "height": capture.height,
+                    "redacted": report.map_or(json!(false), |r| json!({
+                        "blacked_out": r.summary(),
+                        "unread": r.unread,
+                    })),
                 });
                 if inline {
                     result["png_base64"] = json!(computer::base64(&png));

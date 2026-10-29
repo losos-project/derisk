@@ -222,7 +222,7 @@ readers such as Orca read it too.
 {"method":"tree"}                                   # every element: stable id, role, name, value, bounds, state, actions
 {"method":"find","role":"button","name":"Save"}     # elements matching a role and/or name (case-insensitive substring)
 {"method":"act","element":42,"action":"click"}      # click, focus, set_value (with "value"), expand, collapse, scroll_*, ...
-{"method":"screenshot"}                             # PNG path under $XDG_RUNTIME_DIR/derisk/screenshots; "inline":true for base64
+{"method":"screenshot"}                             # PNG path under $XDG_RUNTIME_DIR/derisk/screenshots, secrets blacked out; "inline":true for base64
 {"method":"input","events":[{"type":"click","x":400,"y":300},{"type":"key","key":"ctrl+a"},{"type":"text","text":"hi"}]}
 {"method":"register_tree","window":3,"nodes":[{"id":1,"role":"button","name":"Play","actions":["click"]}]}
 ```
@@ -451,6 +451,7 @@ systemd units and run logind session operations.
 | Super+F / Super+T | Float / tile |
 | Super+M / Super+Shift+M | Monocle / tall |
 | Super+B | Focus the top bar (Tab moves on, Escape returns to the window) |
+| Print | Screenshot of the whole screen, secrets blacked out, to Pictures/Screenshots |
 | Escape | Leave the overview |
 
 Settings → Shortcuts rebinds the single-chord ones (palette, overview,
@@ -488,6 +489,40 @@ app starts. Its portal answers (camera, microphone, location, background,
 notifications, screenshots) are set to Ask, Allow or Deny through
 `flatpak permission-set` (`$DERISK_FLATPAK`, else `flatpak` on `PATH`).
 
+### Screenshots
+
+Every screenshot leaves the session with its secrets blacked out: the
+person's own (Print), an app's through the portal, and an agent's
+(`screenshot`). `crates/derisk-redact` finds them three ways before the
+picture is encoded, so they never reach a file:
+
+- It reads the screen's text with [ocrs](https://github.com/robertknight/ocrs),
+  a pure-Rust OCR engine, and looks in each line for passwords and other
+  values after a label (`Password:`, `GITHUB_TOKEN=`), API keys and tokens
+  (GitHub, GitLab, Slack, Stripe, AWS, Google, `sk-`, JWTs, and any random
+  enough run of letters and digits, which takes in private keys' bodies),
+  card numbers (Luhn, or grouped as cards print them), IBANs (mod 97),
+  email addresses, international phone numbers, onion addresses, Bitcoin
+  and Ethereum addresses, and public IPv4 and IPv6 addresses. The patterns
+  forgive what OCR misreads, and each secret's own characters give its box.
+- Password fields in the accessibility tree are black whatever they show,
+  and so are the windows of password managers and authenticators
+  (KeePassXC, Bitwarden, Secrets, Authenticator and the like).
+- Every other element's name and value in the tree is checked too, which
+  needs no reading and is never misread.
+
+Reading a 1080p screen takes a second or two, on the thread that encodes
+the picture. The notification says what was blacked out, and an agent's
+result says it in `redacted`. Settings → Privacy → Screenshots turns it off
+(`privacy.redact_screenshots`).
+
+OCR needs two model files, `text-detection.onnx` and
+`text-recognition.onnx` from ocrs (about 12 MB), in `$DERISK_OCR_MODELS`,
+in `share/derisk/ocr` beside derisk's `bin`, where `nix build` puts them, or
+in `derisk/ocr` under `$XDG_DATA_DIRS`. Without them only the accessibility
+tree is used and the notification says to check the picture before sharing
+it.
+
 ### Portal
 
 `xdg-desktop-portal-derisk` (`crates/derisk-portal`, on
@@ -499,7 +534,7 @@ session knows, and `crates/derisk-portal/data/portal/derisk-portals.conf` leaves
 | Portal | What it does |
 | --- | --- |
 | Settings | `org.freedesktop.appearance` from the published `theme.json`, so GTK 4, Qt, Firefox and Electron apps follow dark mode and the accent, live |
-| Screenshot | The whole screen from the compositor, over the agent socket, saved to Pictures/Screenshots |
+| Screenshot | The whole screen from the compositor, secrets blacked out (above, Screenshots), over the agent socket, saved to Pictures/Screenshots |
 | Wallpaper | Sets a picture as the background through `settings.conf`, which the session reloads |
 | Background | Which apps have windows, over the agent socket; apps running without one are allowed for that run and nothing is stored |
 | ScreenCast | Not derisk's: `derisk-portals.conf` gives it to xdg-desktop-portal-wlr (above, Screen sharing) |

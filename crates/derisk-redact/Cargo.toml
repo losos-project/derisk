@@ -1,0 +1,20 @@
+[package]
+name = "derisk-redact"
+description = "Finds passwords, keys, card numbers and other secrets in a screenshot and blacks them out: OCR, patterns and the desktop's own hints"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+regex = "1.13.1"
+tracing.workspace = true
+# Reading the screen's text: ocrs, a pure-Rust OCR engine, runs its two
+# models (find the words, then read each line) on rten. The models are
+# files the OS installs beside derisk, loaded once (`ocr`).
+ocrs = { version = "0.13.1", default-features = false, features = ["onnx"] }
+rten = { version = "0.26.0", default-features = false, features = ["onnx_format"] }
+
+[dev-dependencies]
+png = "0.18.1"

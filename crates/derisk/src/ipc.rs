@@ -166,7 +166,8 @@ pub enum LiveRequest {
         #[serde(default)]
         value: Option<String>,
     },
-    /// A PNG of the whole screen, written to a private file.
+    /// A PNG of the whole screen, written to a private file, with its
+    /// secrets blacked out unless the person switched that off.
     Screenshot {
         /// Also return the PNG inline, base64-encoded.
         #[serde(default)]
@@ -527,7 +528,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "screenshot",
-            "description": "Capture the screen as a PNG (live session only). Returns its path and size in the same coordinates as element bounds and input.",
+            "description": "Capture the screen as a PNG (live session only). Returns its path and size in the same coordinates as element bounds and input. Unless the person switched it off in Settings, passwords, keys, card numbers, email addresses and other secrets are blacked out first; `redacted` says what was.",
             "inputSchema": {"type": "object", "properties": {"inline": {"type": "boolean", "description": "Also return the PNG base64-encoded"}}}
         },
         {

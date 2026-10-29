@@ -51,6 +51,7 @@ derisk-machines = { path = "crates/derisk-machines", version = "0.1.0" }
 derisk-terminal = { path = "crates/derisk-terminal", version = "0.1.0" }
 derisk-store = { path = "crates/derisk-store", version = "0.1.0" }
 derisk-android = { path = "crates/derisk-android", version = "0.1.0" }
+derisk-redact = { path = "crates/derisk-redact", version = "0.1.0" }
 # The GPUI mcsapi-components-gpui is built on (Zed's, at the revision mcsapi
 # pins): two GPUIs in one build cannot share a window or an element.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a84689073d296dfd39987bc7dd478e43ef76d83a", default-features = false, features = ["font-kit", "wayland", "x11"] }
@@ -122,6 +123,26 @@ opt-level = 3
 [profile.dev.package.wasmtime]
 opt-level = 3
 [profile.dev.package.gimli]
+opt-level = 3
+
+# OCR, for blacking out the secrets in a screenshot (derisk-redact): rten's
+# matrix code unoptimised takes minutes over one screen instead of a second
+# or two, which every test that reads one would pay.
+[profile.dev.package.ocrs]
+opt-level = 3
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-base]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-imageproc]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
 opt-level = 3
 
 # The plugins under plugins/, as derisk-plugin's build script compiles them

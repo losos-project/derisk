@@ -65,6 +65,9 @@ crossbeam-channel = { workspace = true, optional = true }
 ureq = { version = "3.4.2", optional = true }
 # Screenshots for agents (`{"method":"screenshot"}`).
 png = { version = "0.18.1", optional = true }
+# Blacks out the secrets in every screenshot before it is encoded: OCR,
+# patterns and the accessibility tree's password fields.
+derisk-redact = { workspace = true, optional = true }
 # GrapheneOS's hardened_malloc as the allocator (`hardened-malloc`). Links the
 # system's libhardened_malloc.so, so it is off by default: a build host
 # without that library can still build derisk.
@@ -81,6 +84,7 @@ host = [
     "mcsapi-compositor/kms",
     "dep:mcsapi-runtime",
     "dep:png",
+    "dep:derisk-redact",
     "dep:tokio",
     "dep:zbus",
     "dep:crossbeam-channel",

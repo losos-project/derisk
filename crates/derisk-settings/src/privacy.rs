@@ -283,6 +283,17 @@ pub(crate) fn page(
                 hint(ui, "Off also clears the list and the palette's picks.");
             });
             ui.end_row();
+            ui.label("Screenshots");
+            ui.vertical(|ui| {
+                ui.checkbox(&mut p.redact_screenshots, "Black out secrets");
+                hint(
+                    ui,
+                    "Passwords, keys and tokens, card numbers, IBANs, email addresses, phone \
+                     numbers, onion, wallet and public IP addresses, and password managers' \
+                     windows, in your screenshots and in those apps and agents take.",
+                );
+            });
+            ui.end_row();
             file_search(ui, search, &mut state.new_folder);
             ui.label("Trash");
             ui.add(
