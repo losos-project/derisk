@@ -7,9 +7,11 @@
 //! goes to the person's LosOS cloud. None of
 //! it is derisk's own setting: `losos-backup`, which the OS runs from a user
 //! timer, keeps its own, and this page runs it. `losos-backup status` says
-//! where things stand as JSON, `choose` pins a box's certificate, `sign-in`
-//! trades a password (on its standard input, never the command line) for
-//! an app password or token of this computer's, and `on` and `off` turn the
+//! where things stand as JSON, `choose` pins a box's certificate, `sign-in
+//! box` signs in to both apps through LosOS Login, printing a link and a
+//! code for this page to show while the person approves them in a browser,
+//! `sign-in cloud` trades a password (on its standard input, never the
+//! command line) for an app password, and `on` and `off` turn the
 //! daily backup on and off. "Back up now" starts the user unit
 //! `losos-backup-now.service`, so the run goes on after Settings closes.
 //! Like the Sign-in page, all of it applies at once.
@@ -18,7 +20,7 @@
 //! one machine that talks to boxes; the boxes offered are the ones it sees.
 
 use std::{
-    io::Write,
+    io::{BufRead, BufReader, Write},
     process::{Command, Stdio},
     sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -245,6 +247,64 @@ fn run(argv: &[String], stdin: Option<String>) -> Result<String, String> {
         .map_or_else(|| format!("{} failed", argv[0]), str::to_owned))
 }
 
+/// LosOS Login's step of `losos-backup sign-in box`: the page to open and
+/// the code to enter there.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Prompt {
+    /// LosOS Login's page with the code in it.
+    pub link: String,
+    /// The code, to compare with the page or type into it.
+    pub code: String,
+}
+
+/// Reads the line `losos-backup sign-in box` prints first.
+pub fn parse_prompt(line: &str) -> Option<Prompt> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    let link = v.get("link")?.as_str()?;
+    // Only LosOS Login's page goes to the browser, never an option.
+    if !link.starts_with("https://") {
+        return None;
+    }
+    Some(Prompt {
+        link: link.to_owned(),
+        code: v.get("code")?.as_str()?.to_owned(),
+    })
+}
+
+/// [`run`] for `sign-in box`: the prompt goes to `prompt` as soon as it is
+/// printed, and the result when the person has approved it or it failed.
+fn run_sign_in(argv: &[String], prompt: &mpsc::Sender<Prompt>) -> Result<String, String> {
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Cannot run {}: {e}", argv[0]))?;
+    let mut last = String::new();
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            if let Some(p) = parse_prompt(&line) {
+                let _ = prompt.send(p);
+            } else {
+                last = line;
+            }
+        }
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("{} failed: {e}", argv[0]))?;
+    if out.status.success() {
+        return Ok(last);
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    Err(err
+        .lines()
+        .map(|l| l.trim().trim_start_matches('×').trim())
+        .rfind(|l| !l.is_empty())
+        .map_or_else(|| format!("{} failed", argv[0]), str::to_owned))
+}
+
 fn backup(args: &[&str]) -> Vec<String> {
     std::iter::once("losos-backup")
         .chain(args.iter().copied())
@@ -265,8 +325,9 @@ pub(crate) struct BackupUi {
     box_name: String,
     cloud_login: String,
     cloud_password: String,
-    git_login: String,
-    git_password: String,
+    /// LosOS Login's link and code while `sign-in box` waits.
+    prompt: Option<Prompt>,
+    prompts: Option<mpsc::Receiver<Prompt>>,
 }
 
 impl BackupUi {
@@ -286,6 +347,18 @@ impl BackupUi {
         });
         self.message = None;
         self.job = Some((label, rx));
+    }
+
+    fn sign_in_box(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        let (prompt_tx, prompt_rx) = mpsc::channel();
+        derisk_sys::thread::detach(move || {
+            let _ = tx.send(run_sign_in(&backup(&["sign-in", "box"]), &prompt_tx));
+        });
+        self.message = None;
+        self.prompt = None;
+        self.prompts = Some(prompt_rx);
+        self.job = Some(("sign-in box", rx));
     }
 
     fn poll(&mut self) {
@@ -310,6 +383,11 @@ impl BackupUi {
             }
             self.reading = None;
         }
+        if let Some(rx) = &self.prompts
+            && let Ok(prompt) = rx.try_recv()
+        {
+            self.prompt = Some(prompt);
+        }
         if let Some((label, rx)) = &self.job
             && let Ok(result) = rx.try_recv()
         {
@@ -323,14 +401,16 @@ impl BackupUi {
                     ),
                     false,
                 ),
+                Ok(out) if label == "sign-in box" => (signed_in_message(&out), false),
                 Ok(_) => (format!("{}: done", job_label(label)), false),
                 Err(e) => (e, true),
             });
             // A password typed is gone once it was tried.
             if label.starts_with("sign-in") {
                 self.cloud_password.clear();
-                self.git_password.clear();
             }
+            self.prompt = None;
+            self.prompts = None;
             self.job = None;
             self.refresh();
         }
@@ -347,10 +427,39 @@ impl BackupUi {
     }
 }
 
+/// What `sign-in box` signed in to, from the line it prints last.
+pub fn signed_in_message(out: &str) -> String {
+    let v: Value = serde_json::from_str(out.trim()).unwrap_or_default();
+    let name = |app: &str| v.get(app).and_then(Value::as_str).map(str::to_owned);
+    let mut line = match (name("cloud"), name("git")) {
+        (Some(c), Some(g)) if c == g => format!("Signed in to LosOS cloud and LosOS Git as {c}."),
+        (Some(c), Some(g)) => {
+            format!("Signed in to LosOS cloud as {c} and to LosOS Git as {g}.")
+        }
+        (Some(c), None) => format!("Signed in to LosOS cloud as {c}."),
+        (None, Some(g)) => format!("Signed in to LosOS Git as {g}."),
+        (None, None) => "Signed in.".to_owned(),
+    };
+    if v.get("gitOff").and_then(Value::as_bool) == Some(true) {
+        line.push_str(" This box has no LosOS Git, so repositories go to LosOS cloud as files.");
+    }
+    for problem in v
+        .get("problems")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        line.push(' ');
+        line.push_str(problem);
+    }
+    line
+}
+
 fn job_label(label: &str) -> &'static str {
     match label {
+        "sign-in box" => "Waiting for LosOS Login",
         "sign-in cloud" => "Signing in to LosOS cloud",
-        "sign-in git" => "Signing in to LosOS Git",
         "sign-out" => "Signing out",
         "now" => "Starting a backup",
         "on" => "Turning backups on",
@@ -401,6 +510,9 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut BackupUi, theme: &Theme) {
     };
     if let Some((label, _)) = &state.job {
         crate::stuck::working(ui, &format!("{}…", job_label(label)));
+        if let Some(prompt) = state.prompt.clone() {
+            login_step(ui, &prompt, theme);
+        }
         ui.add_space(8.0);
     } else if let Some((message, error)) = &state.message {
         ui.label(egui::RichText::new(message).color(if *error { RED } else { theme.accent }));
@@ -573,64 +685,114 @@ fn the_box(ui: &mut egui::Ui, state: &mut BackupUi, status: &Status, theme: &The
     }
 }
 
+/// LosOS Login's step, shown while `sign-in box` waits for it.
+fn login_step(ui: &mut egui::Ui, prompt: &Prompt, theme: &Theme) {
+    hint(
+        ui,
+        "Open LosOS Login and sign in there. Check that it shows this code, then approve LosOS Desktop backups.",
+    );
+    ui.label(
+        egui::RichText::new(&prompt.code)
+            .monospace()
+            .size(22.0)
+            .color(theme.foreground),
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Open LosOS Login").clicked() {
+            // An https URL (parse_prompt), so xdg-open cannot read it as
+            // an option.
+            let _ = Command::new("xdg-open")
+                .arg(&prompt.link)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+        }
+        ui.label(egui::RichText::new(&prompt.link).small());
+    });
+}
+
 fn accounts(ui: &mut egui::Ui, state: &mut BackupUi, status: &Status, theme: &Theme) {
+    section(ui, theme, "Sign in");
     for (which, title, signed_in) in [
         ("cloud", "LosOS cloud", &status.cloud),
         ("git", "LosOS Git", &status.git),
     ] {
-        section(ui, theme, title);
-        if let Some(login) = signed_in {
-            ui.horizontal(|ui| {
-                ui.label(format!("Signed in as {login}"));
+        ui.horizontal(|ui| match signed_in {
+            Some(login) => {
+                ui.label(format!("{title}: signed in as {login}"));
                 if ui.button("Sign out").clicked() {
                     state.start("sign-out", backup(&["sign-out", which]), None);
                 }
-            });
-        } else {
+            }
+            None => {
+                ui.label(format!("{title}: not signed in"));
+            }
+        });
+    }
+    ui.add_space(4.0);
+    hint(
+        ui,
+        "Sign in with LosOS Login, the box's own sign-in, in your browser, with your password and your second factor if you have one. This computer gets an app password for LosOS cloud and a token for LosOS Git of its own, which the box lists under your account; your password is never typed here.",
+    );
+    let label = if status.cloud.is_some() || status.git.is_some() {
+        "Sign in again with LosOS Login"
+    } else {
+        "Sign in with LosOS Login"
+    };
+    if ui.button(label).clicked() {
+        state.sign_in_box();
+    }
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new("Sign in with a password instead")
+        .id_salt("backup-password")
+        .show(ui, |ui| {
             hint(
                 ui,
-                if which == "cloud" {
-                    "Sign in with your LosOS cloud name and password. This computer gets an app password of its own, which LosOS cloud lists under your security settings; your password is not kept."
-                } else {
-                    "Sign in with your LosOS Git name and password. This computer gets an access token of its own, which LosOS Git lists under your applications; your password is not kept."
-                },
+                "For a box whose LosOS Login cannot sign backups in yet: LosOS cloud only, and not for an account with a second factor.",
             );
-            let (login, password) = if which == "cloud" {
-                (&mut state.cloud_login, &mut state.cloud_password)
-            } else {
-                (&mut state.git_login, &mut state.git_password)
-            };
-            ui.add(egui::TextEdit::singleline(login).hint_text("Name"));
+            ui.add(egui::TextEdit::singleline(&mut state.cloud_login).hint_text("Name"));
             ui.add(
-                egui::TextEdit::singleline(password)
+                egui::TextEdit::singleline(&mut state.cloud_password)
                     .password(true)
                     .hint_text("Password"),
             );
-            let ready = !login.trim().is_empty() && !password.is_empty();
+            let ready = !state.cloud_login.trim().is_empty() && !state.cloud_password.is_empty();
             if ui
-                .add_enabled(ready, egui::Button::new("Sign in"))
+                .add_enabled(ready, egui::Button::new("Sign in to LosOS cloud"))
                 .clicked()
             {
-                let argv = backup(&["sign-in", which, login.trim()]);
-                let secret = password.clone();
-                state.start(
-                    if which == "cloud" {
-                        "sign-in cloud"
-                    } else {
-                        "sign-in git"
-                    },
-                    argv,
-                    Some(secret),
-                );
+                let argv = backup(&["sign-in", "cloud", state.cloud_login.trim()]);
+                let secret = state.cloud_password.clone();
+                state.start("sign-in cloud", argv, Some(secret));
             }
-        }
-        ui.add_space(12.0);
-    }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_login_prompt_and_the_result() {
+        let p = parse_prompt(
+            r#"{"link":"https://mattbox.local/auth/consent/openid/device-authorization?user_code=RDQXQRJZ","page":"https://mattbox.local/auth/consent/openid/device-authorization","code":"RDQXQRJZ","expiresIn":300}"#,
+        )
+        .unwrap();
+        assert_eq!(p.code, "RDQXQRJZ");
+        assert!(parse_prompt(r#"{"link":"--help","code":"x"}"#).is_none());
+        assert!(parse_prompt(r#"{"cloud":"matus"}"#).is_none());
+        assert_eq!(
+            signed_in_message(
+                r#"{"cloud":"notshared","git":"notshared","gitOff":false,"problems":[]}"#
+            ),
+            "Signed in to LosOS cloud and LosOS Git as notshared."
+        );
+        assert_eq!(
+            signed_in_message(r#"{"cloud":"ada","git":null,"gitOff":true,"problems":[]}"#),
+            "Signed in to LosOS cloud as ada. This box has no LosOS Git, so repositories go to LosOS cloud as files."
+        );
+    }
 
     #[test]
     fn reads_the_status() {
