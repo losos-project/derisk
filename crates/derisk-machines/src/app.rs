@@ -997,6 +997,7 @@ mod tests {
             cpus: 2,
             state: State::Off,
             cid: None,
+            service: false,
         }
     }
 

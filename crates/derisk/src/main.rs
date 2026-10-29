@@ -103,9 +103,10 @@ USAGE:
     derisk demo                   Run a headless walkthrough
     derisk ask <request...>       Show how the assistant interprets a request
     derisk do <request...>        Ask the running session's assistant to do it
-    derisk launch <APP> [--action <ID>]
-                                  Launch an app, or one of its desktop actions,
-                                  in the running session
+    derisk launch <APP> [--action <ID> | <FILE>...]
+                                  Launch an app, one of its desktop actions,
+                                  or the app on each file, in the running
+                                  session
     derisk send <json>            Send one agent-protocol request to the session
     derisk choose [--title <TEXT>]
                                   Ask the person to pick one of the lines on
@@ -450,17 +451,33 @@ fn session_socket() -> Result<PathBuf> {
 }
 
 /// Sends one request line to the running session and prints the response.
-/// `derisk launch <app> [--action <id>]`, the `Exec` of derisk's own
-/// `.desktop` files.
+/// `derisk launch <app> [--action <id> | <file>...]`, the `Exec` of
+/// derisk's own `.desktop` files. Files are made absolute here, since the
+/// session resolves paths from its own directory, not the caller's: the
+/// Text Editor takes `xdg-open notes.txt` from a terminal this way.
 fn launch(args: &[String]) -> Result {
-    let action = match args {
-        [app] => serde_json::json!({"action": "launch", "app": app}),
+    let actions = match args {
+        [app] => vec![serde_json::json!({"action": "launch", "app": app})],
         [app, flag, id] if flag == "--action" => {
-            serde_json::json!({"action": "launch_action", "app": app, "id": id})
+            vec![serde_json::json!({"action": "launch_action", "app": app, "id": id})]
         }
-        _ => return Err(usage("usage: derisk launch <APP> [--action <ID>]")),
+        [app, files @ ..] if !app.starts_with('-') && files.iter().all(|f| f != "--action") => {
+            let cwd = std::env::current_dir()?;
+            files
+                .iter()
+                .map(|file| {
+                    let path = cwd.join(file);
+                    serde_json::json!({"action": "open_in", "app": app, "path": path})
+                })
+                .collect()
+        }
+        _ => {
+            return Err(usage(
+                "usage: derisk launch <APP> [--action <ID> | <FILE>...]",
+            ));
+        }
     };
-    send(&serde_json::json!({"method": "dispatch", "actions": [action]}).to_string())
+    send(&serde_json::json!({"method": "dispatch", "actions": actions}).to_string())
 }
 
 /// `derisk choose`: the lines on stdin as a choice on screen, the one
