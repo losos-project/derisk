@@ -68,8 +68,10 @@ pub struct Status {
     pub box_name: String,
     /// Its certificate's fingerprint.
     pub fingerprint: String,
-    /// Whether the daily backup is on.
+    /// Whether backups run by themselves.
     pub enabled: bool,
+    /// Hours between them: 24 when `losos-backup` is too old to say.
+    pub every_hours: u64,
     /// The LosOS cloud account signed in to.
     pub cloud: Option<String>,
     /// The LosOS Git account signed in to.
@@ -108,6 +110,7 @@ pub fn parse_status(json: &str) -> Option<Status> {
         box_name: text(&v, "box"),
         fingerprint: text(&v, "fingerprint"),
         enabled: v.get("enabled").and_then(Value::as_bool) == Some(true),
+        every_hours: v.get("every_hours").and_then(Value::as_u64).unwrap_or(24),
         cloud: account("cloud"),
         git: account("git"),
         running: v.get("running").and_then(Value::as_bool) == Some(true),
@@ -461,7 +464,23 @@ fn job_label(label: &str) -> &'static str {
         "now" => "Starting a backup",
         "on" => "Turning backups on",
         "off" => "Turning backups off",
+        "every" => "Changing how often backups run",
         _ => "Choosing the box",
+    }
+}
+
+/// The choices of how often backups run, in hours: `losos-backup every`
+/// takes any from 1 to a week, and these are the ones worth a row.
+const EVERY: [u64; 5] = [1, 6, 12, 24, 168];
+
+/// How often, in words, for a number of hours between backups.
+fn every_label(hours: u64) -> String {
+    match hours {
+        1 => "every hour".to_owned(),
+        24 => "every day".to_owned(),
+        168 => "every week".to_owned(),
+        h if h % 24 == 0 => format!("every {} days", h / 24),
+        h => format!("every {h} hours"),
     }
 }
 
@@ -519,16 +538,29 @@ fn last_backup(ui: &mut egui::Ui, state: &mut BackupUi, status: &Status, theme: 
     );
     let ready = !status.box_name.is_empty() && (status.cloud.is_some() || status.git.is_some());
     let mut on = status.enabled;
-    if ui
-        .add_enabled(ready, egui::Checkbox::new(&mut on, "Back up every day"))
-        .changed()
-    {
-        state.start(
-            if on { "on" } else { "off" },
-            backup(&[if on { "on" } else { "off" }]),
-            None,
-        );
-    }
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(ready, egui::Checkbox::new(&mut on, "Back up automatically"))
+            .changed()
+        {
+            state.start(
+                if on { "on" } else { "off" },
+                backup(&[if on { "on" } else { "off" }]),
+                None,
+            );
+        }
+        let mut every = status.every_hours;
+        egui::ComboBox::from_id_salt("backup-every")
+            .selected_text(every_label(every))
+            .show_ui(ui, |ui| {
+                for hours in EVERY {
+                    ui.selectable_value(&mut every, hours, every_label(hours));
+                }
+            });
+        if every != status.every_hours {
+            state.start("every", backup(&["every", &every.to_string()]), None);
+        }
+    });
     if !ready {
         hint(ui, "Choose a box and sign in to it below first.");
         return;
@@ -777,6 +809,17 @@ mod tests {
         );
         assert!(parse_status("not json").is_none());
         assert_eq!(parse_status(r#"{"last":null}"#).unwrap().last, None);
+        // An older losos-backup, which ran daily and does not say.
+        assert_eq!(status.every_hours, 24);
+        assert_eq!(parse_status(r#"{"every_hours":6}"#).unwrap().every_hours, 6);
+    }
+
+    #[test]
+    fn says_how_often() {
+        assert_eq!(every_label(1), "every hour");
+        assert_eq!(every_label(6), "every 6 hours");
+        assert_eq!(every_label(48), "every 2 days");
+        assert_eq!(every_label(168), "every week");
     }
 
     #[test]

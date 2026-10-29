@@ -13,7 +13,7 @@ use std::{
 
 use derisk_agent::{AgentApp, routines, store::Store, tools::ToolContext};
 use mcsapi_ui::{App as _, Theme, theme::Fonts};
-use miette::{Result, bail, miette};
+use miette::{Result, miette};
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
 
@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         Some("--ask") => ask(args[1..].join(" ")),
         Some(url) if url.starts_with("derisk-agent:") => match derisk_agent::ask_prompt(url) {
             Some(text) => ask(text),
-            None => bail!("{url} is not a link the Agent opens"),
+            None => Err(miette!("{url} is not a link the Agent opens")),
         },
         Some("mcp") => {
             let flag = |name: &str| {
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
                 println!("{chat}");
                 Ok(())
             }
-            _ => bail!("usage: derisk-agent routine run <id>"),
+            _ => Err(miette!("usage: derisk-agent routine run <id>")),
         },
         Some("preview-wasm") => {
             let component = args
@@ -65,7 +65,7 @@ fn main() -> Result<()> {
             print!("{USAGE}");
             Ok(())
         }
-        Some(other) => bail!("unknown command {other}\n{USAGE}"),
+        Some(other) => Err(miette!("unknown command {other}\n{USAGE}")),
     }
 }
 
@@ -85,7 +85,7 @@ fn run_wasm(component: &std::path::Path) -> Result<()> {
 
 #[cfg(not(feature = "wasm"))]
 fn run_wasm(_component: &std::path::Path) -> Result<()> {
-    bail!("this derisk-agent was built without wasm previews")
+    Err(miette!("this derisk-agent was built without wasm previews"))
 }
 
 /// How often the window re-reads the published theme.

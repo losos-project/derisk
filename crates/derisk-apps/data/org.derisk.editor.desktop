@@ -5,7 +5,8 @@ GenericName=Text Editor
 Comment=Edit plain-text files
 Keywords=notepad;text;code;write;
 Icon=accessories-text-editor
-Exec=derisk launch org.derisk.editor
+Exec=derisk launch org.derisk.editor %F
+MimeType=text/plain;text/markdown;text/x-log;text/csv;text/css;text/x-c;text/x-csrc;text/x-chdr;text/x-c++src;text/x-c++hdr;text/x-python;text/x-python3;text/rust;text/x-rust;text/x-go;text/x-java;text/javascript;application/javascript;text/x-shellscript;application/x-shellscript;application/json;application/toml;application/x-toml;application/yaml;application/x-yaml;application/xml;text/xml;text/x-nix;text/x-makefile;text/x-cmake;application/x-desktop;text/x-patch;text/x-diff;
 Categories=Utility;TextEditor;
 Actions=new-document;
 

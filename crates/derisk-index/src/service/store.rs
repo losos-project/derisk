@@ -1,5 +1,5 @@
-//! The index on disk: one tantivy document per file or folder under home,
-//! and searching it.
+//! The index on disk: one tantivy document per file or folder under home
+//! and the other folders Settings names, and searching it.
 
 use std::{
     collections::HashMap,
@@ -26,8 +26,14 @@ use crate::Match;
 
 /// Written beside the index; an index with another one, or none, is
 /// deleted and built again. Raised whenever the schema or the analyzer
-/// below changes, since an old index would answer differently.
-const VERSION: &str = "1";
+/// below changes, since an old index would answer differently, or when
+/// [`text::read`] reads files it did not, which an index keeping their
+/// stamps would never read again. 2: PDFs and office documents.
+const VERSION: &str = "2";
+
+/// Written beside the index after each whole walk: the folders it was
+/// walked from, a line each, so the next start knows which were dropped.
+const ROOTS: &str = "ROOTS";
 
 /// The analyzer for names, folders, text and the typed search alike:
 /// runs of letters and digits, lowercased, accents folded (`café` is
@@ -117,7 +123,7 @@ fn schema() -> (Schema, Fields) {
 
 /// Empties `dir`, leaving `dir` itself: under `CacheDirectory=` it is a
 /// mount in a read-only home, which cannot be removed or made again.
-fn clear(dir: &Path) -> std::io::Result<()> {
+pub(super) fn clear(dir: &Path) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
@@ -146,7 +152,9 @@ pub struct Store {
     index: Index,
     reader: IndexReader,
     fields: Fields,
-    home: PathBuf,
+    dir: PathBuf,
+    /// Home first, then the other folders indexed.
+    roots: Vec<PathBuf>,
 }
 
 impl Store {
@@ -158,6 +166,16 @@ impl Store {
     /// When `dir` cannot be made or written, or tantivy cannot open what is
     /// there.
     pub fn open(dir: &Path, home: &Path) -> Result<Self, Error> {
+        Self::open_with(dir, home, &[])
+    }
+
+    /// [`Store::open`], indexing `folders` as well as home. A folder that
+    /// is home, or named twice, is indexed once.
+    ///
+    /// # Errors
+    ///
+    /// As [`Store::open`].
+    pub fn open_with(dir: &Path, home: &Path, folders: &[PathBuf]) -> Result<Self, Error> {
         let (schema, fields) = schema();
         let stamp = dir.join("VERSION");
         if fs::read_to_string(&stamp).ok().as_deref() != Some(VERSION) {
@@ -174,17 +192,61 @@ impl Store {
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
+        let mut roots = vec![home.to_owned()];
+        for folder in folders {
+            if !roots.contains(folder) {
+                roots.push(folder.clone());
+            }
+        }
         Ok(Self {
             index,
             reader,
             fields,
-            home: home.to_owned(),
+            dir: dir.to_owned(),
+            roots,
         })
     }
 
     /// The home folder indexed.
     pub fn home(&self) -> &Path {
-        &self.home
+        &self.roots[0]
+    }
+
+    /// Every folder indexed: home, then the others.
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
+    /// The folders the last whole walk started from that are not indexed
+    /// now, and not under one that is, so what is indexed under them is
+    /// for nobody. None before the first walk has finished.
+    pub fn dropped(&self) -> Vec<PathBuf> {
+        let Ok(text) = fs::read_to_string(self.dir.join(ROOTS)) else {
+            return Vec::new();
+        };
+        text.lines()
+            .map(PathBuf::from)
+            .filter(|old| !self.roots.iter().any(|root| old.starts_with(root)))
+            .collect()
+    }
+
+    /// Notes the folders indexed now, for [`Store::dropped`] at the next
+    /// start.
+    ///
+    /// # Errors
+    ///
+    /// When the index's directory cannot be written.
+    pub fn walked(&self) -> Result<(), Error> {
+        let mut text = String::new();
+        for root in &self.roots {
+            // A folder whose path is not UTF-8 was never indexed: `put`
+            // leaves such paths out.
+            if let Some(root) = root.to_str() {
+                text.push_str(root);
+                text.push('\n');
+            }
+        }
+        Ok(fs::write(self.dir.join(ROOTS), text)?)
     }
 
     /// The writer, for the one thread that writes. Its memory is kept to
@@ -267,16 +329,17 @@ impl Store {
         doc.add_text(f.path, whole);
         let parent = path.parent().unwrap_or(Path::new("/"));
         doc.add_text(f.dir, parent.to_string_lossy());
+        let (root, named_from) = self.root_of(path);
         for ancestor in parent.ancestors() {
             doc.add_text(f.ancestors, ancestor.to_string_lossy());
-            if ancestor == self.home {
+            if ancestor == root {
                 break;
             }
         }
         if let Some(name) = path.file_name() {
             doc.add_text(f.name, name.to_string_lossy());
         }
-        if let Ok(under) = parent.strip_prefix(&self.home) {
+        if let Ok(under) = parent.strip_prefix(named_from) {
             doc.add_text(f.folders, under.to_string_lossy());
         }
         if let Some(text) = text {
@@ -287,6 +350,23 @@ impl Store {
         doc.add_bool(f.folder, stamp.folder);
         writer.add_document(doc)?;
         Ok(())
+    }
+
+    /// The outermost folder indexed that `path` is under, and the folder
+    /// its folders are named from: home itself, since every file is in
+    /// it, or another folder's parent, so `/mnt/data/a.pdf` is found by
+    /// `data`. A path under none is its own root.
+    fn root_of<'p>(&'p self, path: &'p Path) -> (&'p Path, &'p Path) {
+        let root = self
+            .roots
+            .iter()
+            .filter(|root| path.starts_with(root))
+            .min_by_key(|root| root.components().count());
+        match root {
+            Some(home) if *home == self.roots[0] => (home, home),
+            Some(root) => (root, root.parent().unwrap_or(root)),
+            None => (path, path),
+        }
     }
 
     /// Forgets `path`, and with `folder` everything under it.
@@ -391,7 +471,7 @@ impl Store {
         typed: &[(String, usize)],
         open: bool,
     ) -> bool {
-        let under = path.strip_prefix(&self.home).unwrap_or(path);
+        let under = path.strip_prefix(self.root_of(path).1).unwrap_or(path);
         let have = tokens(analyzer, &under.to_string_lossy());
         typed
             .iter()

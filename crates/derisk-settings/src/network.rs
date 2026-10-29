@@ -6,7 +6,8 @@
 //! is forgotten. It draws from the same thread the setup's Network page does
 //! ([`derisk_install::wifi`]), started when the page is first shown, and
 //! applies at once, like the Sign-in page, since none of it is derisk's own
-//! setting: NetworkManager keeps the connections itself.
+//! setting: NetworkManager keeps the connections itself. Schizo mode, on
+//! LosOS, is at the top ([`crate::schizo`]).
 
 use derisk_install::{
     network::{Network, WiredState},
@@ -18,6 +19,7 @@ use mcsapi_ui::{Theme, egui};
 /// passphrase.
 #[derive(Default)]
 pub(crate) struct NetworkUi {
+    schizo: crate::schizo::SchizoUi,
     wifi: Option<Wifi>,
     picked: Option<Vec<u8>>,
     passphrase: String,
@@ -82,6 +84,7 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut NetworkUi, theme: &Theme) {
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(500));
 
+    crate::schizo::section(ui, &mut state.schizo, theme);
     ui.label(
         egui::RichText::new(headline(&status))
             .strong()

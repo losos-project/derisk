@@ -18,9 +18,34 @@ on:
   schedule:
     - cron: '19 0 * * 6'
 
+# A newer push to a pull request cancels the analysis already going, as in
+# ci.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # As in ci.yml: a change that cannot affect the code is not analysed again.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: .github/changes .github/workflows/rust-clippy.yml >> "$GITHUB_OUTPUT"
+
   rust-clippy-analyze:
     name: Run rust-clippy analyzing
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
