@@ -10,6 +10,8 @@ mod ask;
 #[cfg(feature = "host")]
 mod auth;
 #[cfg(feature = "host")]
+mod box_search;
+#[cfg(feature = "host")]
 mod computer;
 #[cfg(feature = "host")]
 mod dm;
@@ -19,6 +21,8 @@ mod file_search;
 mod first_login;
 #[cfg(feature = "host")]
 mod firstboot;
+#[cfg(feature = "host")]
+mod focus;
 #[cfg(feature = "host")]
 mod greeter;
 #[cfg(feature = "host")]

@@ -23,7 +23,7 @@
 //! pointer over them but never the keyboard or the focus.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{BufRead as _, BufReader, Write as _},
     os::unix::{
         fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
@@ -78,7 +78,9 @@ use tracing::{debug, info, warn};
 
 use crate::{
     ask,
+    box_search::{self, BoxSearch},
     file_search::FileSearch,
+    focus::Focus,
     machines::{self, MachineDisplays},
     notifications, pam, polkit_agent, power, unlock,
 };
@@ -317,10 +319,17 @@ pub struct Session {
     power_modes: power::PowerModes,
     /// Searches of the file index for the palette's typed text.
     file_search: Option<FileSearch>,
+    /// Searches of the LosOS boxes' files and Git for it.
+    box_search: Option<BoxSearch>,
     /// Apps' notifications, which `crate::notifications` fills.
     notifications: notifications::Center,
     /// The process behind each Wayland window, from its connection.
     pids: HashMap<WindowId, u32>,
+    /// GameMode, asked for focus mode by windows that want it.
+    focus: Option<Focus>,
+    /// The windows that asked, so the last one of a process to close gives
+    /// it up.
+    focused: HashSet<WindowId>,
     /// Windows that stopped answering the compositor's pings, oldest
     /// first; the first one not waited for has its card on screen.
     hung: Vec<Hung>,
@@ -565,8 +574,11 @@ impl Session {
             machines: MachineDisplays::start(),
             power_modes: power::PowerModes::default(),
             file_search: FileSearch::start(),
+            box_search: BoxSearch::start(),
             notifications: notifications::Center::default(),
             pids: HashMap::new(),
+            focus: Focus::start(),
+            focused: HashSet::new(),
             hung: Vec::new(),
             report: None,
             reports_to: {
@@ -1759,6 +1771,28 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Asks GameMode for focus mode for a window's process once both its
+    /// app and its process are known, which arrive in either order, when
+    /// the app is one that wants it. Once a process: its other windows
+    /// only count towards when it gives focus up.
+    fn ask_focus(&mut self, window: WindowId) {
+        let (Some(focus), Some(&pid)) = (&self.focus, self.pids.get(&window)) else {
+            return;
+        };
+        let Some((app, _)) = self.shell.window_label(window) else {
+            return;
+        };
+        if self.focused.contains(&window) || !self.shell.apps.look(app).focus {
+            return;
+        }
+        if !self.focused.iter().any(|w| self.pids.get(w) == Some(&pid)) {
+            focus.register(pid);
+        }
+        self.focused.insert(window);
+    }
+}
+
 impl compositor::Shell for Session {
     fn map_window(&mut self, app_id: &str, title: &str) -> WindowId {
         let (id, effects) = self.shell.map_window(app_id, title);
@@ -1770,16 +1804,25 @@ impl compositor::Shell for Session {
         if let Ok(effects) = self.shell.set_app_id(window, app_id) {
             self.perform(effects);
         }
+        self.ask_focus(window);
     }
 
     fn unmap_window(&mut self, window: WindowId) {
         let _ = self.shell.unmap_window(window);
+        if self.focused.remove(&window)
+            && let Some(&pid) = self.pids.get(&window)
+            && !self.focused.iter().any(|w| self.pids.get(w) == Some(&pid))
+            && let Some(focus) = &self.focus
+        {
+            focus.unregister(pid);
+        }
         self.pids.remove(&window);
         self.hung.retain(|h| h.window != window);
     }
 
     fn window_process(&mut self, window: WindowId, pid: u32) {
         self.pids.insert(window, pid);
+        self.ask_focus(window);
     }
 
     fn window_responding(&mut self, window: WindowId, responding: bool) {
@@ -1916,6 +1959,28 @@ impl compositor::Shell for Session {
             && let Some(found) = search.poll(self.ui.palette.file_search())
         {
             self.ui.palette.set_file_matches(found);
+            self.redraw = true;
+        }
+        // The same for the boxes, whose rows come from the `boxes` source.
+        // The shell holds it from the start, with no rows until a search
+        // finds some, so no agent connection can register rows under it.
+        if !self.shell.palette_sources.has(box_search::SOURCE) {
+            let _ = self.shell.palette_sources.register(
+                box_search::SOURCE.into(),
+                box_search::palette("", Vec::new()),
+                Some(SHELL),
+            );
+        }
+        if let Some(search) = &mut self.box_search
+            && let Some((text, hits)) = search.poll(self.ui.palette.box_search())
+        {
+            if let Err(e) = self.shell.palette_sources.register(
+                box_search::SOURCE.into(),
+                box_search::palette(&text, hits),
+                Some(SHELL),
+            ) {
+                debug!(error = e, "the boxes' rows are not in the palette");
+            }
             self.redraw = true;
         }
         // Every frame, before the host asks where the windows are.

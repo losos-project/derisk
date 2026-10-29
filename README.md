@@ -55,6 +55,15 @@ everything. Type to search, in a single ranked list:
   follows what changes; hidden files and whatever a `.gitignore` or
   `.ignore` leaves out are skipped, and without the service the palette
   finds files by name only (`crates/derisk-index`).
+- **Files on your LosOS boxes** that have the typed text, in LosOS Cloud
+  and in LosOS Git's repositories, from every box `losos` is signed in to
+  (`budget.md  mattbox · LosOS Cloud › Documents · the rent is due`). A
+  cloud file opens its folder in LosOS Cloud and a line in Git opens the
+  file there, in the default browser. LosOS Desktop's `losos-boxes search`
+  asks the boxes, in the LosOS boxes machine on a PC and only while it
+  runs, or in the session on a phone; it never asks for the keyring's
+  password, and without it there are no such rows
+  (`crates/derisk/src/box_search.rs`, `plugins/palette/boxes`).
 
 Anything else goes to the assistant: `open firefox and snap it left`,
 Enter, done. When a typed sentence is something the assistant understands
@@ -277,6 +286,13 @@ same theme.
 - **Focus boost.** The focused app's unit gets more CPU and IO weight
   (`systemd::FocusBoost`, with the unit found from the client's cgroup via
   `systemd::unit_of_pid`; called by the compositor host on focus changes).
+- **Focus mode.** A window whose app's desktop entry is in the category
+  `Game`, `3DGraphics`, `Engineering`, `AudioVideoEditing`, `Sequencer` or
+  `Midi` asks [GameMode](https://github.com/FeralInteractive/gamemode) for
+  focus on behalf of its process (`RegisterGameByPID`), and gives it up
+  when that process's last window closes. On LosOS, GameMode's start and
+  end scripts freeze the session's and the system's background work and
+  thaw it afterwards. Without GameMode on the session bus nothing happens.
 - **Session target.** `derisk-session.target` binds `graphical-session.target`
   and pulls in XDG autostart; the compositor exports `WAYLAND_DISPLAY` and
   friends to the user manager and D-Bus activation environment first

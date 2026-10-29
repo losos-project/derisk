@@ -83,6 +83,7 @@ fn every_bundled_plugin_loads_with_a_manifest() {
             "browser",
             "machines",
             "files",
+            "boxes",
             "assistant",
             "agent",
             "web"

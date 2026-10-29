@@ -528,6 +528,57 @@ fn files_found_by_their_text_join_the_files_found_by_name() {
 }
 
 #[test]
+fn text_found_in_the_boxes_opens_in_the_boxes_pages() {
+    let mut shell = shell();
+    // As the session publishes what `losos-boxes search` printed, holding
+    // the source as the shell (host.rs's SHELL).
+    shell
+        .palette_sources
+        .register(
+            "boxes".into(),
+            serde_json::json!({"text": "rent", "hits": [{
+                "box": "mattbox", "app": "cloud", "title": "budget.md",
+                "place": "LosOS Cloud › Documents", "snippet": "the rent is due",
+                "url": "http://mattbox.local/cloud/files/Documents",
+            }]}),
+            Some(u64::MAX),
+        )
+        .unwrap();
+    let rows = palette::rows(&shell, "rent due");
+    let found: Vec<_> = rows
+        .bottom
+        .iter()
+        .filter(|e| e.title == "budget.md")
+        .collect();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].category, Category::File);
+    assert_eq!(
+        found[0].detail,
+        "mattbox · LosOS Cloud › Documents · the rent is due"
+    );
+    assert_eq!(
+        found[0].actions,
+        [Action::OpenUrl {
+            url: "http://mattbox.local/cloud/files/Documents".into()
+        }]
+    );
+    // Only a search with no prefix: a files query is the files on this
+    // computer.
+    assert!(
+        palette::rows(&shell, "/rent")
+            .bottom
+            .iter()
+            .all(|e| e.title != "budget.md")
+    );
+    // No program on the agent socket can put rows of its own under it.
+    let (response, _) = derisk::ipc::handle_line(
+        &mut shell,
+        r#"{"method":"register_palette","source":"boxes","data":{"text":"rent","hits":[]}}"#,
+    );
+    assert!(response.contains(r#""ok":false"#), "{response}");
+}
+
+#[test]
 fn close_title_matches_beat_the_assistant() {
     let mut shell = shell();
     open_three_workspaces(&mut shell);
