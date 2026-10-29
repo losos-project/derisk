@@ -496,6 +496,27 @@ pub struct Privacy {
     pub usage_ping: bool,
 }
 
+/// File search: what derisk-index indexes for the palette. The index
+/// service reads these two keys from this file itself, and Settings
+/// restarts it when they change.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileSearch {
+    /// Whether files are indexed at all. Off, the index is deleted and the
+    /// palette finds apps, settings and commands but no files.
+    pub index: bool,
+    /// Folders indexed as well as home, such as a second disk's.
+    pub folders: Vec<PathBuf>,
+}
+
+impl Default for FileSearch {
+    fn default() -> Self {
+        Self {
+            index: true,
+            folders: Vec::new(),
+        }
+    }
+}
+
 /// The privacy display: Samsung's of the same name, in software. While one
 /// of its conditions holds, the camera looks for a second face, and when it
 /// finds one the protected part of the screen is covered (and, at maximum
@@ -723,6 +744,8 @@ pub struct Settings {
     pub privacy: Privacy,
     /// The privacy display.
     pub privacy_display: PrivacyDisplay,
+    /// File search.
+    pub search: FileSearch,
     /// The default browser and search engine.
     pub defaults: Defaults,
     /// Window management.
@@ -780,6 +803,7 @@ impl Default for Settings {
                 usage_ping: true,
             },
             privacy_display: PrivacyDisplay::default(),
+            search: FileSearch::default(),
             defaults: Defaults::default(),
             desktop: DesktopPrefs {
                 layout: Layout::Tall,
@@ -1019,6 +1043,17 @@ impl Settings {
                     .map(|id| app_id(id).then(|| id.to_owned()))
                     .collect::<Option<Vec<_>>>(),
             ),
+            "search.index" => put(&mut self.search.index, parse_bool(value)),
+            // Comma-separated absolute paths; empty means home alone.
+            "search.folders" => put(
+                &mut self.search.folders,
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| Some(PathBuf::from(p)).filter(|p| p.is_absolute()))
+                    .collect::<Option<Vec<_>>>(),
+            ),
             // A desktop file ID, which is a file name: never a path.
             "defaults.browser" => put(
                 &mut self.defaults.browser,
@@ -1120,6 +1155,8 @@ impl Settings {
              privacy_display.notifications = {}\n\
              privacy_display.apps = {}\n\
              privacy_display.maximum = {}\n\
+             search.index = {}\n\
+             search.folders = {}\n\
              defaults.browser = {}\n\
              defaults.search = {}\n\
              machines.open_apps_in = {}\n\
@@ -1184,6 +1221,13 @@ impl Settings {
             self.privacy_display.notifications,
             self.privacy_display.apps.join(","),
             self.privacy_display.maximum,
+            self.search.index,
+            self.search
+                .folders
+                .iter()
+                .map(|f| f.display().to_string())
+                .collect::<Vec<_>>()
+                .join(","),
             self.defaults.browser,
             self.defaults.search.map_or("", |e| e.as_str()),
             self.machines.open_apps_in,
