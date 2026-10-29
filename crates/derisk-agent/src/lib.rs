@@ -17,6 +17,7 @@ pub mod agent;
 mod code_view;
 pub mod forge;
 pub mod mcp;
+mod portal;
 pub mod questions;
 pub mod routines;
 pub mod setup;

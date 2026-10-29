@@ -1883,6 +1883,7 @@ dependencies = [
 name = "derisk-agent"
 version = "0.1.0"
 dependencies = [
+ "ashpd",
  "chrono",
  "derisk-agent-preview",
  "dirs",
@@ -1894,6 +1895,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "ureq",
