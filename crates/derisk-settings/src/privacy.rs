@@ -19,7 +19,7 @@ use crate::{
     flatpak::{
         self, App, Context, Dirs, FindInstallation, Grant, Installation, PERMISSIONS, Portal, Scan,
     },
-    model::{Privacy, PrivacyDisplay},
+    model::{FileSearch, Privacy, PrivacyDisplay},
 };
 
 /// An app's portal permissions, or why they can't be read, by app ID.
@@ -46,6 +46,8 @@ pub(crate) struct PrivacyUi {
     status: Option<String>,
     /// The app ID being typed for the privacy display's list.
     new_app: String,
+    /// The folder being typed for file search.
+    new_folder: String,
 }
 
 impl PrivacyUi {
@@ -205,10 +207,57 @@ fn privacy_display(ui: &mut egui::Ui, d: &mut PrivacyDisplay, new_app: &mut Stri
     ui.end_row();
 }
 
+/// The file search row: whether the files under home are indexed for the
+/// palette, and which other folders are. Applies on Save, which restarts
+/// the index.
+fn file_search(ui: &mut egui::Ui, search: &mut FileSearch, new_folder: &mut String) {
+    ui.label("File search");
+    ui.vertical(|ui| {
+        ui.checkbox(&mut search.index, "Index my files for search");
+        hint(
+            ui,
+            "The palette searches the names and text of your files, PDFs and office \
+             documents included. Off deletes the index; files are then not found at all.",
+        );
+        ui.add_enabled_ui(search.index, |ui| {
+            let mut gone = None;
+            for (i, folder) in search.folders.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(folder.display().to_string());
+                    if ui.small_button("Remove").clicked() {
+                        gone = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = gone {
+                search.folders.remove(i);
+            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(new_folder)
+                        .hint_text("Another folder, such as /mnt/data")
+                        .desired_width(220.0),
+                );
+                let folder = std::path::PathBuf::from(new_folder.trim());
+                let fits = folder.is_absolute()
+                    && !folder.to_string_lossy().contains(',')
+                    && !search.folders.contains(&folder);
+                if ui.add_enabled(fits, egui::Button::new("Add")).clicked() {
+                    search.folders.push(folder);
+                    new_folder.clear();
+                }
+            });
+            hint(ui, "Your home folder is always indexed.");
+        });
+    });
+    ui.end_row();
+}
+
 pub(crate) fn page(
     ui: &mut egui::Ui,
     p: &mut Privacy,
     display: &mut PrivacyDisplay,
+    search: &mut FileSearch,
     state: &mut PrivacyUi,
     theme: &Theme,
 ) {
@@ -234,6 +283,7 @@ pub(crate) fn page(
                 hint(ui, "Off also clears the list and the palette's picks.");
             });
             ui.end_row();
+            file_search(ui, search, &mut state.new_folder);
             ui.label("Trash");
             ui.add(
                 egui::Slider::new(&mut p.empty_trash_days, 0..=365)

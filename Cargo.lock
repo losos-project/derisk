@@ -2048,6 +2048,7 @@ name = "derisk-index"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "flate2",
  "ignore",
  "inotify",
  "miette",

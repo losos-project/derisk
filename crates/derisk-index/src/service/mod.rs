@@ -1,5 +1,6 @@
-//! The service: keeps the index ([`store`]) in step with home ([`watch`])
-//! and answers searches on its socket.
+//! The service: keeps the index ([`store`]) in step with home and the
+//! other folders [`settings`] names ([`watch`]), and answers searches on
+//! its socket.
 //!
 //! Three kinds of thread, all scoped to [`run`]: one reads inotify, one
 //! writes the index (the first walk, then what changes), and one per
@@ -8,7 +9,7 @@
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use crossbeam_channel::bounded;
@@ -17,6 +18,7 @@ use tracing::{debug, error, warn};
 
 use crate::{Request, Response};
 
+pub mod settings;
 pub mod store;
 pub mod text;
 pub mod watch;
@@ -28,16 +30,21 @@ pub use store::{Error, Store};
 /// walks home again.
 const CHANGES: usize = 4096;
 
-/// Indexes `home` into `index` and answers searches on `listener` until
-/// the process is stopped. Once running, a failure to write the index
+/// Indexes `home` and `folders` into `index` and answers searches on
+/// `listener` until the process is stopped. Once running, a failure to write the index
 /// ends the process, since the threads answering searches would keep it
 /// open, and systemd starts it again.
 ///
 /// # Errors
 ///
 /// When the index cannot be opened or inotify is missing.
-pub fn run(home: &Path, index: &Path, listener: &UnixListener) -> Result<(), Error> {
-    let store = Store::open(index, home)?;
+pub fn run(
+    home: &Path,
+    folders: &[PathBuf],
+    index: &Path,
+    listener: &UnixListener,
+) -> Result<(), Error> {
+    let store = Store::open_with(index, home, folders)?;
     let inotify = Inotify::init()?;
     let mut indexer = watch::Indexer::new(&store, inotify.watches())?;
     let (changes_tx, changes) = bounded(CHANGES);
@@ -48,7 +55,7 @@ pub fn run(home: &Path, index: &Path, listener: &UnixListener) -> Result<(), Err
                 match stream {
                     Ok(stream) => {
                         let store = &store;
-                        s.spawn(move || answer(store, stream));
+                        s.spawn(move || answer(Some(store), stream));
                     }
                     Err(e) => warn!(error = %e, "cannot accept a search"),
                 }
@@ -64,8 +71,33 @@ pub fn run(home: &Path, index: &Path, listener: &UnixListener) -> Result<(), Err
     })
 }
 
-/// Answers one connection's searches, a line each, until it closes.
-fn answer(store: &Store, stream: UnixStream) {
+/// With indexing turned off in Settings: deletes what is in `index` and
+/// answers every search with nothing, so the palette that asks gets an
+/// answer rather than a refused connection, until the process is stopped.
+///
+/// # Errors
+///
+/// When `index` cannot be emptied.
+pub fn idle(index: &Path, listener: &UnixListener) -> Result<(), Error> {
+    if index.is_dir() {
+        store::clear(index)?;
+    }
+    std::thread::scope(|s| {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    s.spawn(move || answer(None, stream));
+                }
+                Err(e) => warn!(error = %e, "cannot accept a search"),
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Answers one connection's searches, a line each, until it closes:
+/// from `store`, or with nothing when there is none.
+fn answer(store: Option<&Store>, stream: UnixStream) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
@@ -74,9 +106,10 @@ fn answer(store: &Store, stream: UnixStream) {
             return;
         };
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => match store.search(&request.search, request.limit) {
-                Ok(matches) => Response::Matches(matches),
-                Err(e) => Response::Error(e.to_string()),
+            Ok(request) => match store.map(|s| s.search(&request.search, request.limit)) {
+                Some(Ok(matches)) => Response::Matches(matches),
+                Some(Err(e)) => Response::Error(e.to_string()),
+                None => Response::Matches(Vec::new()),
             },
             Err(e) => Response::Error(format!("not a search: {e}")),
         };
