@@ -39,6 +39,9 @@ pub struct AppLook<'a> {
     pub icon: &'a str,
     /// A glyph to draw when the icon theme has no such icon, empty if none.
     pub glyph: &'a str,
+    /// Whether its windows turn on focus mode
+    /// ([`DesktopEntry::wants_focus`]); never for an app nothing describes.
+    pub focus: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +49,7 @@ struct Known {
     name: String,
     icon: String,
     glyph: String,
+    focus: bool,
 }
 
 /// App IDs mapped to the `.desktop` files that describe them.
@@ -95,6 +99,7 @@ impl Apps {
                 name: entry.name.clone(),
                 icon: entry.icon.clone(),
                 glyph: glyph.to_owned(),
+                focus: entry.wants_focus(),
             });
             // The spec says the app ID is the desktop file ID, and
             // StartupWMClass names it when the two differ, so those are
@@ -151,11 +156,13 @@ impl Apps {
                     &app.icon
                 },
                 glyph: &app.glyph,
+                focus: app.focus,
             },
             None => AppLook {
                 name: Cow::Owned(readable(app_id)),
                 icon: app_id,
                 glyph: "",
+                focus: false,
             },
         }
     }

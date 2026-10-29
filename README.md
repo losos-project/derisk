@@ -277,6 +277,13 @@ same theme.
 - **Focus boost.** The focused app's unit gets more CPU and IO weight
   (`systemd::FocusBoost`, with the unit found from the client's cgroup via
   `systemd::unit_of_pid`; called by the compositor host on focus changes).
+- **Focus mode.** A window whose app's desktop entry is in the category
+  `Game`, `3DGraphics`, `Engineering`, `AudioVideoEditing`, `Sequencer` or
+  `Midi` asks [GameMode](https://github.com/FeralInteractive/gamemode) for
+  focus on behalf of its process (`RegisterGameByPID`), and gives it up
+  when that process's last window closes. On LosOS, GameMode's start and
+  end scripts freeze the session's and the system's background work and
+  thaw it afterwards. Without GameMode on the session bus nothing happens.
 - **Session target.** `derisk-session.target` binds `graphical-session.target`
   and pulls in XDG autostart; the compositor exports `WAYLAND_DISPLAY` and
   friends to the user manager and D-Bus activation environment first

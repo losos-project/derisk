@@ -71,7 +71,23 @@ pub struct DesktopEntry {
     pub no_display: bool,
     /// `TryExec`: the program the app needs, empty when it names none.
     pub try_exec: String,
+    /// `Categories`, main and additional alike.
+    pub categories: Vec<String>,
 }
+
+/// Categories whose programs want the computer to themselves while they
+/// are open: games, and editors for 3D, CAD, video and music. Their
+/// windows turn on the OS's focus mode, which holds background work (the
+/// OS's docs/focus-mode.md). Not `AudioVideo` alone, which media players
+/// carry too.
+pub const FOCUS_CATEGORIES: &[&str] = &[
+    "Game",
+    "3DGraphics",
+    "Engineering",
+    "AudioVideoEditing",
+    "Sequencer",
+    "Midi",
+];
 
 /// Whether `program`, a `TryExec` value, is an executable file: the path
 /// itself when it has a slash, else a file of that name in a `PATH`
@@ -256,6 +272,7 @@ impl DesktopEntry {
             actions: Vec::new(),
             no_display: false,
             try_exec: String::new(),
+            categories: Vec::new(),
         };
         let mut kind = String::new();
         let mut hidden = false;
@@ -303,6 +320,7 @@ impl DesktopEntry {
                     "NoDisplay" => entry.no_display = value == "true",
                     "Hidden" => hidden = value == "true",
                     "TryExec" => entry.try_exec = unescape(value),
+                    "Categories" => entry.categories = list(value),
                     "Actions" => action_ids = list(value),
                     "OnlyShowIn" => {
                         shown_here &= list(value).iter().any(|d| d == DESKTOP_NAME);
@@ -333,6 +351,13 @@ impl DesktopEntry {
             .cloned()
             .collect();
         Some(entry)
+    }
+
+    /// Whether the app is one of [`FOCUS_CATEGORIES`].
+    pub fn wants_focus(&self) -> bool {
+        self.categories
+            .iter()
+            .any(|c| FOCUS_CATEGORIES.contains(&c.as_str()))
     }
 
     /// Whether this system has the program the app needs. One that does
