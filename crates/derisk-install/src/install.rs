@@ -24,6 +24,17 @@
 //! ← {"method":"reboot"}
 //! ```
 //!
+//! A backend that can encrypt the installed system's data says
+//! `"encryption":true` in its hello. An install that asks for a PIN at
+//! startup sends it, and hears the recovery key back before it ends:
+//!
+//! ```text
+//! ← {"method":"install","disk":"/dev/vda","pin":"246813"}
+//! → {"event":"steps","labels":["Partitioning the disk","…","Encrypting the system's data","Finishing"]}
+//! → {"event":"recovery_key","key":"fgbjnkrc-ccjhnveb-…"}
+//! → {"event":"installed"}
+//! ```
+//!
 //! A backend that can report a failed install says where in
 //! [`Event::Hello`]'s `report`. After [`Event::Failed`], the installer can
 //! then ask for the report to show ([`Request::Report`]), and send it once
@@ -53,6 +64,11 @@ pub enum Request {
     Install {
         /// The disk's device node, from [`Disk::path`].
         disk: String,
+        /// The PIN the installed system asks for at every start, its data
+        /// encrypted with it, when the person asked for one. Only to a
+        /// backend whose [`Event::Hello`] says `encryption`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pin: Option<String>,
     },
     /// Restart into the installed system.
     Reboot,
@@ -124,6 +140,10 @@ pub enum Event {
         /// `owner/name`, when the backend can send reports.
         #[serde(default)]
         report: Option<String>,
+        /// Whether the backend can encrypt the installed system's data
+        /// with a PIN asked for at every start, on this computer.
+        #[serde(default)]
+        encryption: bool,
     },
     /// The answer to [`Request::Disks`].
     Disks {
@@ -152,6 +172,13 @@ pub enum Event {
     Line {
         /// The line.
         text: String,
+    },
+    /// The key that unlocks the encrypted data without the PIN, sent once
+    /// before [`Event::Installed`] when a PIN was asked for. Shown to the
+    /// person, never logged.
+    RecoveryKey {
+        /// Eight groups of eight letters.
+        key: String,
     },
     /// The install finished.
     Installed,

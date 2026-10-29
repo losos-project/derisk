@@ -281,9 +281,35 @@ fn backend_protocol_round_trips() {
     );
     assert_eq!(
         install::request_line(&Request::Install {
-            disk: "/dev/vda".into()
+            disk: "/dev/vda".into(),
+            pin: None,
         }),
         "{\"method\":\"install\",\"disk\":\"/dev/vda\"}\n"
+    );
+    assert_eq!(
+        install::request_line(&Request::Install {
+            disk: "/dev/vda".into(),
+            pin: Some("246813".into()),
+        }),
+        "{\"method\":\"install\",\"disk\":\"/dev/vda\",\"pin\":\"246813\"}\n"
+    );
+    assert_eq!(
+        install::parse_event(
+            "{\"event\":\"hello\",\"name\":\"LosOS Desktop\",\"encryption\":true}"
+        ),
+        Some(Event::Hello {
+            name: "LosOS Desktop".into(),
+            source: None,
+            release: None,
+            report: None,
+            encryption: true,
+        })
+    );
+    assert_eq!(
+        install::parse_event("{\"event\":\"recovery_key\",\"key\":\"fgbjnkrc-ccjhnveb\"}"),
+        Some(Event::RecoveryKey {
+            key: "fgbjnkrc-ccjhnveb".into()
+        })
     );
     assert_eq!(
         install::parse_event("{\"event\":\"hello\",\"name\":\"LosOS Desktop\"}"),
@@ -292,6 +318,7 @@ fn backend_protocol_round_trips() {
             source: None,
             release: None,
             report: None,
+            encryption: false,
         })
     );
     assert_eq!(
@@ -303,6 +330,7 @@ fn backend_protocol_round_trips() {
             source: None,
             release: Some("/run/losos/release".into()),
             report: None,
+            encryption: false,
         })
     );
     assert_eq!(
@@ -314,6 +342,7 @@ fn backend_protocol_round_trips() {
             source: None,
             release: None,
             report: Some("losos-project/desktop".into()),
+            encryption: false,
         })
     );
     let disks = install::parse_event(
