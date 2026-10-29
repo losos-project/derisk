@@ -13,7 +13,8 @@
 //!   them, files by name, files by what is in them (from `derisk-index`,
 //!   the user service indexing home), and
 //! - for the typed text itself, the assistant, the Agent, an address to
-//!   open and a web search.
+//!   open, a web search and the files on the person's LosOS boxes that
+//!   have it (`crate::box_search` in the binary asks them).
 //!
 //! Every one of those rows comes from a plugin: a WebAssembly component
 //! run in a sandbox by `derisk-plugin`, bundled in derisk or installed
