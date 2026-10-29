@@ -250,7 +250,7 @@ pub const APPS: [AppInfo; 8] = [
                 Box::new(store) as Box<dyn App>
             })
         },
-        open: None,
+        open: Some(|path| Box::new(derisk_store::StoreApp::open_file(path))),
     },
     AppInfo {
         id: ANDROID,

@@ -38,6 +38,9 @@ pub(crate) enum Order {
     Update(Option<(String, String)>),
     /// Open an installed app through its desktop file ID.
     Open(String),
+    /// Install the app a `.flatpakref` names, or add the remote a
+    /// `.flatpakrepo` describes: a file opened in the store.
+    File(std::path::PathBuf),
 }
 
 /// What the threads tell the app. A browser's build has no threads, and
@@ -275,6 +278,7 @@ mod threads {
                     (done, Some(false))
                 }
                 Order::Open(id) => (flatpak.open(&id).map(|()| String::new()), None),
+                Order::File(path) => (from_file(flatpak, events, &path), Some(true)),
             };
             // Read again before saying it is done, so the page never shows
             // the old state with the buttons back on.
@@ -327,6 +331,50 @@ mod threads {
                 )
                 .map(|_| format!("Installed {name} for you"))
             }
+        }
+    }
+
+    /// Installs from a `.flatpakref` or adds a `.flatpakrepo`'s remote,
+    /// for this person alone, where flatpak runs: the file is copied there
+    /// first, since in the Flatpak machine the host's files are not.
+    fn from_file(
+        flatpak: &dyn Flatpak,
+        events: &Sender<Event>,
+        path: &std::path::Path,
+    ) -> Result<String, String> {
+        let contents = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let file = flatpak::RefFile::parse(&name, &contents)
+            .ok_or_else(|| format!("{name} is not a .flatpakref or .flatpakrepo file"))?;
+        let _ = events.send(Event::Doing(if file.repo {
+            format!("Adding {}", file.title)
+        } else {
+            format!("Installing {}", file.title)
+        }));
+        let there = flatpak.put(&file.name, &contents)?;
+        if file.repo {
+            let args = [
+                "remote-add",
+                "--user",
+                "--if-not-exists",
+                "--from",
+                file.remote(),
+                &there,
+            ];
+            run(flatpak, events, &args).map(|_| format!("Added {}", file.title))
+        } else {
+            let args = [
+                "install",
+                "--user",
+                "--noninteractive",
+                "-y",
+                "--from",
+                &there,
+            ];
+            run(flatpak, events, &args).map(|_| format!("Installed {}", file.title))
         }
     }
 

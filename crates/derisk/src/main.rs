@@ -22,6 +22,8 @@ mod first_login;
 #[cfg(feature = "host")]
 mod firstboot;
 #[cfg(feature = "host")]
+mod focus;
+#[cfg(feature = "host")]
 mod greeter;
 #[cfg(feature = "host")]
 mod host;

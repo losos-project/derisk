@@ -214,3 +214,26 @@ fn action_icons_come_from_papirus_as_greyscale_masks() {
     assert_eq!(icons::battery(3, false), "battery-level-0");
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn games_and_heavy_editors_turn_focus_mode_on_and_players_do_not() {
+    let blender = entry(
+        "blender.desktop",
+        "Name=Blender\nExec=blender %f\nCategories=Graphics;3DGraphics;\n",
+    );
+    let lmms = entry(
+        "lmms.desktop",
+        "Name=LMMS\nExec=lmms %f\nCategories=Qt;AudioVideo;Audio;Midi;Sequencer;\n",
+    );
+    let vlc = entry(
+        "vlc.desktop",
+        "Name=VLC\nExec=vlc %U\nCategories=AudioVideo;Player;Recorder;\n",
+    );
+    assert!(blender.wants_focus() && lmms.wants_focus());
+    assert!(!vlc.wants_focus());
+    let apps = Apps::new([(&blender, ""), (&vlc, "")]);
+    assert!(apps.look("blender").focus);
+    assert!(!apps.look("vlc").focus);
+    // A window no desktop file describes never turns it on.
+    assert!(!apps.look("org.example.game").focus);
+}
