@@ -36,6 +36,7 @@ fn text_round_trips_every_field() {
     settings.appearance.panels.snap_assist = 20;
     settings.power.low_power = LowPower::On;
     settings.privacy.usage_ping = false;
+    settings.privacy.redact_screenshots = false;
     settings.privacy_display.enabled = true;
     settings.privacy_display.notifications = false;
     settings.privacy_display.maximum = true;
@@ -337,6 +338,14 @@ fn the_default_browser_is_a_desktop_file_id_and_nothing_else() {
     assert_eq!(warnings.len(), 3);
     assert_eq!(settings.defaults, Default::default());
     assert!(Settings::default().privacy.usage_ping);
+}
+
+#[test]
+fn screenshots_are_redacted_unless_switched_off() {
+    assert!(Settings::default().privacy.redact_screenshots);
+    let (settings, warnings) = Settings::parse("privacy.redact_screenshots = false\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!settings.privacy.redact_screenshots);
 }
 
 #[test]

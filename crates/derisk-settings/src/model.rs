@@ -494,6 +494,10 @@ pub struct Privacy {
     /// the switch; the OS's ping reads `privacy.usage_ping` from this file
     /// (see [`crate::choice`]).
     pub usage_ping: bool,
+    /// Black out passwords, keys, card numbers, email addresses and other
+    /// secrets in every screenshot: the person's own, an app's through the
+    /// portal and an agent's (derisk-redact).
+    pub redact_screenshots: bool,
 }
 
 /// File search: what derisk-index indexes for the palette. The index
@@ -801,6 +805,7 @@ impl Default for Settings {
                 remember_recent: true,
                 empty_trash_days: 30,
                 usage_ping: true,
+                redact_screenshots: true,
             },
             privacy_display: PrivacyDisplay::default(),
             search: FileSearch::default(),
@@ -1025,6 +1030,7 @@ impl Settings {
             "privacy.remember_recent" => put(&mut pv.remember_recent, parse_bool(value)),
             "privacy.empty_trash_days" => put(&mut pv.empty_trash_days, parse_in(value, 0, 365)),
             "privacy.usage_ping" => put(&mut pv.usage_ping, parse_bool(value)),
+            "privacy.redact_screenshots" => put(&mut pv.redact_screenshots, parse_bool(value)),
             "privacy_display.enabled" => put(&mut self.privacy_display.enabled, parse_bool(value)),
             "privacy_display.passwords" => {
                 put(&mut self.privacy_display.passwords, parse_bool(value))
@@ -1150,6 +1156,7 @@ impl Settings {
              privacy.remember_recent = {}\n\
              privacy.empty_trash_days = {}\n\
              privacy.usage_ping = {}\n\
+             privacy.redact_screenshots = {}\n\
              privacy_display.enabled = {}\n\
              privacy_display.passwords = {}\n\
              privacy_display.notifications = {}\n\
@@ -1216,6 +1223,7 @@ impl Settings {
             self.privacy.remember_recent,
             self.privacy.empty_trash_days,
             self.privacy.usage_ping,
+            self.privacy.redact_screenshots,
             self.privacy_display.enabled,
             self.privacy_display.passwords,
             self.privacy_display.notifications,

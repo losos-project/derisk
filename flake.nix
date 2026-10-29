@@ -44,6 +44,8 @@
               ./crates/derisk-store/tests/data
               # The Agent's built-in skills, which it include_str!s.
               ./crates/derisk-agent/skills
+              # The screenshot derisk-redact's OCR test redacts.
+              ./crates/derisk-redact/tests/data
               (lib.fileset.fileFilter (f: f.hasExt "rs" || f.name == "Cargo.toml") ./crates)
               # The palette's and the overview's plugins, which
               # derisk-plugin's build script compiles to WebAssembly, and the
@@ -55,6 +57,28 @@
               ./crates/libfacedetection-sys/vendor
             ];
           };
+
+          # ocrs' two models, with which derisk-redact reads a screenshot's
+          # text to black out its secrets: one finds the words, the other
+          # reads each line. ocrs publishes them at unversioned URLs, so the
+          # hashes are the pin. derisk finds them in share/derisk/ocr beside
+          # its bin; the tests, in $DERISK_OCR_MODELS.
+          ocrModels = pkgs.linkFarm "ocrs-models" [
+            {
+              name = "text-detection.onnx";
+              path = pkgs.fetchurl {
+                url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx";
+                hash = "sha256-qReyPb2VJLRl336SJkGz/ymBYj303tWgI0AE7y/ufP4=";
+              };
+            }
+            {
+              name = "text-recognition.onnx";
+              path = pkgs.fetchurl {
+                url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx";
+                hash = "sha256-hsFFwu25bIyu1bHruPRNcGQIkiIRRRwwnGJRV91gYcU=";
+              };
+            }
+          ];
 
           # Linked at build time by Smithay and eframe.
           buildLibs = with pkgs; [
@@ -150,7 +174,9 @@
                   cargoClippyExtraArgs = "--all-targets -- -D warnings";
                 }
               );
-              "test-${name}" = craneLib.cargoTest args;
+              # With the OCR models, so derisk-redact's test reads a real
+              # screenshot instead of skipping.
+              "test-${name}" = craneLib.cargoTest (args // { DERISK_OCR_MODELS = ocrModels; });
             }
           ) variants;
 
@@ -173,6 +199,9 @@
                 doCheck = false;
                 postInstall = ''
                   install -Dm644 -t $out/share/systemd/user crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/*
+                  # The OCR models redacted screenshots are read with, where
+                  # derisk looks: share/derisk/ocr beside its bin.
+                  install -Dm644 -t $out/share/derisk/ocr ${ocrModels}/*
                   # Run this build's derisk, not whichever one is on the manager's PATH.
                   substituteInPlace $out/share/systemd/user/derisk-agent.service \
                     --replace-fail "ExecStart=derisk " "ExecStart=$out/bin/derisk "

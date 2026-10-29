@@ -502,6 +502,122 @@ pub fn save_picture(dir: &Path, stamp: &str, png: &[u8]) -> std::io::Result<Path
 /// Screenshots kept on disk; older ones are removed.
 const KEEP_SCREENSHOTS: u64 = 8;
 
+/// Parts of the app IDs of password managers and authenticators, whose
+/// windows a redacted screenshot shows black: everything in them is a
+/// secret, and much of it (a TOTP code, a short password) looks like
+/// nothing to a pattern.
+const SECRET_APPS: &[&str] = &[
+    "keepass",
+    "bitwarden",
+    "1password",
+    "enpass",
+    "keeweb",
+    "proton.pass",
+    "org.gnome.seahorse",
+    "org.gnome.world.secrets",
+    "passwordsafe",
+    "kwalletmanager",
+    "com.belmoussaoui.authenticator",
+    "org.gnome.authenticator",
+    "keysmith",
+];
+
+/// Whether `app_id` is a password manager's or an authenticator's.
+pub fn secret_app(app_id: &str) -> bool {
+    let app_id = app_id.to_ascii_lowercase();
+    SECRET_APPS.iter().any(|part| app_id.contains(part))
+}
+
+/// What the accessibility tree says about where secrets are on screen, in
+/// logical coordinates: password fields and password managers' windows are
+/// black whatever they show, and every other element's text is checked for
+/// secrets with the screen's. `app_id` names a window's app.
+pub fn redaction_hints(
+    snapshot: &Snapshot,
+    app_id: impl Fn(WindowId) -> Option<String>,
+) -> Vec<derisk_redact::Hint> {
+    use derisk_redact::{Hint, Kind};
+    let mut hints = Vec::new();
+    for e in &snapshot.elements {
+        let Some(rect) = e.bounds.and_then(logical_rect) else {
+            continue;
+        };
+        if e.role == Role::PasswordInput {
+            hints.push(Hint::Secret {
+                rect,
+                kind: Kind::Password,
+            });
+        } else if e.role == Role::Window {
+            // A window's name is its title, which OCR reads in the title
+            // bar where it is; checked against the whole window it would
+            // black out everything in it.
+            if e.window.and_then(&app_id).is_some_and(|a| secret_app(&a)) {
+                hints.push(Hint::Secret {
+                    rect,
+                    kind: Kind::Window,
+                });
+            }
+        } else {
+            let text = [Some(e.name.as_str()), e.value.as_deref()]
+                .into_iter()
+                .flatten()
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.is_empty() {
+                hints.push(Hint::Text { rect, text });
+            }
+        }
+    }
+    hints
+}
+
+/// `hints` in logical coordinates moved to a screenshot's pixels, `scale`
+/// pixels to the logical unit, rounded outwards.
+pub fn scale_hints(hints: Vec<derisk_redact::Hint>, scale: f64) -> Vec<derisk_redact::Hint> {
+    use derisk_redact::{Hint, Rect};
+    let scale_rect = |r: Rect| {
+        let x = (f64::from(r.x) * scale).floor();
+        let y = (f64::from(r.y) * scale).floor();
+        let right = (f64::from(r.x + r.width) * scale).ceil();
+        let bottom = (f64::from(r.y + r.height) * scale).ceil();
+        Rect {
+            x: x as u32,
+            y: y as u32,
+            width: (right - x) as u32,
+            height: (bottom - y) as u32,
+        }
+    };
+    hints
+        .into_iter()
+        .map(|hint| match hint {
+            Hint::Secret { rect, kind } => Hint::Secret {
+                rect: scale_rect(rect),
+                kind,
+            },
+            Hint::Text { rect, text } => Hint::Text {
+                rect: scale_rect(rect),
+                text,
+            },
+        })
+        .collect()
+}
+
+/// An element's bounds as a redaction rectangle, cut to what is right of
+/// and below the output's corner; `None` when nothing of it is.
+fn logical_rect(b: mcsapi::Geometry) -> Option<derisk_redact::Rect> {
+    let x = b.loc.x.max(0);
+    let y = b.loc.y.max(0);
+    let right = b.loc.x + b.size.w;
+    let bottom = b.loc.y + b.size.h;
+    (right > x && bottom > y).then(|| derisk_redact::Rect {
+        x: x as u32,
+        y: y as u32,
+        width: (right - x) as u32,
+        height: (bottom - y) as u32,
+    })
+}
+
 /// Standard base64 with padding.
 pub fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -601,6 +717,90 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn password_fields_and_managers_are_black_and_text_is_checked() {
+        use derisk_redact::{Hint, Kind, Rect};
+        let element = |id, role, name: &str, window, (x, y, w, h)| Element {
+            id,
+            parent: None,
+            role,
+            name: name.into(),
+            value: None,
+            description: None,
+            bounds: Some(mcsapi::Geometry::new((x, y).into(), (w, h).into())),
+            window: WindowId::new(window),
+            origin: Origin::Window,
+            focused: false,
+            disabled: false,
+            toggled: None,
+            selected: None,
+            expanded: None,
+            actions: Vec::new(),
+            children: Vec::new(),
+        };
+        let mut field = element(3, Role::PasswordInput, "Password", 1, (10, 10, 100, 20));
+        field.value = Some("••••".into());
+        let snapshot = Snapshot {
+            elements: vec![
+                element(
+                    1,
+                    Role::Window,
+                    "me@example.org - Mail",
+                    1,
+                    (0, 0, 400, 300),
+                ),
+                element(2, Role::Window, "Vault", 2, (400, 0, 400, 300)),
+                field,
+                element(
+                    4,
+                    Role::Label,
+                    "Signed in as me@example.org",
+                    1,
+                    (-5, 40, 100, 20),
+                ),
+                element(5, Role::Label, "Off screen", 1, (-50, 40, 20, 20)),
+            ],
+            focus: None,
+        };
+        let app = |w: WindowId| {
+            Some(match w.get() {
+                2 => "org.keepassxc.KeePassXC".to_owned(),
+                _ => "org.example.mail".to_owned(),
+            })
+        };
+        let rect = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        let hints = redaction_hints(&snapshot, app);
+        assert_eq!(
+            hints,
+            [
+                Hint::Secret {
+                    rect: rect(400, 0, 400, 300),
+                    kind: Kind::Window
+                },
+                Hint::Secret {
+                    rect: rect(10, 10, 100, 20),
+                    kind: Kind::Password
+                },
+                Hint::Text {
+                    rect: rect(0, 40, 95, 20),
+                    text: "Signed in as me@example.org".into()
+                },
+            ]
+        );
+        assert_eq!(
+            scale_hints(hints, 1.5)[1],
+            Hint::Secret {
+                rect: rect(15, 15, 150, 30),
+                kind: Kind::Password
+            }
+        );
     }
 
     #[test]
