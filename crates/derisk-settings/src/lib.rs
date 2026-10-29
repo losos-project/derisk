@@ -34,6 +34,8 @@ mod network;
 mod pages;
 mod privacy;
 pub mod profiles;
+#[cfg(not(target_family = "wasm"))]
+mod schizo;
 mod shortcuts;
 mod signin;
 pub mod stuck;
