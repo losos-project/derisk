@@ -1,5 +1,5 @@
-//! The System page: the release cadence updates follow, the security report
-//! and the factory reset.
+//! The System page: the release cadence updates follow, the security report,
+//! Secure Boot's setup and the factory reset.
 //!
 //! None is derisk's own setting. The cadence is LosOS's: which of its
 //! releases, nightly, weekly, monthly or yearly, the machine updates to.
@@ -16,6 +16,15 @@
 //! for it, every account and file included. polkit asks an administrator to
 //! authenticate first. Whether this machine can be reset at all, and
 //! whether a reset is already waiting, come from systemd's Varlink API.
+//!
+//! Secure Boot is LosOS's too (its docs/secure-boot.md): `losos-secure-boot`
+//! says whether the firmware has it on and whether LosOS's key is in shim's
+//! MOK list, and `losos-secure-boot-enroll.service` asks shim to enroll it
+//! at the next start, behind a code MokManager asks for. Enrolled before
+//! Secure Boot is on, the key never makes shim stop with a "Security
+//! Violation"; the page walks a person through MokManager and then into the
+//! firmware's settings. A release built without the key has no
+//! `losos-secure-boot`, and the page says so.
 //!
 //! Everything runs on a worker thread: the security service is started on
 //! demand by the bus, and that takes a moment.
@@ -137,6 +146,60 @@ pub fn parse_cadence(out: &str) -> Option<&'static str> {
     CADENCES.iter().find(|c| c.id == name).map(|c| c.id)
 }
 
+/// Where LosOS's key stands in shim's MOK list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Key {
+    /// Not there, and not asked for.
+    Missing,
+    /// Asked for: MokManager enrolls it at the next start.
+    Requested,
+    /// There: shim starts what the key signed.
+    Enrolled,
+}
+
+/// Where Secure Boot stands, as `losos-secure-boot` prints it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecureBoot {
+    /// Whether the firmware enforces it.
+    pub on: bool,
+    /// Where LosOS's key stands.
+    pub key: Key,
+    /// The code MokManager asks for, while a request is waiting and this
+    /// start made it.
+    pub code: Option<String>,
+}
+
+/// The command that says where Secure Boot stands.
+pub const SECURE_BOOT_ARGV: [&str; 1] = ["losos-secure-boot"];
+
+/// The command that asks shim to enroll LosOS's key at the next start.
+pub const ENROLL_ARGV: [&str; 3] = ["systemctl", "start", "losos-secure-boot-enroll.service"];
+
+/// The command that takes that request back.
+pub const CANCEL_ARGV: [&str; 3] = ["systemctl", "start", "losos-secure-boot-cancel.service"];
+
+/// The command that restarts the machine.
+pub const RESTART_ARGV: [&str; 2] = ["systemctl", "reboot"];
+
+/// The command that restarts into the firmware's own settings.
+pub const FIRMWARE_ARGV: [&str; 3] = ["systemctl", "reboot", "--firmware-setup"];
+
+/// Reads `losos-secure-boot`'s line: `{"secure_boot": …, "key": …, "code": …}`.
+pub fn parse_secure_boot(json: &str) -> Option<SecureBoot> {
+    let v: Value = serde_json::from_str(json.trim()).ok()?;
+    let key = match v.get("key")?.as_str()? {
+        "missing" => Key::Missing,
+        "requested" => Key::Requested,
+        "enrolled" => Key::Enrolled,
+        _ => return None,
+    };
+    Some(SecureBoot {
+        on: v.get("secure_boot")?.as_bool()?,
+        key,
+        code: v.get("code").and_then(Value::as_str).map(str::to_owned),
+    })
+}
+
 /// systemd's factory reset Varlink socket.
 const FACTORY_RESET: &str = "/run/systemd/io.systemd.FactoryReset";
 
@@ -204,6 +267,8 @@ struct Snapshot {
     cadence: Option<&'static str>,
     /// `None` when this system has no security service.
     report: Option<Vec<Check>>,
+    /// `None` when this system cannot set up Secure Boot.
+    secure_boot: Option<SecureBoot>,
     reset: Reset,
 }
 
@@ -211,6 +276,9 @@ fn read() -> Snapshot {
     Snapshot {
         cadence: stdout(&CADENCE_ARGV).ok().and_then(|o| parse_cadence(&o)),
         report: stdout(&REPORT_ARGV).ok().and_then(|j| parse_report(&j)),
+        secure_boot: stdout(&SECURE_BOOT_ARGV)
+            .ok()
+            .and_then(|j| parse_secure_boot(&j)),
         reset: parse_reset(
             &varlink("CanRequestFactoryReset"),
             &varlink("GetFactoryResetMode"),
@@ -230,6 +298,9 @@ pub(crate) struct SystemUi {
     /// The cadence being switched to, while polkit asks and the unit runs.
     switching: Option<(&'static str, mpsc::Receiver<Result<String, String>>)>,
     cadence_error: Option<String>,
+    /// A Secure Boot step running: enrolling, cancelling or restarting.
+    securing: Option<mpsc::Receiver<Result<String, String>>>,
+    secure_error: Option<String>,
 }
 
 impl SystemUi {
@@ -261,7 +332,24 @@ impl SystemUi {
         self.switching = Some((cadence, rx));
     }
 
+    fn secure(&mut self, argv: &'static [&'static str]) {
+        let (tx, rx) = mpsc::channel();
+        derisk_sys::thread::detach(move || {
+            let _ = tx.send(stdout(argv));
+        });
+        self.secure_error = None;
+        self.securing = Some(rx);
+    }
+
     fn poll(&mut self) {
+        if let Some(rx) = &self.securing
+            && let Ok(done) = rx.try_recv()
+        {
+            // Read back: the request is shim's variables, not this page's.
+            self.secure_error = done.err();
+            self.securing = None;
+            self.refresh();
+        }
         if let Some((_, rx)) = &self.switching
             && let Ok(done) = rx.try_recv()
         {
@@ -298,12 +386,109 @@ fn hint(ui: &mut egui::Ui, text: &str) {
 
 const RED: egui::Color32 = egui::Color32::from_rgb(248, 113, 113);
 
+/// What MokManager shows, step by step, once a request is waiting. Its
+/// menus are in English whatever the desktop's language, so the names are
+/// quoted as it shows them.
+fn mok_steps(code: &str) -> [String; 4] {
+    [
+        "Restart this machine.".into(),
+        "A blue screen says \"Press any key to perform MOK management\". Press any key.".into(),
+        "Choose \"Enroll MOK\", then \"Continue\", then \"Yes\".".into(),
+        format!("Type {code}, press Enter, then choose \"Reboot\"."),
+    ]
+}
+
+fn secure_boot(ui: &mut egui::Ui, state: &mut SystemUi, status: Option<&SecureBoot>) {
+    let Some(status) = status else {
+        hint(
+            ui,
+            "This system cannot set up Secure Boot from here. A LosOS release signed for Secure Boot can.",
+        );
+        return;
+    };
+    let busy = state.securing.is_some();
+    match (status.on, status.key) {
+        (true, _) => {
+            ui.label("Secure Boot is on. The firmware starts only what LosOS's key signed.");
+        }
+        (false, Key::Enrolled) => {
+            ui.label("LosOS's key is enrolled. Turn Secure Boot on in the firmware's settings to finish.");
+            hint(
+                ui,
+                "The machine restarts into its firmware's settings. Secure Boot is often under Security or Boot.",
+            );
+            if ui
+                .add_enabled(!busy, egui::Button::new("Restart into firmware settings"))
+                .clicked()
+            {
+                state.secure(&FIRMWARE_ARGV);
+            }
+        }
+        (false, Key::Requested) => match &status.code {
+            Some(code) => {
+                ui.label("LosOS's key is ready to enroll. Write down this code first:");
+                ui.label(egui::RichText::new(code).monospace().size(28.0).strong());
+                for (i, step) in mok_steps(code).iter().enumerate() {
+                    ui.label(format!("{}. {step}", i + 1));
+                }
+                hint(ui, "Then come back here to turn Secure Boot on.");
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Restart now"))
+                        .clicked()
+                    {
+                        state.secure(&RESTART_ARGV);
+                    }
+                    if ui.add_enabled(!busy, egui::Button::new("Cancel")).clicked() {
+                        state.secure(&CANCEL_ARGV);
+                    }
+                });
+            }
+            None => {
+                ui.label("A request to enroll LosOS's key is waiting, but its code is gone.");
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Start over"))
+                    .clicked()
+                {
+                    state.secure(&ENROLL_ARGV);
+                }
+            }
+        },
+        (false, Key::Missing) => {
+            ui.label("Secure Boot is off.");
+            hint(
+                ui,
+                "With it on, the firmware refuses to start a system nobody signed. Setting it up asks for an administrator's password, then takes one restart and a code typed into a blue screen.",
+            );
+            if ui
+                .add_enabled(!busy, egui::Button::new("Set up Secure Boot…"))
+                .clicked()
+            {
+                state.secure(&ENROLL_ARGV);
+            }
+        }
+    }
+    if busy {
+        ui.spinner();
+    }
+    if let Some(error) = &state.secure_error {
+        ui.label(egui::RichText::new(error).color(RED));
+    }
+    if ui.link("How Secure Boot works on LosOS").clicked() {
+        let _ = mcsapi_ui::Docs::from_env().open(&mcsapi_ui::DocLink::new("secure-boot"));
+    }
+}
+
 pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
     if state.snapshot.is_none() && state.reading.is_none() {
         state.refresh();
     }
     state.poll();
-    if state.reading.is_some() || state.resetting.is_some() || state.switching.is_some() {
+    if state.reading.is_some()
+        || state.resetting.is_some()
+        || state.switching.is_some()
+        || state.securing.is_some()
+    {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(200));
     }
@@ -391,6 +576,10 @@ pub(crate) fn page(ui: &mut egui::Ui, state: &mut SystemUi, theme: &Theme) {
     }
     ui.add_space(16.0);
 
+    ui.heading(egui::RichText::new("Secure Boot").color(theme.foreground));
+    secure_boot(ui, state, snapshot.secure_boot.as_ref());
+    ui.add_space(16.0);
+
     ui.heading(egui::RichText::new("Factory reset").color(theme.foreground));
     let reset = &snapshot.reset;
     if reset.mode == "pending" {
@@ -447,6 +636,36 @@ mod tests {
         assert_eq!(parse_cadence("yearly"), Some("yearly"));
         assert_eq!(parse_cadence("hourly\n"), None);
         assert_eq!(parse_cadence(""), None);
+    }
+
+    #[test]
+    fn secure_boot_reads_losos_secure_boot() {
+        assert_eq!(
+            parse_secure_boot(r#"{"secure_boot":false,"key":"requested","code":"01234567"}"#),
+            Some(SecureBoot {
+                on: false,
+                key: Key::Requested,
+                code: Some("01234567".into()),
+            })
+        );
+        assert_eq!(
+            parse_secure_boot("{\"secure_boot\":true,\"key\":\"enrolled\",\"code\":null}\n"),
+            Some(SecureBoot {
+                on: true,
+                key: Key::Enrolled,
+                code: None,
+            })
+        );
+        assert_eq!(
+            parse_secure_boot(r#"{"secure_boot":false,"key":"lost"}"#),
+            None
+        );
+        assert_eq!(parse_secure_boot(""), None);
+    }
+
+    #[test]
+    fn the_steps_name_the_code() {
+        assert!(mok_steps("01234567")[3].contains("01234567"));
     }
 
     #[test]
