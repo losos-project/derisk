@@ -18,9 +18,11 @@ const USAGE: &str = "\
 usage: derisk-index [--home DIR] [--index DIR]
        derisk-index search WORDS...
 
-Indexes the names and text of the files under home and answers searches on
+Indexes the names and text of the files under home, and the other folders
+Settings' Privacy page names, and answers searches on
 $XDG_RUNTIME_DIR/derisk/index.sock, or on the socket systemd passes
-(derisk-index.socket). `search` asks the running service.
+(derisk-index.socket). With indexing turned off there, it deletes the index
+and finds nothing. `search` asks the running service.
 
   --home DIR    what to index (default: $HOME)
   --index DIR   where the index goes (default: $CACHE_DIRECTORY, which
@@ -49,7 +51,14 @@ fn main() -> miette::Result<()> {
     let index = index.ok_or_else(|| miette!("nowhere to keep the index: give --index"))?;
     logging();
     let listener = listener()?;
-    derisk_index::service::run(&home, &index, &listener)
+    let settings = derisk_index::service::settings::Settings::read();
+    if !settings.index {
+        tracing::info!("indexing is off in Settings");
+        return derisk_index::service::idle(&index, &listener)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("deleting {}", index.display()));
+    }
+    derisk_index::service::run(&home, &settings.folders, &index, &listener)
         .into_diagnostic()
         .wrap_err_with(|| format!("indexing {}", home.display()))
 }

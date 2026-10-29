@@ -52,10 +52,10 @@ use mcsapi_ui::{
     error::miette::{MietteDiagnostic, Severity},
 };
 pub use model::{
-    Accent, Appearance, AssistantPrefs, BarPosition, ColorScheme, Defaults, DesktopPrefs, Fit,
-    Input, Layout, LowPower, MachinePrefs, Notifications, PanelOpacity, Power, Privacy,
-    PrivacyDisplay, Profile, Rgb, Settings, ThemeId, TopBar, Vrr, Wallpaper, WallpaperKind,
-    Warning, WindowStyle, default_path, machine_name, model_name, model_server_url,
+    Accent, Appearance, AssistantPrefs, BarPosition, ColorScheme, Defaults, DesktopPrefs,
+    FileSearch, Fit, Input, Layout, LowPower, MachinePrefs, Notifications, PanelOpacity, Power,
+    Privacy, PrivacyDisplay, Profile, Rgb, Settings, ThemeId, TopBar, Vrr, Wallpaper,
+    WallpaperKind, Warning, WindowStyle, default_path, machine_name, model_name, model_server_url,
     web_background_url,
 };
 pub use pages::{IMAGE_EXTENSIONS, candidates};
@@ -228,6 +228,24 @@ fn no_config_dir() -> Error {
     Error::new(diagnostic).with_doc(doc("settings-could-not-be-read-or-saved"))
 }
 
+/// Restarts derisk-index so it reads the file search settings just saved.
+/// The service reads them only when it starts, and a restart is cheap: it
+/// walks again and keeps what it already indexed. Without a user manager,
+/// as under a test, nothing restarts and nothing needs to.
+fn restart_index() {
+    let child = std::process::Command::new("systemctl")
+        .args(["--user", "--no-block", "restart", "derisk-index.service"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    // Reaped on its own thread, so the frame never waits on systemd and no
+    // zombie is left behind.
+    if let Ok(mut child) = child {
+        std::thread::spawn(move || child.wait());
+    }
+}
+
 impl Default for SettingsApp {
     /// Opens the user's settings file from [`default_path`].
     fn default() -> Self {
@@ -363,6 +381,9 @@ impl SettingsApp {
             Err(error) => self.fail(error),
             Ok(()) => {
                 let before = std::mem::replace(&mut self.saved, self.settings.clone());
+                if before.search != self.settings.search {
+                    restart_index();
+                }
                 let browser = &self.settings.defaults.browser;
                 let mimeapps = (before.defaults.browser != *browser && !browser.is_empty())
                     .then(choice::mimeapps_path)
@@ -412,6 +433,7 @@ impl SettingsApp {
                 ui,
                 &mut s.privacy,
                 &mut s.privacy_display,
+                &mut s.search,
                 &mut self.privacy,
                 theme,
             );
