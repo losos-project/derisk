@@ -46,6 +46,11 @@ pub trait Flatpak: Send + Sync {
     /// Opens installed app `id` on the desktop.
     fn open(&self, id: &str) -> Result<(), String>;
 
+    /// Puts `contents` where flatpak can read it, as a file named `name`
+    /// (a `.flatpakref` or `.flatpakrepo` opened on the host), and returns
+    /// its path there.
+    fn put(&self, name: &str, contents: &[u8]) -> Result<String, String>;
+
     /// The installations a catalogue is looked for in, in order.
     fn installations(&self) -> Vec<String> {
         vec!["/var/lib/flatpak".into()]
@@ -195,6 +200,14 @@ impl Flatpak for Local {
             .map_err(|e| format!("Could not run flatpak: {e}"))
     }
 
+    fn put(&self, name: &str, contents: &[u8]) -> Result<String, String> {
+        let dir = std::env::temp_dir().join(format!("derisk-store-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(name);
+        std::fs::write(&path, contents).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
     fn installations(&self) -> Vec<String> {
         // A person without the system remote (a phone set up by hand) may
         // have Flathub for themselves only.
@@ -205,6 +218,78 @@ impl Flatpak for Local {
             all.push(format!("{data}/flatpak"));
         }
         all
+    }
+}
+
+/// A `.flatpakref` (one app) or `.flatpakrepo` (a remote) file opened in
+/// the store.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefFile {
+    /// The file's own name, which it is put under where flatpak runs.
+    pub name: String,
+    /// `true` for a `.flatpakrepo`.
+    pub repo: bool,
+    /// What it calls itself: the app's ID, or the remote's title.
+    pub title: String,
+}
+
+impl RefFile {
+    /// Reads what `contents` (a file named `name`) is: a flatpakref's
+    /// `[Flatpak Ref]` group, or a flatpakrepo's `[Flatpak Repo]`;
+    /// `None` for anything else.
+    pub fn parse(name: &str, contents: &[u8]) -> Option<Self> {
+        let text = std::str::from_utf8(contents).ok()?;
+        let mut group = "";
+        let (mut repo, mut title, mut app) = (None, None, None);
+        for line in text.lines().map(str::trim) {
+            if let Some(g) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                group = g;
+                if g == "Flatpak Ref" || g == "Flatpak Repo" {
+                    repo = Some(g == "Flatpak Repo");
+                }
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if group != "Flatpak Ref" && group != "Flatpak Repo" {
+                continue;
+            }
+            match key.trim() {
+                "Name" => app = Some(value.trim().to_owned()),
+                "Title" => title = Some(value.trim().to_owned()),
+                _ => {}
+            }
+        }
+        let repo = repo?;
+        // A file name flatpak and the guest's script both take.
+        let safe: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let safe = safe.trim_start_matches(['.', '-']).to_owned();
+        let title = if repo { title.or(app) } else { app.or(title) };
+        Some(Self {
+            name: if safe.is_empty() {
+                "flatpak".into()
+            } else {
+                safe
+            },
+            repo,
+            title: title.unwrap_or_else(|| name.to_owned()),
+        })
+    }
+
+    /// The remote a `.flatpakrepo` is added as: its file name without the
+    /// extension, as `flatpak remote-add` would be asked by hand.
+    pub fn remote(&self) -> &str {
+        self.name.strip_suffix(".flatpakrepo").unwrap_or(&self.name)
     }
 }
 
@@ -270,7 +355,11 @@ mod machine {
     ///   printed once it has finished, with its exit status;
     /// - `store start <install|uninstall|update> ...` starts flatpak in a
     ///   unit of the user's manager and returns at once, since the agent
-    ///   hands output over only once a program has exited;
+    ///   hands output over only once a program has exited; `remote-add`
+    ///   too;
+    /// - `store put <name>` keeps its standard input as a file of the
+    ///   user's and prints its path, for a `.flatpakref` opened on the
+    ///   host;
     /// - `store progress` prints `running`, or `done <status>`, then
     ///   everything that job has printed so far.
     pub struct Machine {
@@ -301,6 +390,16 @@ mod machine {
         /// Runs `losos-guest-flatpak store <args>` to its end, giving back
         /// what it printed, or its last error line.
         fn store(&self, args: &[&str], wait: Duration) -> Result<String, String> {
+            self.store_with(args, Vec::new(), wait)
+        }
+
+        /// As [`Self::store`], with `input` on its standard input.
+        fn store_with(
+            &self,
+            args: &[&str],
+            input: Vec<u8>,
+            wait: Duration,
+        ) -> Result<String, String> {
             let program = Program {
                 path: GUEST_FLATPAK.into(),
                 args: ["store"]
@@ -310,7 +409,7 @@ mod machine {
                     .collect(),
                 env: vec!["LANG=C.UTF-8".into()],
                 capture_output: true,
-                input: Vec::new(),
+                input,
             };
             let pid = self
                 .hypervisor
@@ -398,5 +497,45 @@ mod machine {
                 .open_app(&self.name, id)
                 .map_err(|e| e.to_string())
         }
+
+        fn put(&self, name: &str, contents: &[u8]) -> Result<String, String> {
+            self.up()?;
+            let path = self.store_with(&["put", name], contents.to_vec(), ASK_WAIT)?;
+            Ok(path.trim().to_owned())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ref_files_say_what_they_hold() {
+        let app = b"[Flatpak Ref]\nTitle=GNU Image Manipulation Program\nName=org.gimp.GIMP\nBranch=stable\nUrl=https://dl.flathub.org/repo/\nIsRuntime=false\n";
+        let file = RefFile::parse("org.gimp.GIMP.flatpakref", app).unwrap();
+        assert!(!file.repo);
+        assert_eq!(file.title, "org.gimp.GIMP");
+        assert_eq!(file.name, "org.gimp.GIMP.flatpakref");
+
+        let repo = b"[Flatpak Repo]\nTitle=Flathub beta\nUrl=https://dl.flathub.org/beta-repo/\n";
+        let file = RefFile::parse("flathub beta.flatpakrepo", repo).unwrap();
+        assert!(file.repo);
+        assert_eq!(file.title, "Flathub beta");
+        // A name the guest's script takes, and the remote it becomes.
+        assert_eq!(file.name, "flathub_beta.flatpakrepo");
+        assert_eq!(file.remote(), "flathub_beta");
+
+        assert_eq!(
+            RefFile::parse("x.flatpakref", b"[Desktop Entry]\nName=x\n"),
+            None
+        );
+        assert_eq!(RefFile::parse("x", &[0xff, 0xfe]), None);
+        assert_eq!(
+            RefFile::parse("../.x", b"[Flatpak Ref]\nName=a.b\n")
+                .unwrap()
+                .name,
+            "_.x"
+        );
     }
 }
