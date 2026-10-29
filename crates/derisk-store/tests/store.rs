@@ -274,6 +274,8 @@ fn reads_flatpaks_answers() {
 struct Fake {
     ran: Mutex<Vec<String>>,
     installed: Mutex<String>,
+    /// The files it was given to keep, by name.
+    put: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 impl Flatpak for Fake {
@@ -305,6 +307,14 @@ impl Flatpak for Fake {
 
     fn open(&self, _: &str) -> Result<(), String> {
         Ok(())
+    }
+
+    fn put(&self, name: &str, contents: &[u8]) -> Result<String, String> {
+        self.put
+            .lock()
+            .unwrap()
+            .push((name.to_owned(), contents.to_vec()));
+        Ok(format!("/run/user/1000/losos-store-files/{name}"))
     }
 }
 
@@ -395,6 +405,65 @@ fn loads_the_catalogue_and_installs_in_the_machine() {
 }
 
 #[test]
+fn opens_flatpakref_and_flatpakrepo_files() {
+    let fake = Arc::new(Fake::default());
+    let mut store = StoreApp::with_reviews(fake.clone(), canned);
+    let context = egui::Context::default();
+    settle(&mut store, &context);
+    let dir = std::env::temp_dir().join(format!("derisk-store-ref-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // An app's file: copied to where flatpak runs, installed from there
+    // for this person, and the list read again after.
+    let app = dir.join("org.example.Paint.flatpakref");
+    std::fs::write(
+        &app,
+        "[Flatpak Ref]\nName=org.example.Paint\nUrl=https://dl.flathub.org/repo/\n",
+    )
+    .unwrap();
+    store.install_file(&app);
+    settle(&mut store, &context);
+    // A remote's file: added under its file name.
+    let repo = dir.join("example.flatpakrepo");
+    std::fs::write(
+        &repo,
+        "[Flatpak Repo]\nTitle=Example\nUrl=https://example.org/repo/\n",
+    )
+    .unwrap();
+    store.install_file(&repo);
+    settle(&mut store, &context);
+    // Not one of either: nothing runs.
+    let other = dir.join("notes.flatpakref");
+    std::fs::write(&other, "hello").unwrap();
+    store.install_file(&other);
+    settle(&mut store, &context);
+    std::fs::remove_dir_all(dir).unwrap();
+
+    let put = fake.put.lock().unwrap();
+    let names: Vec<_> = put.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        ["org.example.Paint.flatpakref", "example.flatpakrepo"]
+    );
+    let ran = fake.ran.lock().unwrap();
+    let there = "/run/user/1000/losos-store-files";
+    assert!(
+        ran.iter().any(|r| *r
+            == format!(
+                "install --user --noninteractive -y --from {there}/org.example.Paint.flatpakref"
+            )),
+        "{ran:?}"
+    );
+    assert!(
+        ran.iter().any(|r| *r
+            == format!(
+                "remote-add --user --if-not-exists --from example {there}/example.flatpakrepo"
+            )),
+        "{ran:?}"
+    );
+}
+
+#[test]
 fn the_browser_demo_and_the_catalog_draw_a_frame() {
     // A store whose flatpak finds nothing still draws, and says why.
     #[derive(Default)]
@@ -410,6 +479,9 @@ fn the_browser_demo_and_the_catalog_draw_a_frame() {
             Err(format!("{path}: missing"))
         }
         fn open(&self, _: &str) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn put(&self, _: &str, _: &[u8]) -> Result<String, String> {
             Err("no".into())
         }
     }

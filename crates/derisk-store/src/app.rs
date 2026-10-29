@@ -194,6 +194,22 @@ impl StoreApp {
         self.go(Page::Installed);
     }
 
+    /// The store opened on a `.flatpakref` (an app to install) or a
+    /// `.flatpakrepo` (a remote to add), as the desktop opens one: it does
+    /// that once the catalogue is read, then shows the installed apps.
+    pub fn open_file(path: &std::path::Path) -> Self {
+        let mut app = Self::new();
+        app.install_file(path);
+        app
+    }
+
+    /// Installs the app a `.flatpakref` names, or adds the remote a
+    /// `.flatpakrepo` describes, and shows the installed apps.
+    pub fn install_file(&mut self, path: &std::path::Path) {
+        self.order(Order::File(path.to_owned()));
+        self.show_installed();
+    }
+
     /// Installs `id` from Flathub, as its page's Install button does.
     pub fn install(&mut self, id: &str) {
         let name = self.name(id);

@@ -5,7 +5,8 @@ GenericName=App Store
 Comment=Find, install and update apps from Flathub
 Keywords=flathub;flatpak;software;install;apps;updates;
 Icon=system-software-install
-Exec=derisk launch org.derisk.store
+Exec=derisk launch org.derisk.store %F
+MimeType=application/vnd.flatpak.ref;application/vnd.flatpak.repo;
 Categories=System;PackageManager;
 Actions=installed;
 
