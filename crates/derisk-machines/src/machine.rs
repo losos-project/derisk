@@ -93,6 +93,12 @@ pub struct Machine {
     /// starts, and the guest cannot change it, so it is how the desktop
     /// knows which machine a connection came from.
     pub cid: Option<u32>,
+    /// Whether the OS runs a part of itself in it, such as LosOS's Tor
+    /// gateway, rather than it being a person's: `<pm:service>true` in its
+    /// metadata, which LosOS's service machines carry. Such a machine is
+    /// not listed for people to start, stop or open apps in, but its
+    /// windows are still framed in its label.
+    pub service: bool,
 }
 
 impl Machine {
@@ -150,6 +156,9 @@ impl Machine {
             .and_then(|n| n.text())
             .map(|t| t.trim().to_owned())
             .filter(|t| !t.is_empty());
+        let service = ours_child("service")
+            .and_then(|n| n.text())
+            .is_some_and(|t| t.trim() == "true");
         let screen = child("devices")
             .is_some_and(|devices| devices.children().any(|n| n.has_tag_name("graphics")));
 
@@ -187,6 +196,7 @@ impl Machine {
             cpus,
             state,
             cid,
+            service,
         })
     }
 
@@ -286,6 +296,19 @@ mod tests {
         assert!(machine.from_pm());
         let template = Machine::from_xml(RUNNING, State::Running).unwrap();
         assert!(!template.screen && !template.is_windows());
+    }
+
+    #[test]
+    fn a_service_machine_says_so() {
+        let xml = RUNNING.replace(
+            "<pm:label>blue</pm:label>",
+            "<pm:label>black</pm:label><pm:service>true</pm:service>",
+        );
+        let machine = Machine::from_xml(&xml, State::Running).unwrap();
+        assert!(machine.service);
+        assert_eq!(machine.label, Label::Black);
+        let person = Machine::from_xml(RUNNING, State::Running).unwrap();
+        assert!(!person.service);
     }
 
     #[test]
