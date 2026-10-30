@@ -14,7 +14,7 @@ tracing.workspace = true
 # models (find the words, then read each line) on rten. The models are
 # files the OS installs beside derisk, loaded once (`ocr`).
 ocrs = { version = "0.13.1", default-features = false, features = ["onnx"] }
-rten = { version = "0.26.0", default-features = false, features = ["onnx_format"] }
+rten = { version = "0.27.0", default-features = false, features = ["onnx_format"] }
 
 [dev-dependencies]
 png = "0.18.1"
