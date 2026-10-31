@@ -75,7 +75,7 @@ impl Profile {
             },
             FormFactor::Tablet => Self {
                 form_factor,
-                layout: Layout::Tall,
+                layout: Layout::Spiral,
                 gap: DEFAULT_GAP,
                 top_bar: 32,
                 nav_bar: 0,
@@ -87,7 +87,7 @@ impl Profile {
             },
             FormFactor::Desktop => Self {
                 form_factor,
-                layout: Layout::Tall,
+                layout: Layout::Spiral,
                 gap: DEFAULT_GAP,
                 top_bar: 28,
                 nav_bar: 0,
