@@ -12,6 +12,8 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutKind {
+    /// Successive alternating splits forming a spiral.
+    Spiral,
     /// Main window left, others stacked right.
     Tall,
     /// One window at a time.
