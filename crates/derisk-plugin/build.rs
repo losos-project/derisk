@@ -23,44 +23,104 @@ use wit_component::ComponentEncoder;
 const TARGET: &str = "wasm32-unknown-unknown";
 const PROFILE: &str = "wasm-plugin";
 
-/// The bundled palette plugins, in the order the palette asks them. Each is
-/// the package `palette-<name>` under `plugins/palette/<name>`.
-const PALETTE: [&str; 15] = [
-    "apps",
-    "windows",
-    "menus",
-    "commands",
-    "workspaces",
-    "session",
-    "power",
-    "system",
-    "browser",
-    "machines",
-    "files",
-    "boxes",
-    "assistant",
-    "agent",
-    "web",
-];
+/// An enum of bundled plugins, `ALL` in order, each variant naming its
+/// package's last part.
+macro_rules! plugins {
+    ($(#[$doc:meta])* enum $set:ident { $($plugin:ident => $name:literal,)* }) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy)]
+        enum $set {
+            $($plugin,)*
+        }
 
-/// The bundled widget plugins, in the order the overview shows their cards.
-/// Each is the package `widget-<name>` under `plugins/widgets/<name>`.
-const WIDGETS: [&str; 7] = [
-    "clock",
-    "suggestions",
-    "services",
-    "calendar",
-    "battery",
-    "notes",
-    "programs",
-];
+        impl $set {
+            const ALL: &[Self] = &[$(Self::$plugin,)*];
 
-/// Both sets: the package prefix, the list, and the constant `bundled.rs`
-/// names it by.
-const SETS: [(&str, &[&str], &str); 2] = [
-    ("palette", &PALETTE, "PALETTE"),
-    ("widget", &WIDGETS, "WIDGETS"),
-];
+            fn name(self) -> &'static str {
+                match self {
+                    $(Self::$plugin => $name,)*
+                }
+            }
+        }
+    };
+}
+
+plugins! {
+    /// The bundled palette plugins, in the order the palette asks them. Each
+    /// is the package `palette-<name>` under `plugins/palette/<name>`.
+    enum Palette {
+        Apps => "apps",
+        Windows => "windows",
+        Menus => "menus",
+        Commands => "commands",
+        Workspaces => "workspaces",
+        Session => "session",
+        Power => "power",
+        System => "system",
+        Browser => "browser",
+        Machines => "machines",
+        Files => "files",
+        Boxes => "boxes",
+        Assistant => "assistant",
+        Agent => "agent",
+        Web => "web",
+    }
+}
+
+plugins! {
+    /// The bundled widget plugins, in the order the overview shows their
+    /// cards. Each is the package `widget-<name>` under
+    /// `plugins/widgets/<name>`.
+    enum Widget {
+        Clock => "clock",
+        Suggestions => "suggestions",
+        Services => "services",
+        Calendar => "calendar",
+        Battery => "battery",
+        Notes => "notes",
+        Programs => "programs",
+    }
+}
+
+/// A kind of bundled plugin. Its packages are `<prefix>-<name>`, and
+/// `bundled.rs` lists its components under `constant`.
+#[derive(Clone, Copy)]
+enum Set {
+    Palette,
+    Widget,
+}
+
+impl Set {
+    const ALL: [Self; 2] = [Self::Palette, Self::Widget];
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Palette => "palette",
+            Self::Widget => "widget",
+        }
+    }
+
+    /// The set's plugin names, in order.
+    fn names(self) -> Box<dyn Iterator<Item = &'static str>> {
+        match self {
+            Self::Palette => Box::new(Palette::ALL.iter().map(|plugin| plugin.name())),
+            Self::Widget => Box::new(Widget::ALL.iter().map(|plugin| plugin.name())),
+        }
+    }
+
+    fn constant(self) -> &'static str {
+        match self {
+            Self::Palette => "PALETTE",
+            Self::Widget => "WIDGETS",
+        }
+    }
+
+    /// The set's packages, `<prefix>-<name>`, in order.
+    fn packages(self) -> impl Iterator<Item = (&'static str, String)> {
+        self.names()
+            .map(move |name| (name, format!("{}-{name}", self.prefix())))
+    }
+}
 
 /// What cargo sets for this build script that describes derisk's own build.
 /// Passed through, the nested cargo would build the plugins with derisk's
@@ -96,19 +156,22 @@ fn main() {
     let components = out.join("bundled");
     fs::create_dir_all(&components).expect("create the bundled components directory");
     let mut list = String::new();
-    for (prefix, names, constant) in SETS {
+    for set in Set::ALL {
         writeln!(
             list,
-            "/// The bundled {prefix} plugins, in the order they are asked.\n\
-             pub(crate) const {constant}: &[(&str, &[u8])] = &["
+            "/// The bundled {} plugins, in the order they are asked.\n\
+             pub(crate) const {}: &[(&str, &[u8])] = &[",
+            set.prefix(),
+            set.constant(),
         )
         .expect("write to a string");
-        for name in names {
+        for (name, package) in set.packages() {
+            // Cargo names a wasm module after its crate, with `_` for `-`.
             let module = target_dir
                 .join(TARGET)
                 .join(PROFILE)
-                .join(format!("{prefix}_{name}.wasm"));
-            let component = components.join(format!("{prefix}-{name}.wasm"));
+                .join(format!("{}.wasm", package.replace('-', "_")));
+            let component = components.join(format!("{package}.wasm"));
             encode(&module, &component);
             writeln!(
                 list,
@@ -149,10 +212,8 @@ fn compile(workspace: &Path, target_dir: &Path) {
         ])
         .arg("--target-dir")
         .arg(target_dir);
-    for (prefix, names, _) in SETS {
-        for name in names {
-            command.arg("-p").arg(format!("{prefix}-{name}"));
-        }
+    for (_, package) in Set::ALL.into_iter().flat_map(Set::packages) {
+        command.arg("-p").arg(package);
     }
     for key in NOT_INHERITED {
         command.env_remove(key);
