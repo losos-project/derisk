@@ -23,7 +23,7 @@ wasm = ["derisk-agent-preview/wasm"]
 ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "file_chooser"] }
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde", "std"] }
 derisk-agent-preview = { path = "../derisk-agent-preview", features = ["host"] }
-dirs = "6.0.0"
+dirs = "7.0.0"
 eframe.workspace = true
 egui = "0.36.2"
 mcsapi-components.workspace = true
