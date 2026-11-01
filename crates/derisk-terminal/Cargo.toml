@@ -19,11 +19,11 @@ crossbeam-channel.workspace = true
 # Fonts are found the way every other app finds them, from fontconfig's
 # directories, and rasterised by swash, which reads the PUA glyphs Nerd
 # Fonts add like any other outline.
-fontdb = { version = "0.23.0", default-features = false, features = ["std", "fs", "memmap", "fontconfig"] }
+fontdb = { version = "0.24.0", default-features = false, features = ["std", "fs", "memmap", "fontconfig"] }
 swash = { version = "0.2.10", default-features = false, features = ["std", "scale", "render"] }
 # The GPU path: OpenGL ES 3 (or desktop GL 3.3) through EGL, the stack
 # eframe already brings into the workspace.
-glow = "0.17.0"
+glow = "0.18.0"
 glutin = { version = "0.32.3", default-features = false, features = ["egl", "wayland", "x11"] }
 glutin-winit = { version = "0.5.0", default-features = false, features = ["egl", "wayland", "x11"] }
 # The software path: a shared-memory buffer the CPU fills.

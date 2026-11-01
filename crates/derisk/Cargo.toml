@@ -57,7 +57,7 @@ libc = { version = "0.2", optional = true }
 # own with a small tokio runtime. zbus runs on tokio here, as it does in
 # derisk-portal through ashpd, so the workspace builds it one way.
 tokio = { version = "1.43", optional = true, features = ["rt", "net", "io-util", "sync", "macros"] }
-zbus = { version = "5.19", optional = true, default-features = false, features = ["tokio"] }
+zbus = { version = "6.1", optional = true, default-features = false, features = ["tokio"] }
 # Machines' lists come from a watching thread over a bounded channel.
 crossbeam-channel = { workspace = true, optional = true }
 # Ask derisk's language model, on an Ollama-compatible server: blocking,

@@ -300,7 +300,7 @@ fn attribute(element: &BytesStart<'_>, name: &[u8]) -> Option<String> {
     element
         .attributes()
         .flatten()
-        .find(|a| a.key.as_ref() == name)
+        .find(|a| a.key.as_ref().as_bytes() == name)
         .and_then(|a| {
             a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
                 .ok()
@@ -376,8 +376,8 @@ fn parse_xml(input: impl BufRead, language: &Language) -> Result<Vec<Component>,
             .map_err(|e| Error(format!("at byte {}: {e}", reader.buffer_position())))?;
         match event {
             Event::Start(element) => {
-                let name = element.local_name().as_ref().to_vec();
-                if name == b"component" && draft.is_none() {
+                let name = element.local_name();
+                if name.as_ref() == "component" && draft.is_none() {
                     let kind = match attribute(&element, b"type").as_deref() {
                         Some("desktop-application") => Kind::Desktop,
                         Some("console-application") => Kind::Console,
@@ -398,7 +398,7 @@ fn parse_xml(input: impl BufRead, language: &Language) -> Result<Vec<Component>,
                     Some(lang) => inherited.and(language.fit(Some(&lang))),
                     None => inherited,
                 };
-                path.push((name, fit));
+                path.push((name.as_ref().as_bytes().to_vec(), fit));
                 if let Some(fit) = fit {
                     start(component, &path, &element, fit);
                 }
@@ -409,8 +409,11 @@ fn parse_xml(input: impl BufRead, language: &Language) -> Result<Vec<Component>,
                 let Some(component) = draft.as_mut() else {
                     continue;
                 };
-                let name = element.local_name().as_ref().to_vec();
-                path.push((name, path.last().map_or(Some(0), |(_, fit)| *fit)));
+                let name = element.local_name();
+                path.push((
+                    name.as_ref().as_bytes().to_vec(),
+                    path.last().map_or(Some(0), |(_, fit)| *fit),
+                ));
                 if let Some(fit) = path.last().and_then(|(_, fit)| *fit) {
                     start(component, &path, &element, fit);
                 }
@@ -421,15 +424,14 @@ fn parse_xml(input: impl BufRead, language: &Language) -> Result<Vec<Component>,
                 if let Some(component) = draft.as_mut()
                     && component.field.is_some()
                 {
-                    let text = text.decode().map_err(|e| Error(e.to_string()))?;
-                    component.text.push_str(&text);
+                    component.text.push_str(text.as_ref());
                 }
             }
             Event::CData(text) => {
                 if let Some(component) = draft.as_mut()
                     && component.field.is_some()
                 {
-                    component.text.push_str(&String::from_utf8_lossy(&text));
+                    component.text.push_str(text.as_ref());
                 }
             }
             Event::GeneralRef(reference) => {
@@ -438,8 +440,8 @@ fn parse_xml(input: impl BufRead, language: &Language) -> Result<Vec<Component>,
                 {
                     if let Ok(Some(c)) = reference.resolve_char_ref() {
                         component.text.push(c);
-                    } else if let Ok(name) = reference.decode()
-                        && let Some(value) = quick_xml::escape::resolve_predefined_entity(&name)
+                    } else if let Some(value) =
+                        quick_xml::escape::resolve_predefined_entity(reference.as_ref())
                     {
                         component.text.push_str(value);
                     }
@@ -447,7 +449,7 @@ fn parse_xml(input: impl BufRead, language: &Language) -> Result<Vec<Component>,
             }
             Event::End(element) => {
                 let name = element.local_name();
-                if path.is_empty() && name.as_ref() == b"component" {
+                if path.is_empty() && name.as_ref() == "component" {
                     if let Some(done) = draft.take().and_then(Draft::finish) {
                         components.push(done);
                     }

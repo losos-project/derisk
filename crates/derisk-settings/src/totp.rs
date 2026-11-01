@@ -18,7 +18,7 @@ use derisk_sys::{
     unix::{OpenOptionsExt, PermissionsExt},
 };
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 
 /// Seconds each code is valid for.
