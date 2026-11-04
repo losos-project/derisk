@@ -34,10 +34,7 @@ use tokio::{
     sync::mpsc,
 };
 use tracing::{info, warn};
-use zbus::{
-    interface,
-    zvariant::{OwnedValue, Value},
-};
+use zbus::{OwnedVariant, Variant, interface};
 
 use crate::{host::Session, pam};
 
@@ -105,7 +102,7 @@ impl Agent {
         _icon_name: String,
         _details: HashMap<String, String>,
         cookie: String,
-        identities: Vec<(String, HashMap<String, OwnedValue>)>,
+        identities: Vec<(String, HashMap<String, OwnedVariant>)>,
     ) -> Result<(), PolkitError> {
         let identities: Vec<Identity> = identities
             .iter()
@@ -269,12 +266,12 @@ impl Agent {
 
 /// A `unix-user` identity and its name; polkit's other kinds (groups, net
 /// groups) never reach an agent, which authenticates people.
-fn unix_user(kind: &str, details: &HashMap<String, OwnedValue>) -> Option<Identity> {
+fn unix_user(kind: &str, details: &HashMap<String, OwnedVariant>) -> Option<Identity> {
     if kind != "unix-user" {
         return None;
     }
     let uid = match details.get("uid").map(|v| &**v) {
-        Some(Value::U32(uid)) => *uid,
+        Some(Variant::U32(uid)) => *uid,
         _ => return None,
     };
     Some(Identity {
@@ -349,8 +346,8 @@ async fn serve(
         user,
         running: Arc::default(),
     };
-    let connection = zbus::connection::Builder::system()?
-        .serve_at(OBJECT_PATH, agent)?
+    let connection = zbus::connection::Builder::system()
+        .serve_at(OBJECT_PATH, agent)
         .build()
         .await?;
     let authority = zbus::Proxy::new(
@@ -362,7 +359,7 @@ async fn serve(
     .await?;
     let subject = (
         "unix-session",
-        HashMap::from([("session-id", Value::from(session_id))]),
+        HashMap::from([("session-id", Variant::from(session_id))]),
     );
     // polkitd passes the locale to the action's messages.
     let locale = std::env::var("LC_MESSAGES")

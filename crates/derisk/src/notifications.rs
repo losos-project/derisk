@@ -30,11 +30,11 @@ use mcsapi_compositor::Remote;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 use zbus::{
+    OwnedVariant, Variant,
     connection::Builder,
     fdo::{self, RequestNameFlags, RequestNameReply},
     interface,
     object_server::SignalEmitter,
-    zvariant::{OwnedValue, Value},
 };
 
 use crate::host::Session;
@@ -185,7 +185,7 @@ impl Server {
         summary: String,
         body: String,
         actions: Vec<String>,
-        hints: HashMap<String, OwnedValue>,
+        hints: HashMap<String, OwnedVariant>,
         expire_timeout: i32,
     ) -> fdo::Result<u32> {
         let hints: Vec<(&str, Hint)> = hints.iter().map(|(k, v)| (k.as_str(), hint(v))).collect();
@@ -250,18 +250,18 @@ impl Server {
 /// A hint's variant as [`Hint`]: every integer width as one, since apps do
 /// not agree on them, and a variant inside a variant (which some bindings
 /// send) unwrapped.
-fn hint(value: &Value<'_>) -> Hint {
+fn hint(value: &Variant<'_>) -> Hint {
     match value {
-        Value::Bool(b) => Hint::Bool(*b),
-        Value::U8(n) => Hint::Int(i64::from(*n)),
-        Value::I16(n) => Hint::Int(i64::from(*n)),
-        Value::U16(n) => Hint::Int(i64::from(*n)),
-        Value::I32(n) => Hint::Int(i64::from(*n)),
-        Value::U32(n) => Hint::Int(i64::from(*n)),
-        Value::I64(n) => Hint::Int(*n),
-        Value::U64(n) => Hint::Int(i64::try_from(*n).unwrap_or(i64::MAX)),
-        Value::Str(s) => Hint::Str(s.as_str().to_owned()),
-        Value::Value(inner) => hint(inner),
+        Variant::Bool(b) => Hint::Bool(*b),
+        Variant::U8(n) => Hint::Int(i64::from(*n)),
+        Variant::I16(n) => Hint::Int(i64::from(*n)),
+        Variant::U16(n) => Hint::Int(i64::from(*n)),
+        Variant::I32(n) => Hint::Int(i64::from(*n)),
+        Variant::U32(n) => Hint::Int(i64::from(*n)),
+        Variant::I64(n) => Hint::Int(*n),
+        Variant::U64(n) => Hint::Int(i64::try_from(*n).unwrap_or(i64::MAX)),
+        Variant::Str(s) => Hint::Str(s.as_str().to_owned()),
+        Variant::Variant(inner) => hint(inner),
         _ => Hint::Other,
     }
 }
@@ -284,7 +284,7 @@ async fn serve(
     })) {
         return Ok(None);
     }
-    let connection = builder.serve_at(PATH, Server { run })?.build().await?;
+    let connection = builder.serve_at(PATH, Server { run }).build().await?;
     // Neither queued for the name nor taking it: another server keeps its
     // notifications, and nobody waits on a queue that never moves.
     let taken = || {
@@ -292,7 +292,7 @@ async fn serve(
         Ok(None)
     };
     match connection
-        .request_name_with_flags(NAME, RequestNameFlags::DoNotQueue.into())
+        .request_name_with_flags(NAME, RequestNameFlags::DO_NOT_QUEUE)
         .await
     {
         Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
@@ -350,10 +350,7 @@ pub fn start(remote: Remote<Session>) {
                 }
             };
             runtime.block_on(async move {
-                let served = match Builder::session() {
-                    Ok(builder) => serve(builder, run).await,
-                    Err(e) => Err(e),
-                };
+                let served = serve(Builder::session(), run).await;
                 match served {
                     // Calls arrive on the connection's own tasks, which run
                     // while this relays the session's events.
@@ -501,7 +498,7 @@ mod tests {
         }
 
         fn builder(&self) -> Builder<'static> {
-            Builder::address(self.address.as_str()).expect("the daemon's address")
+            Builder::address(self.address.as_str())
         }
     }
 
@@ -559,8 +556,10 @@ mod tests {
         assert_eq!((info.0.as_str(), info.3.as_str()), ("derisk", "1.2"));
 
         let notify = |replaces: u32, value: i32| {
-            let hints =
-                HashMap::from([("value", Value::from(value)), ("urgency", Value::from(1u8))]);
+            let hints = HashMap::from([
+                ("value", Variant::from(value)),
+                ("urgency", Variant::from(1u8)),
+            ]);
             let proxy = proxy.clone();
             async move {
                 let id: u32 = proxy
@@ -625,7 +624,7 @@ mod tests {
                     "Saved",
                     "",
                     Vec::<&str>::new(),
-                    HashMap::<&str, Value>::new(),
+                    HashMap::<&str, Variant>::new(),
                     -1i32,
                 ),
             )
