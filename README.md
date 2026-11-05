@@ -155,6 +155,12 @@ machine's windows are untrusted, as in Qubes: they cannot be kept on top,
 and when one asks to come forward (xdg-activation) it only asks for
 attention, since the machine can produce the click its token stands for.
 
+The clipboard is one for the whole desktop, unlike Qubes': Ctrl+C in one
+machine's window and Ctrl+V in another's, or in a host app, the palette or
+a core app, with no copy step between. What was copied stays after the
+window or machine it came from goes, and only the window with the keyboard
+can read it (mcsapi-compositor's `host/clipboard.rs`).
+
 ## Agent-first
 
 Everything the shell can do is an `Action` (see `crates/derisk/src/action.rs`). The UI,

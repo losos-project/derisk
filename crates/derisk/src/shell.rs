@@ -1441,6 +1441,7 @@ impl Shell {
                 self.desktop.move_window(w, ws)?;
             }
             Action::SetLayout { layout } => self.desktop.set_layout(match layout {
+                LayoutKind::Spiral => Layout::Spiral,
                 LayoutKind::Tall => Layout::Tall,
                 LayoutKind::Monocle => Layout::Monocle,
             }),
