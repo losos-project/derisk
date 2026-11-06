@@ -1872,11 +1872,12 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tinycode",
  "tokio",
  "tracing",
  "tracing-journald",
  "tracing-subscriber",
- "ureq",
+ "ureq 2.12.1",
  "zbus",
 ]
 
@@ -1899,7 +1900,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "ureq",
+ "ureq 3.5.0",
  "uuid",
 ]
 
@@ -2192,7 +2193,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "ureq",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -8776,6 +8777,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinycode"
+version = "0.1.0"
+source = "git+https://github.com/dasmatus/tinycode?rev=c60655095e44e6c03672386e41bcd5adac8b9605#c60655095e44e6c03672386e41bcd5adac8b9605"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "ureq 2.12.1",
+]
+
+[[package]]
 name = "tinystr"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9160,6 +9172,24 @@ checksum = "e497bb1f828cc9fb236722c2eaa100dcf201563f38f4da6252357a59037adf31"
 
 [[package]]
 name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "ureq"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
@@ -9176,7 +9206,7 @@ dependencies = [
  "serde_json",
  "ureq-proto",
  "utf8-zero",
- "webpki-roots",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -10100,6 +10130,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
