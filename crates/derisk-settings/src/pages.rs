@@ -299,7 +299,7 @@ pub(crate) fn assistant(ui: &mut egui::Ui, a: &mut AssistantPrefs, drafts: &mut 
         } else if local {
             "Ollama on this computer. Nothing you ask leaves it."
         } else {
-            "Any Ollama-compatible server. What you ask, and what the model reads \
+            "Any OpenAI-compatible server. What you ask, and what the model reads \
              from your screen to do it, goes to that server."
         },
     );

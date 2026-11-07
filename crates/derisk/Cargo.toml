@@ -60,9 +60,16 @@ tokio = { version = "1.43", optional = true, features = ["rt", "net", "io-util",
 zbus = { version = "6.1", optional = true, default-features = false, features = ["tokio", "proxy", "service"] }
 # Machines' lists come from a watching thread over a bounded channel.
 crossbeam-channel = { workspace = true, optional = true }
-# Ask derisk's language model, on an Ollama-compatible server: blocking,
+# Ask derisk's language model: tinycode's provider holds the conversation
+# with an OpenAI-compatible server (LosOS's Ollama serves /v1), blocking,
 # which suits the thread that asks, with rustls for a server over https.
-ureq = { version = "3.4.2", optional = true }
+# Unconditional because model's conversation and tool shapes are its types,
+# which the headless tests drive against a scripted server.
+tinycode = { git = "https://github.com/dasmatus/tinycode", rev = "c60655095e44e6c03672386e41bcd5adac8b9605" }
+# Ollama's own /api/pull, which tinycode's provider does not speak: the
+# first request downloads the model and shows its progress. The same ureq
+# major as tinycode's, so the build carries one HTTP stack.
+ureq = { version = "2", features = ["json"], optional = true }
 # Screenshots for agents (`{"method":"screenshot"}`).
 png = { version = "0.18.1", optional = true }
 # Blacks out the secrets in every screenshot before it is encoded: OCR,

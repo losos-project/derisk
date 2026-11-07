@@ -652,8 +652,8 @@ pub fn machine_name(name: &str) -> bool {
 }
 
 /// The palette's assistant: requests its own rules don't follow go to a
-/// language model on an Ollama-compatible server, which works through the
-/// desktop's tools.
+/// language model on an OpenAI-compatible server (Ollama's `/v1` is one),
+/// which works through the desktop's tools.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssistantPrefs {
     /// Send requests the rules don't follow to the model.

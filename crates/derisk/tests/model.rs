@@ -9,7 +9,7 @@ use derisk::{
     conversation::{Conversation, Source, StepStatus},
     geom::rect,
     ipc,
-    model::{self, Config, Desktop, Ran, Server, ServerError, Tool},
+    model::{self, Config, Desktop, Ran, Reply, Server, ServerError, Tool, ToolCall, ToolSpec},
     palette::{self, History},
     shell::Shell,
     snap::SnapZone,
@@ -80,10 +80,9 @@ fn every_listed_tool_parses_and_has_a_label() {
         "key": "desktop.gaps", "value": "8", "element": 3, "text": "hi", "keys": "ctrl+s",
         "op": "lock",
     });
-    for tool in tools.as_array().unwrap() {
-        let function = &tool["function"];
-        let name = function["name"].as_str().unwrap();
-        let args: serde_json::Map<String, Value> = function["parameters"]["properties"]
+    for tool in &tools {
+        let name = tool.name;
+        let args: serde_json::Map<String, Value> = tool.parameters["properties"]
             .as_object()
             .unwrap()
             .keys()
@@ -149,27 +148,20 @@ fn the_desktop_reads_as_a_line_per_window() {
     assert!(text.contains("\"Home\"\n"), "{text}");
 }
 
-#[test]
-fn calls_come_as_objects_or_as_json_strings() {
-    let message = json!({"tool_calls": [
-        {"function": {"name": "get_desktop", "arguments": {}}},
-        {"function": {"name": "snap_window", "arguments": "{\"zone\":\"left\"}"}},
-    ]});
-    let calls: Vec<(String, Value)> = model::calls(&message).collect();
-    assert_eq!(calls[0], ("get_desktop".into(), json!({})));
-    assert_eq!(calls[1], ("snap_window".into(), json!({"zone": "left"})));
-}
-
 /// A server that answers from a script and remembers what it was sent.
 #[derive(Default)]
 struct Scripted {
-    answers: VecDeque<Result<Value, ServerError>>,
-    sent: Vec<Value>,
+    answers: VecDeque<Result<Reply, ServerError>>,
+    /// The messages of each request, as the provider would send them
+    /// (without the system prompt, which the transport carries).
+    sent: Vec<Vec<Value>>,
+    /// `(model, tool count)` per request.
+    asked: Vec<(String, usize)>,
     pulled: Vec<String>,
 }
 
 impl Scripted {
-    fn new(answers: impl IntoIterator<Item = Result<Value, ServerError>>) -> Self {
+    fn new(answers: impl IntoIterator<Item = Result<Reply, ServerError>>) -> Self {
         Self {
             answers: answers.into_iter().collect(),
             ..Self::default()
@@ -177,21 +169,42 @@ impl Scripted {
     }
 }
 
-fn says(text: &str) -> Result<Value, ServerError> {
-    Ok(json!({"message": {"role": "assistant", "content": text}}))
+fn says(text: &str) -> Result<Reply, ServerError> {
+    Ok(Reply {
+        text: text.to_owned(),
+        ..Reply::default()
+    })
 }
 
-fn calls(calls: &[(&str, Value)]) -> Result<Value, ServerError> {
-    let calls: Vec<Value> = calls
-        .iter()
-        .map(|(name, args)| json!({"function": {"name": name, "arguments": args}}))
-        .collect();
-    Ok(json!({"message": {"role": "assistant", "content": "", "tool_calls": calls}}))
+/// A reply calling `calls`, with the arguments as the raw JSON strings the
+/// wire reassembles them into; `null` stands for a model that sent none.
+fn calls(calls: &[(&str, Value)]) -> Result<Reply, ServerError> {
+    Ok(Reply {
+        calls: calls
+            .iter()
+            .enumerate()
+            .map(|(i, (name, args))| ToolCall {
+                id: format!("call_{i}"),
+                name: (*name).to_owned(),
+                arguments: match args {
+                    Value::Null => String::new(),
+                    other => other.to_string(),
+                },
+            })
+            .collect(),
+        ..Reply::default()
+    })
 }
 
 impl Server for Scripted {
-    fn chat(&mut self, body: &Value) -> Result<Value, ServerError> {
-        self.sent.push(body.clone());
+    fn chat(
+        &mut self,
+        config: &Config,
+        tools: &[ToolSpec],
+        messages: &[Value],
+    ) -> Result<Reply, ServerError> {
+        self.sent.push(messages.to_vec());
+        self.asked.push((config.model.clone(), tools.len()));
         self.answers
             .pop_front()
             .unwrap_or_else(|| Err(ServerError::Other("script ran out".into())))
@@ -303,7 +316,8 @@ fn the_model_looks_acts_and_answers() {
     let mut desktop = Headless::new("put files on the left");
     let files = window_of(&desktop.shell, "org.derisk.files");
     let mut server = Scripted::new([
-        calls(&[("get_desktop", json!({}))]),
+        // A model that sends no arguments at all still gets the desktop.
+        calls(&[("get_desktop", json!(null))]),
         calls(&[("snap_window", json!({"zone": "left", "window": files}))]),
         says("Files is on the left."),
     ]);
@@ -318,18 +332,20 @@ fn the_model_looks_acts_and_answers() {
     let turn = desktop.turn;
     desktop.shell.conversation.finish(turn, answer);
 
-    // The first request carries the instructions, the request and the tools.
+    // The first request carries the request and offers the tools; the
+    // transport adds the instructions.
+    assert_eq!(server.asked[0].0, "qwen3:4b-instruct");
+    assert!(server.asked[0].1 > 10);
     let first = &server.sent[0];
-    assert_eq!(first["model"], "qwen3:4b-instruct");
-    assert_eq!(first["messages"][0]["role"], "system");
-    assert_eq!(first["messages"][1]["content"], "put files on the left");
-    assert!(first["tools"].as_array().unwrap().len() > 10);
-    // Each later one adds the call and what it returned.
-    let second = server.sent[1]["messages"].as_array().unwrap();
-    assert_eq!(second[3]["role"], "tool");
-    assert_eq!(second[3]["tool_name"], "get_desktop");
+    assert_eq!(first[0]["role"], "user");
+    assert_eq!(first[0]["content"], "put files on the left");
+    // Each later one adds the call and what it returned, under its ID.
+    let second = &server.sent[1];
+    assert_eq!(second[1]["role"], "assistant");
+    assert_eq!(second[2]["role"], "tool");
+    assert_eq!(second[2]["tool_call_id"], "call_0");
     assert!(
-        second[3]["content"]
+        second[2]["content"]
             .as_str()
             .unwrap()
             .contains(&format!("window {files}: "))
@@ -387,7 +403,7 @@ fn a_step_the_person_refuses_is_not_run_and_the_model_hears_so() {
     let answer = model::converse(&config(), "dark theme please", &mut server, &mut desktop);
     assert_eq!(answer, Ok("I didn't change it.".into()));
     assert!(desktop.ran.is_empty());
-    let told = &server.sent[1]["messages"][3]["content"];
+    let told = &server.sent[1][2]["content"];
     assert!(told.as_str().unwrap().contains("did not allow"), "{told}");
     let turn = desktop.shell.conversation.turns().last().unwrap();
     assert!(matches!(turn.steps[0].status, StepStatus::Failed(_)));
@@ -401,7 +417,7 @@ fn bad_calls_go_back_to_the_model_as_errors() {
         says("Sorry."),
     ]);
     model::converse(&config(), "snap it", &mut server, &mut desktop).unwrap();
-    let told = server.sent[1]["messages"][3]["content"].as_str().unwrap();
+    let told = server.sent[1][2]["content"].as_str().unwrap();
     assert!(told.starts_with("Error: snap_window"), "{told}");
     assert!(desktop.ran.is_empty());
 }
