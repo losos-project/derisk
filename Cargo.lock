@@ -6581,7 +6581,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "pm-signing"
 version = "0.1.0"
-source = "git+https://github.com/losos-project/pm#2d57b92edd932fa0cc2f40cab95129270596edb2"
+source = "git+https://github.com/losos-project/pm#c709780ff336a14dd1a633828375cbf73d806696"
 dependencies = [
  "miette",
  "ring",
