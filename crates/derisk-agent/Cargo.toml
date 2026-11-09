@@ -20,7 +20,7 @@ wasm = ["derisk-agent-preview/wasm"]
 [dependencies]
 # The desktop's file dialog, for a project's folders (portal.rs), on tokio
 # as zbus is everywhere in the workspace.
-ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "file_chooser"] }
+ashpd = { version = "0.14.0", default-features = false, features = ["tokio", "file_chooser"] }
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde", "std"] }
 derisk-agent-preview = { path = "../derisk-agent-preview", features = ["host"] }
 dirs = "7.0.0"

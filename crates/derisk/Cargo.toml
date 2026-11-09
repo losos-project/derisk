@@ -69,7 +69,7 @@ tinycode = { git = "https://github.com/dasmatus/tinycode", rev = "c60655095e44e6
 # Ollama's own /api/pull, which tinycode's provider does not speak: the
 # first request downloads the model and shows its progress. The same ureq
 # major as tinycode's, so the build carries one HTTP stack.
-ureq = { version = "2", features = ["json"], optional = true }
+ureq = { version = "3", features = ["json"], optional = true }
 # Screenshots for agents (`{"method":"screenshot"}`).
 png = { version = "0.18.1", optional = true }
 # Blacks out the secrets in every screenshot before it is encoded: OCR,
