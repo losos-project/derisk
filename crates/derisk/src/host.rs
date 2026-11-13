@@ -219,6 +219,7 @@ pub struct Session {
     last_sleep_check: Option<Instant>,
     palette_open: bool,
     index: Option<mpsc::Receiver<Index>>,
+    installed_rx: Option<mpsc::Receiver<Vec<DesktopEntry>>>,
     core_apps: Vec<DesktopEntry>,
     installed: Vec<DesktopEntry>,
     pending_actions: PendingActions,
@@ -1450,6 +1451,15 @@ impl Session {
         let open = self.shell.palette_visible();
         if open && !self.palette_open {
             self.power_modes.start(None);
+            // Refresh the app list on its own thread, so a freshly installed
+            // Android app (whose desktop entry lands in ~/.local/share/
+            // applications after the session started) is picked up without
+            // waiting for the file index to finish.
+            let (txi, rxi) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = txi.send(installed_apps());
+            });
+            self.installed_rx = Some(rxi);
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
                 let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -1460,16 +1470,19 @@ impl Session {
                     .iter()
                     .map(|path| palette::file(path, home.as_deref()))
                     .collect::<Vec<_>>();
-                let _ = tx.send((files, installed_apps()));
+                let _ = tx.send(files);
             });
             self.index = Some(rx);
         }
         self.palette_open = open;
-        if let Some((files, installed)) = self.index.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.ui.palette.set_files(files);
+        if let Some(installed) = self.installed_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.ui.palette.apps = palette_apps(&self.core_apps, &installed);
             self.shell.apps = app_index(&self.core_apps, &installed);
             self.installed = installed;
+            self.installed_rx = None;
+        }
+        if let Some(files) = self.index.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.ui.palette.set_files(files);
             self.index = None;
         }
         if let Some(read) = self.power_modes.poll() {

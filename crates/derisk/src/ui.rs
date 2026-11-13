@@ -4191,7 +4191,7 @@ fn palette_row(
 /// it all but vanished, #212c36 on the dark theme's #1e2832 surface, so
 /// the palette's descriptions and hints could not be read.
 fn dim(theme: &Theme) -> Color32 {
-    theme.foreground.lerp_to_gamma(theme.surface, 0.4)
+    theme.foreground.lerp_to_gamma(theme.surface, 0.2)
 }
 
 /// The theme's color for `tone`.

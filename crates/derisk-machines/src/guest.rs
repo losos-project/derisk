@@ -60,7 +60,7 @@ const BOOT_WAIT: Duration = Duration::from_secs(120);
 
 /// How much of a file [`Hypervisor::read_file`] asks the agent for at a
 /// time; its replies are base64 in JSON, a third larger.
-const READ_PIECE: u64 = 4 << 20;
+const READ_PIECE: u64 = 2 << 20;
 
 /// How long `losos-guest-run` may take to list the apps or start one.
 const LIST_WAIT: Duration = Duration::from_secs(10);
