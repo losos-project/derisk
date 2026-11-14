@@ -83,6 +83,8 @@ pub enum Request {
     },
     /// Stop waiting for the person to sign in.
     ReportCancel,
+    /// Run an ephemeral try session from the release on the medium.
+    TryLive,
 }
 
 /// A disk the backend offers.
@@ -144,6 +146,10 @@ pub enum Event {
         /// with a PIN asked for at every start, on this computer.
         #[serde(default)]
         encryption: bool,
+        /// Whether the medium can start an ephemeral try session without
+        /// installing.
+        #[serde(default)]
+        live: bool,
     },
     /// The answer to [`Request::Disks`].
     Disks {

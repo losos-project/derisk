@@ -446,9 +446,10 @@ enum Pending {
     Open(PathBuf),
 }
 
-/// What the palette indexes in the background: files under home and the
-/// installed applications.
-type Index = (Vec<palette::File>, Vec<DesktopEntry>);
+/// What the palette's file index sends back: files under home. Installed
+/// applications come back on their own channel, so a new app does not wait
+/// for the file walk.
+type Index = Vec<palette::File>;
 
 /// The core apps' own `.desktop` files, parsed.
 fn core_desktop_entries() -> Vec<DesktopEntry> {
@@ -582,6 +583,7 @@ impl Session {
             last_sleep_check: None,
             palette_open: false,
             index: None,
+            installed_rx: None,
             core_apps,
             installed,
             pending_actions,
