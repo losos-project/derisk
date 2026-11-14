@@ -294,6 +294,10 @@ fn backend_protocol_round_trips() {
         "{\"method\":\"install\",\"disk\":\"/dev/vda\",\"pin\":\"246813\"}\n"
     );
     assert_eq!(
+        install::request_line(&Request::TryLive),
+        "{\"method\":\"try_live\"}\n"
+    );
+    assert_eq!(
         install::parse_event(
             "{\"event\":\"hello\",\"name\":\"LosOS Desktop\",\"encryption\":true}"
         ),
@@ -303,6 +307,7 @@ fn backend_protocol_round_trips() {
             release: None,
             report: None,
             encryption: true,
+            live: false,
         })
     );
     assert_eq!(
@@ -319,6 +324,7 @@ fn backend_protocol_round_trips() {
             release: None,
             report: None,
             encryption: false,
+            live: false,
         })
     );
     assert_eq!(
@@ -331,6 +337,7 @@ fn backend_protocol_round_trips() {
             release: Some("/run/losos/release".into()),
             report: None,
             encryption: false,
+            live: false,
         })
     );
     assert_eq!(
@@ -343,6 +350,20 @@ fn backend_protocol_round_trips() {
             release: None,
             report: Some("losos-project/desktop".into()),
             encryption: false,
+            live: false,
+        })
+    );
+    assert_eq!(
+        install::parse_event(
+            "{\"event\":\"hello\",\"name\":\"LosOS Desktop\",\"live\":true}"
+        ),
+        Some(Event::Hello {
+            name: "LosOS Desktop".into(),
+            source: None,
+            release: None,
+            report: None,
+            encryption: false,
+            live: true,
         })
     );
     let disks = install::parse_event(
