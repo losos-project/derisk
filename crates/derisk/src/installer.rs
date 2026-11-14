@@ -40,7 +40,7 @@ use derisk::{
 };
 use egui::{RichText, Ui};
 use mcsapi::widgets::Theme;
-use mcsapi_components::{Progress, Tokens};
+use mcsapi_components::{Button, ButtonVariant, Progress, Tokens};
 use mcsapi_compositor::{Command, egui};
 use tracing::{error, info};
 
@@ -193,6 +193,8 @@ struct Installer {
     disk: Option<usize>,
     /// Whether the backend can encrypt on this computer.
     encryption: bool,
+    /// Whether the medium carries an ephemeral try image.
+    live: bool,
     pin: PinChoice,
     error: Option<mcsapi_ui::Error>,
     install: Install,
@@ -212,12 +214,14 @@ impl Installer {
                     release,
                     report,
                     encryption,
+                    live,
                 } => {
                     self.name = name;
                     self.source = source;
                     self.release = release;
                     self.reports_to = report;
                     self.encryption = encryption;
+                    self.live = live;
                     if !encryption {
                         self.pin = PinChoice::default();
                     }
@@ -317,7 +321,7 @@ impl Installer {
             wizard::notice(
                 ui,
                 &format!(
-                    "The release on the disk at {release} is checked against its signature and installed, so no network is needed."
+                    "The release in {release} is checked and installed from the medium, so no network is needed."
                 ),
                 false,
             );
@@ -329,6 +333,20 @@ impl Installer {
                 ),
                 false,
             );
+        }
+        if self.live {
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("You can try the desktop in an ephemeral session first. Nothing is written to any disk on this computer.")
+                    .font(tokens.body_font()),
+            );
+            ui.add_space(8.0);
+            if ui
+                .add(Button::new("Try LosOS Desktop").variant(ButtonVariant::Secondary))
+                .clicked()
+            {
+                self.backend.send(&Request::TryLive);
+            }
         }
         if self.backend_lost {
             ui.add_space(8.0);
@@ -749,6 +767,7 @@ pub fn run(backend: Vec<String>, size: (i32, i32)) -> Result {
         disks: None,
         disk: None,
         encryption: false,
+        live: false,
         pin: PinChoice::default(),
         error: None,
         install: Install::default(),
