@@ -15,7 +15,7 @@ path = "src/main.rs"
 # The portal backend traits and their D-Bus glue. Only the interfaces derisk
 # serves are switched on; the rest (file chooser, ...) come from the GTK
 # backend, which derisk-portals.conf puts behind this one.
-ashpd = { version = "0.13.13", default-features = false, features = ["backend", "tokio", "settings", "screenshot", "wallpaper", "background"] }
+ashpd = { version = "0.14.0", default-features = false, features = ["backend", "tokio", "settings", "screenshot", "wallpaper", "background"] }
 # The wallpaper portal writes the same settings file the Settings app does.
 derisk-settings.workspace = true
 # Reads the color picked and cuts out the area picked from the screenshot.
