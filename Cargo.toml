@@ -19,7 +19,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-only"
-repository = "https://github.com/dasmatus/derisk"
+repository = "https://github.com/losos-project/derisk"
 
 [workspace.dependencies]
 # Every mcsapi crate comes from the same mcsapi revision so the apps and the

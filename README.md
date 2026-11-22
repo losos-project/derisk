@@ -1,7 +1,7 @@
 # derisk
 
 An adaptive, agent-first Wayland desktop environment built on
-[mcsapi](https://github.com/dasmatus/mcsapi) that adapts to you.
+[mcsapi](https://github.com/losos-project/mcsapi) that adapts to you.
 
 derisk takes the good parts from many desktops:
 
@@ -495,6 +495,20 @@ app starts. Its portal answers (camera, microphone, location, background,
 notifications, screenshots) are set to Ask, Allow or Deny through
 `flatpak permission-set` (`$DERISK_FLATPAK`, else `flatpak` on `PATH`).
 
+The same page has the privacy display (off until turned on): Samsung's of
+that name, in software. A PC panel cannot narrow its viewing angle, so while
+one of the chosen conditions holds — a password is asked for (the lock screen
+or a polkit dialog), a notification pop-up is on screen, or a chosen app has
+the focus — the session runs `derisk-faces watch`. That helper counts faces
+in small camera frames (320×240, a few a second). Frames stay in its memory
+and are never written or sent anywhere; only the count leaves it, and the
+camera stops as soon as no condition holds. When a second face is seen in two
+searches in a row, the protected part of the screen is covered (the whole
+screen for a password or a chosen app, the pop-ups alone for a notification)
+with a line saying why and a "Show anyway" button that holds until the
+condition ends. Maximum protection also dims the screen. Settings are
+`privacy_display.*` in `settings.conf`.
+
 ### Screenshots
 
 Every screenshot leaves the session with its secrets blacked out: the
@@ -655,6 +669,11 @@ nothing but the workspace at the root:
 | `derisk-terminal` | Terminal, the `derisk-terminal` binary, below. |
 | `derisk-agent`, `derisk-agent-preview` | Agent, the `derisk-agent` binary, and the live previews of the apps it builds, below. |
 | `derisk-index` | The file index the palette searches files' text in: the `derisk-index` user service and the session's client. |
+| `derisk-redact` | Finds passwords, keys, card numbers and other secrets in a screenshot and blacks them out: OCR, patterns and the desktop's own hints. |
+| `derisk-faces` | Counts the faces in front of the camera for the privacy display: libfacedetection over low-resolution V4L2 frames, kept in memory. The `derisk-faces` binary is the camera side. |
+| `derisk-sys` | What the derisk apps ask of the system: std on Linux, an in-memory demo system in a browser. |
+| `derisk-web` | The derisk core apps in a browser, on derisk-sys's demo system, for showing them off. |
+| `derisk-android` | The Android app: a person's virtual Pixel, its state and its apps, each opened as a window of its own. |
 
 Each crate keeps everything it needs in its own directory (its README,
 LICENSE and any `data/`), and reaches its siblings only through the
@@ -684,6 +703,7 @@ theme's tokens, so a theme restyles them together.
 | Calculator | `derisk-calculator` | Expressions with precedence, `^`, `%`, functions, `pi`, `e`, `ans`, and history. |
 | Machines | `derisk-machines` | The libvirt machines apps run in, each in its label's colour: make one from a template the OS ships (through `pm machine create`), start, shut down, force off and remove them, open the apps a machine has, choose the machine apps you launch open in (`machines.open_apps_in` in `settings.conf`; derisk's own apps stay on the host), and set pm's libvirt plugin up with your own key. |
 | Store | `derisk-store` | Flathub's apps, sorted into categories and their sections from everything their AppStream data says (categories, additional categories, keywords, name and summary), searched, and installed, updated, opened and removed through flatpak: in the `flatpak` machine when libvirt has one, on the computer itself otherwise. The front page leads with the updates waiting, your apps' release notes and then the newest release notes on Flathub. |
+| Android | `derisk-android` | A person's own virtual Pixel, and its apps each opened as a window of their own (`org.derisk.android`). The Pixel itself is the OS's: LosOS's `android-app-support` downloads Google's Android Emulator and Android with Google Play, makes a Pixel 10 Pro of them, runs it as the person's user unit and opens each app on a display of the Pixel's own through scrcpy. This crate asks it for status (`android-app-support status`) and the app list. |
 
 `derisk-apps` lists them, registers them with `mcsapi-runtime`, and keeps the
 running app objects next to their instances (`derisk_apps::Session`), so the
@@ -789,6 +809,30 @@ project setup, skills and live previews moved here, and the editor did not.
 ```console
 $ cargo run -p derisk-agent
 $ cargo run -p derisk-agent -- --ask "make the bar transparent"
+```
+
+### Browser demo
+
+`derisk-web` runs Settings, Files, the Text Editor, the System Monitor and
+the Calculator in a browser tab: the same crates the session links, compiled
+to WebAssembly and drawn by eframe's web backend on a canvas. They read and
+write through `derisk-sys`, whose demo system stands in for the machine — a
+home folder in the page's memory and a `/proc` with a made-up LosOS session
+in it. Nothing leaves the page, and a reload starts it over. On Linux the
+crate is empty, so the workspace's native clippy and tests need no web
+toolchain.
+
+`scripts/build-web.sh` builds the page into `dist/web` (`index.html`,
+`derisk_web.js` and `derisk_web_bg.wasm`). Serve it over HTTP; browsers do
+not load WebAssembly modules from `file://` pages. It needs the
+`wasm32-unknown-unknown` target and `wasm-bindgen-cli` at the version
+`Cargo.lock` pins `wasm-bindgen` to:
+
+```console
+$ rustup target add wasm32-unknown-unknown
+$ cargo install wasm-bindgen-cli --locked --version <the version Cargo.lock pins>
+$ scripts/build-web.sh
+$ python3 -m http.server -d dist/web
 ```
 
 ## Building
