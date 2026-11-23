@@ -19,7 +19,7 @@ mcsapi-ui.workspace = true
 # The Sign-in page: verification codes are TOTP (HMAC-SHA1, RFC 6238), set
 # up from a QR code an authenticator app scans.
 hmac = "0.13"
-qrcode = { version = "0.14", default-features = false }
+qrcode = { version = "0.15", default-features = false }
 sha1 = { version = "0.11", default-features = false }
 serde_json.workspace = true
 # The Users page shares first-boot setup's rules for an account, and the
